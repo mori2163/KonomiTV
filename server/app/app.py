@@ -47,7 +47,7 @@ from app.routers import (
 from app.routers import VideoStreamsRouter
 from app.streams.LiveStream import LiveStream
 from app.utils.edcb.EDCBTuner import EDCBTuner
-
+from discord_main import start_discord_bot, stop_discord_bot
 
 # もし Config() の実行時に AssertionError が発生した場合は、LoadConfig() を実行してサーバー設定データをロードする
 ## 自動リロードモードでは app.py がサーバープロセスのエントリーポイントになるため、
@@ -208,6 +208,10 @@ async def Startup():
     recorded_scan_task = RecordedScanTask()
     await recorded_scan_task.start()
 
+    # Discord Bot をバックグラウンドタスクとして起動する
+    logging.info('Discord Bot starting...')
+    asyncio.create_task(start_discord_bot())
+
 # サーバー設定で指定された時間 (デフォルト: 15分) ごとに1回、チャンネル情報と番組情報を更新する
 # チャンネル情報は頻繁に変わるわけではないけど、手動で再起動しなくても自動で変更が適用されてほしい
 # 番組情報の更新処理はかなり重くストリーム配信などの他の処理に影響してしまうため、マルチプロセスで実行する
@@ -258,6 +262,12 @@ async def Shutdown():
     if recorded_scan_task is not None:
         await recorded_scan_task.stop()
         recorded_scan_task = None
+
+    # Discord Bot を停止する
+    ## トークンが設定されていない場合は停止処理も不要
+    if CONFIG.discord.token:
+        logging.info('Discord Bot stopping...')
+        await stop_discord_bot()
 
 # shutdown イベントが発火しない場合も想定し、アプリケーションの終了時に Shutdown() が確実に呼ばれるように
 # atexit は同期関数しか実行できないので、asyncio.run() でくるむ
