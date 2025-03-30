@@ -100,3 +100,16 @@ capture:
     upload_folders: [
         'E:\TV-Capture',
     ]
+
+# ============================== Discord連携の設定 ==============================
+discord:
+
+    # Discord連携をするbotのトークンを入力してください
+    token: "YOUR_TOKEN"
+
+    ### ここからは設定する必要はありません。 ###
+    # 起動/終了時にログを出力するチャンネルのID
+    log_channel_id:
+
+    # ログを出力するか
+    log_enabled: true
