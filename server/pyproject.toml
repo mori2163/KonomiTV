@@ -53,6 +53,7 @@ uvicorn = {version = "^0.34.0", extras = ["standard"]}
 uvloop = {version = "^0.21.0", platform = "linux"}
 watchfiles = "^1.0.4"
 winloop = {version = "^0.1.8", platform = "win32"}
+discord-py = "^2.5.2"
 
 [tool.poetry.group.dev.dependencies]
 
