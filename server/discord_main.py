@@ -6,8 +6,11 @@ from typing import Dict, List, Tuple, Optional
 
 from app import logging
 from app.config import Config, SaveConfig
+from fastapi import HTTPException
 from app.models.Channel import Channel
+from app import schemas # schemas をインポート
 from app.models.Program import Program
+from app.routers.VideosRouter import VideosAPI
 
 config = Config()
 
@@ -77,6 +80,11 @@ class UtilityCog(commands.Cog):
         embed.add_field(
             name="/view channel_list",
             value="指定タイプのチャンネル一覧を表示",
+            inline=False
+        )
+        embed.add_field(
+            name="/view recorded_info",
+            value="録画済み番組一覧を表示",
             inline=False
         )
         await interaction.response.send_message(embed=embed)
@@ -169,6 +177,73 @@ class ViewCog(commands.Cog):
         except Exception as e:
             logging.error(f'[DiscordBot] Error getting channel info for {channel_id}: {e}')
             await interaction.response.send_message(f"❌ チャンネル情報の取得中にエラーが発生しました。\n{e}", ephemeral=True)
+
+    @view.command(name="recorded_info", description="録画済み番組一覧を表示")
+    @app_commands.describe(page="表示したいページ番号 (デフォルト: 1)")
+    async def recorded_info(self, interaction: discord.Interaction, page: int = 1):
+        """録画済み番組一覧を表示"""
+        await interaction.response.defer()
+        try:
+            # 不正なページ番号をチェック
+            if page < 1:
+                await interaction.followup.send("❌ ページ番号は1以上を指定してください。", ephemeral=True)
+                return
+
+            # VideosAPI を呼び出して録画番組リストを取得
+            # VideosAPI は schemas.RecordedPrograms を返す
+            recorded_programs_data: schemas.RecordedPrograms = await VideosAPI(order='desc', page=page)
+
+            if not recorded_programs_data.recorded_programs:
+                await interaction.followup.send(f"❌ 録画番組が見つかりません。(ページ: {page})", ephemeral=True)
+                return
+
+            # Embed を作成
+            embed = discord.Embed(
+                title=f"録画済み番組一覧 (ページ {page})",
+                color=0x0091ff
+            )
+             # 各録画番組を個別のフィールドとして追加
+            for i, program in enumerate(recorded_programs_data.recorded_programs, 1):
+                start_time_jst = program.start_time.astimezone(JST)
+                end_time_jst = program.end_time.astimezone(JST)
+
+            # 番組情報をフィールドとして追加
+                embed.add_field(
+                    name=f"🔵番組 {i}: {program.title}",
+                    value=(
+                        f"放送時間: {start_time_jst.strftime('%H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
+                        f"詳細: {program.description or '詳細情報なし'}"
+                    ),
+                    inline=False
+                )
+
+            # ページ情報をフッターに追加
+            total_items = recorded_programs_data.total
+            items_per_page = len(recorded_programs_data.recorded_programs)  # 実際のページサイズを使用
+            total_pages = (total_items + items_per_page - 1) // items_per_page if items_per_page > 0 else 1
+
+            # 現在のページが総ページ数を超えている場合（ただしデータがある場合）
+            if page > total_pages and total_items > 0:
+                embed.add_field(
+                    name="⚠️ 注意",
+                    value=f"指定されたページ番号（{page}）は総ページ数（{total_pages}）を超えています。",
+                    inline=False
+                )
+
+            #ページ数とタイムスタンプ
+            embed.set_footer(text=f"ページ {page} / {total_pages}・全 {total_items} 件・{JST}")
+
+            await interaction.followup.send(embed=embed)
+
+        except HTTPException as e:
+            # FastAPI の HTTPException
+            error_detail = getattr(e, 'detail', str(e))
+            logging.error(f'[DiscordBot] Error getting recorded list (page {page}): {error_detail}')
+            await interaction.followup.send(f"❌ 録画番組一覧の取得中にHTTPエラーが発生しました。\n詳細: {error_detail}", ephemeral=True)
+        except Exception as e:
+            # その他の予期せぬエラー
+            logging.error(f'[DiscordBot] Error getting recorded list (page {page}): {e}')
+            await interaction.followup.send(f"❌ 録画番組一覧の取得中に予期せぬエラーが発生しました。\nエラー詳細: {e}", ephemeral=True)
 
 class SettingCog(commands.Cog):
     """設定コマンド集"""
