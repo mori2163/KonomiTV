@@ -614,6 +614,7 @@ def Installer(version: str) -> None:
         config_dict['server']['port'] = server_port
         config_dict['video']['recorded_folders'] = recorded_folders
         config_dict['capture']['upload_folders'] = capture_upload_folders
+        config_dict['discord']['token'] = discord_bot_token
 
         # サーバー設定データを保存
         SaveConfig(install_path / 'config.yaml', config_dict)
