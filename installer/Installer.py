@@ -539,7 +539,7 @@ def Installer(version: str) -> None:
         if version == 'latest':
             source_code_response = requests.get('https://codeload.github.com/mori2163/KonomiTV/zip/refs/heads/master')
         else:
-            source_code_response = requests.get(f'https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/tags/v{version}')
+            source_code_response = requests.get(f'https://codeload.github.com/mori2163/KonomiTV/zip/refs/tags/v{version}')
         task_id = progress.add_task('', total=None)
 
         # ダウンロードしたデータを随時一時ファイルに書き込む
