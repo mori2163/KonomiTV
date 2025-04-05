@@ -535,11 +535,8 @@ def Installer(version: str) -> None:
         progress = CreateDownloadInfiniteProgress()
 
         # GitHub からソースコードをダウンロード
-        ## latest の場合は master ブランチを、それ以外は指定されたバージョンのタグをダウンロード
-        if version == 'latest':
-            source_code_response = requests.get('https://codeload.github.com/mori2163/KonomiTV/zip/refs/heads/master')
-        else:
-            source_code_response = requests.get(f'https://codeload.github.com/mori2163/KonomiTV/zip/refs/tags/v{version}')
+        # versionごとに管理すると大変なため、全てmasterブランチからダウンロードする
+        source_code_response = requests.get('https://codeload.github.com/mori2163/KonomiTV/zip/refs/heads/master')
         task_id = progress.add_task('', total=None)
 
         # ダウンロードしたデータを随時一時ファイルに書き込む
