@@ -514,11 +514,10 @@ def Installer(version: str) -> None:
     if is_git_installed is True:
 
         # git clone でソースコードをダウンロード
-        ## latest の場合は master ブランチを、それ以外は指定されたバージョンのタグをチェックアウト
-        revision = 'master' if version == 'latest' else f'v{version}'
         result = RunSubprocess(
             'KonomiTV のソースコードを Git でダウンロードしています…',
-            ['git', 'clone', '-b', revision, 'https://github.com/mori2163/KonomiTV.git', install_path.name],
+            #masterブランチからダウンロード
+            ['git', 'clone', '-b', 'master', 'https://github.com/mori2163/KonomiTV.git', install_path.name],
             cwd = install_path.parent,
             error_message = 'KonomiTV のソースコードのダウンロード中に予期しないエラーが発生しました。',
             error_log_name = 'Git のエラーログ',
@@ -551,10 +550,7 @@ def Installer(version: str) -> None:
 
         # ソースコードを解凍して展開
         shutil.unpack_archive(source_code_file.name, install_path.parent, format='zip')
-        if version == 'latest':
-            shutil.move(install_path.parent / 'KonomiTV-master/', install_path)
-        else:
-            shutil.move(install_path.parent / f'KonomiTV-{version}/', install_path)
+        shutil.move(install_path.parent / 'KonomiTV-master/', install_path)
         Path(source_code_file.name).unlink()
 
     # ***** リッスンポートの重複チェック *****
