@@ -134,11 +134,23 @@ const router = createRouter({
             component: () => import('@/views/Register.vue'),
         },
         {
+<<<<<<< HEAD
             path: '/reserves/',
+=======
+            path: '/reservations/',
+>>>>>>> 8d353214e0dd9682011461904c6537bfc51e7f33
             name: 'Reservations',
             component: () => import('@/views/Reservations/Home.vue'),
         },
         {
+<<<<<<< HEAD
+=======
+            path: '/reservations/all',
+            name: 'Reservations All',
+            component: () => import('@/views/Reservations/Reservations.vue'),
+        },
+        {
+>>>>>>> 8d353214e0dd9682011461904c6537bfc51e7f33
             path: '/:pathMatch(.*)*',
             name: 'NotFound',
             component: () => import('@/views/NotFound.vue'),
