@@ -1,23 +1,8 @@
-<<<<<<< HEAD
-import APIClient from './APIClient';
-import { IChannel } from './Channels';
-import { IProgram } from './Programs';
-
-/**
- * 録画フォルダの設定
- */
-export interface IRecordingFolder {
-    recording_folder_path: string;
-    recording_file_name_template: string | null;
-    is_oneseg_separate_recording_folder: boolean;
-}
-=======
 
 import APIClient from '@/services/APIClient';
 import { IChannel } from '@/services/Channels';
 import { IProgram } from '@/services/Programs';
 
->>>>>>> 8d353214e0dd9682011461904c6537bfc51e7f33
 
 /**
  * 録画設定
@@ -41,8 +26,6 @@ export interface IRecordSettings {
 }
 
 /**
-<<<<<<< HEAD
-=======
  * 録画フォルダの設定
  */
 export interface IRecordingFolder {
@@ -52,7 +35,6 @@ export interface IRecordingFolder {
 }
 
 /**
->>>>>>> 8d353214e0dd9682011461904c6537bfc51e7f33
  * 録画予約情報
  */
 export interface IReservation {
@@ -75,8 +57,6 @@ export interface IReservations {
 }
 
 /**
-<<<<<<< HEAD
-=======
  * 録画予約追加リクエスト
  */
 export interface IReservationAddRequest {
@@ -92,7 +72,6 @@ export interface IReservationUpdateRequest {
 }
 
 /**
->>>>>>> 8d353214e0dd9682011461904c6537bfc51e7f33
  * 録画予約に関する API 操作を提供するクラス
  */
 class Reservations {
@@ -112,16 +91,6 @@ class Reservations {
     }
 
     /**
-<<<<<<< HEAD
-     * 録画予約を追加する
-     * @param reservation 追加する録画予約情報
-     * @returns 成功した場合は true、失敗した場合は false
-     */
-    static async addReservation(reservation: Partial<IReservation>): Promise<boolean> {
-        // 将来実装予定
-        console.warn('addReservation API は未実装です');
-        return false;
-=======
      * 指定された録画予約の情報を取得する
      * @param reservation_id 録画予約 ID
      * @returns 録画予約情報、取得失敗時は null
@@ -176,21 +145,10 @@ class Reservations {
         }
 
         return true;
->>>>>>> 8d353214e0dd9682011461904c6537bfc51e7f33
     }
 
     /**
      * 録画予約を更新する
-<<<<<<< HEAD
-     * @param id 更新する録画予約の ID
-     * @param reservation 更新内容
-     * @returns 成功した場合は true、失敗した場合は false
-     */
-    static async updateReservation(id: number, reservation: Partial<IReservation>): Promise<boolean> {
-        // 将来実装予定
-        console.warn('updateReservation API は未実装です');
-        return false;
-=======
      * @param reservation_id 更新する録画予約の ID
      * @param record_settings 更新する録画設定
      * @returns 成功した場合は更新された録画予約情報、失敗した場合は null
@@ -221,42 +179,10 @@ class Reservations {
         }
 
         return response.data;
->>>>>>> 8d353214e0dd9682011461904c6537bfc51e7f33
     }
 
     /**
      * 録画予約を削除する
-<<<<<<< HEAD
-     * @param id 削除する録画予約の ID
-     * @returns 成功した場合は true、失敗した場合はエラーメッセージを含むオブジェクトまたは false
-     */
-    static async deleteReservation(id: number): Promise<boolean | {detail: string}> {
-        const response = await APIClient.delete<void>(`/recording/reservations/${id}`);
-
-        if (response.type === 'error') {
-            // APIClient.showGenericError は内部で snackbar を表示するので、ここではエラー情報を返す
-            // 呼び出し元で snackbar を表示するかどうかを制御できるようにする
-            let error_detail = `録画予約 (ID: ${id}) の削除に失敗しました。`;
-            if (response.data && response.data.detail) {
-                if (typeof response.data.detail === 'string') {
-                    error_detail = response.data.detail;
-                } else if (Array.isArray(response.data.detail) && response.data.detail.length > 0) {
-                    // FastAPI のバリデーションエラーの場合、最初のメッセージを使用
-                    error_detail = response.data.detail[0].msg || error_detail;
-                }
-            }
-            // APIClient.showGenericError(response, `録画予約 (ID: ${id}) の削除に失敗しました。`);
-            return { detail: error_detail };
-        }
-
-        // HTTP ステータス 204 No Content の場合は成功
-        if (response.status === 204) {
-            return true;
-        }
-
-        // その他の予期せぬステータス
-        return { detail: `録画予約 (ID: ${id}) の削除中に予期せぬエラーが発生しました。 (Status: ${response.status})` };
-=======
      * @param reservation_id 削除する録画予約の ID
      * @returns 成功した場合は true、失敗した場合は false
      */
@@ -282,7 +208,6 @@ class Reservations {
         }
 
         return true;
->>>>>>> 8d353214e0dd9682011461904c6537bfc51e7f33
     }
 }
 
