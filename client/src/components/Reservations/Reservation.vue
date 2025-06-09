@@ -1,5 +1,5 @@
 <template>
-    <div class="reservation" :class="{ 'reservation--disabled': !reservation.record_settings.is_enabled }">
+    <div class="reservation" :class="{ 'reservation--disabled': !is_enabled }">
         <div class="reservation__container">
             <!-- 左側：優先度と有効・無効スイッチ -->
             <div class="reservation__controls">
@@ -7,7 +7,7 @@
                     <div class="reservation__priority-badge">{{ reservation.record_settings.priority }}</div>
                     <div class="reservation__priority-label">優先度</div>
                 </div>
-                <div class="reservation__toggle">
+                <div v-if="!reservation.is_recording_in_progress" class="reservation__toggle">
                     <v-switch
                         v-model="is_enabled"
                         color="primary"
@@ -17,10 +17,13 @@
                     ></v-switch>
                     <div class="reservation__toggle-label">{{ is_enabled ? '有効' : '無効' }}</div>
                 </div>
+                <div v-else class="reservation__recording">
+                    <div class="reservation__recording-icon"></div>
+                </div>
             </div>
 
             <!-- 中央：番組情報 -->
-            <div class="reservation__content">
+            <div class="reservation__content" @click="handleContentClick">
                 <div class="reservation__content-header">
                     <div class="reservation__content-title"
                         v-html="ProgramUtils.decorateProgramInfo(reservation.program, 'title')"></div>
@@ -44,13 +47,15 @@
                         <span class="reservation__content-meta-broadcaster-name">Ch: {{ reservation.channel.channel_number }} {{ reservation.channel.name }}</span>
                     </div>
                     <div class="reservation__content-meta-time">{{ ProgramUtils.getProgramTime(reservation.program) }}</div>
-                    <div class="reservation__content-meta-size">
-                        <Icon icon="fluent:hard-drive-20-regular" width="14px" height="14px" class="mr-1" />
-                        予想 {{ getDummyFileSize() }}
-                    </div>
-                    <div v-if="reservation.comment" class="reservation__content-meta-comment">
-                        <Icon icon="fluent:bot-20-regular" width="14px" height="14px" class="mr-1" />
-                        {{ reservation.comment }}
+                    <div class="reservation__content-meta-size-comment">
+                        <div v-if="reservation.comment" class="reservation__content-meta-comment">
+                            <Icon icon="fluent:note-20-filled" width="14px" height="14px" class="mr-1" />
+                            {{ reservation.comment }}
+                        </div>
+                        <div class="reservation__content-meta-size">
+                            <Icon icon="fluent:hard-drive-20-filled" width="14px" height="14px" class="mr-1" />
+                            {{ Utils.formatBytes(reservation.estimated_recording_file_size) }} 想定
+                        </div>
                     </div>
                 </div>
 
@@ -64,6 +69,7 @@
 <script lang="ts" setup>
 import { ref, watch } from 'vue';
 
+import Message from '@/message';
 import Reservations, { IReservation } from '@/services/Reservations';
 import { useSnackbarsStore } from '@/stores/SnackbarsStore';
 import Utils, { ProgramUtils } from '@/utils';
@@ -76,6 +82,7 @@ const props = defineProps<{
 // Emits
 const emit = defineEmits<{
     (e: 'deleted', reservation_id: number): void;
+    (e: 'click', reservation: IReservation): void;
 }>();
 
 const snackbarsStore = useSnackbarsStore();
@@ -116,18 +123,18 @@ const getReservationStatusLabel = (reservation: IReservation): string => {
 // 予約状態のアイコンを取得
 const getReservationStatusIcon = (reservation: IReservation): string => {
     if (reservation.is_recording_in_progress) {
-        return 'fluent:record-20-filled';
+        return 'fluent:record-16-filled';
     }
 
     switch (reservation.recording_availability) {
         case 'Full':
-            return 'fluent:checkmark-circle-20-regular';
+            return 'fluent:checkmark-circle-16-regular';
         case 'Partial':
-            return 'fluent:warning-20-regular';
+            return 'fluent:warning-16-filled';
         case 'Unavailable':
-            return 'fluent:dismiss-circle-20-regular';
+            return 'fluent:dismiss-circle-16-regular';
         default:
-            return 'fluent:question-circle-20-regular';
+            return 'fluent:question-circle-16-regular';
     }
 };
 
@@ -149,21 +156,9 @@ const getReservationStatusColor = (reservation: IReservation): string => {
     }
 };
 
-// ダミーファイルサイズを生成
-const getDummyFileSize = (): string => {
-    // 番組時間に基づいてダミーサイズを算出
-    const duration = ProgramUtils.getProgramDuration(props.reservation.program);
-    const durationMatch = duration.match(/(\d+)分/);
-    const minutes = durationMatch ? parseInt(durationMatch[1]) : 30;
-
-    // 1分あたり約60MBと仮定してサイズを計算
-    const sizeInMB = Math.round(minutes * 60 / 10) * 10; // 10MB単位で四捨五入
-
-    if (sizeInMB >= 1000) {
-        return `${(sizeInMB / 1000).toFixed(1)}GB`;
-    } else {
-        return `${sizeInMB}MB`;
-    }
+// コンテンツクリック時の処理
+const handleContentClick = () => {
+    emit('click', props.reservation);
 };
 
 // 有効・無効の切り替え処理
@@ -180,7 +175,10 @@ const handleToggleEnabled = async () => {
 
         const result = await Reservations.updateReservation(props.reservation.id, updatedSettings);
         if (result) {
-            snackbarsStore.show('success', `予約を${is_enabled.value ? '有効' : '無効'}にしました。`);
+            const message = is_enabled.value
+                ? '録画予約を有効にしました。\n番組開始時刻になると自動的に録画が開始されます。'
+                : '録画予約を無効にしました。\n番組開始時刻までに再度予約を有効にしない限り、この番組は録画されません。';
+            Message.success(message);
         } else {
             // 失敗時は元の状態に戻す
             is_enabled.value = props.reservation.record_settings.is_enabled;
@@ -244,18 +242,18 @@ const handleToggleEnabled = async () => {
         display: flex;
         flex-direction: column;
         align-items: center;
-        padding: 0px 7px;  // 下のスイッチと揃えるため
+        padding: 0px 6px;  // 下のスイッチと幅を揃えるため
         margin-bottom: 6px;
         @include smartphone-vertical {
-            margin-bottom: 5px;
+            margin-bottom: 12px;
         }
 
         &-badge {
             display: flex;
             align-items: center;
             justify-content: center;
-            width: 26px;
-            height: 26px;
+            width: 23px;
+            height: 23px;
             border-radius: 50%;
             background: rgb(var(--v-theme-primary));
             color: white;
@@ -277,6 +275,53 @@ const handleToggleEnabled = async () => {
             @include smartphone-vertical {
                 font-size: 9px;
             }
+        }
+    }
+
+
+    .reservation__recording-icon {
+        margin: auto;
+        width: 21px;
+        height: 21px;
+        border: 7px solid #515151;
+        border-radius: 50%;
+        background-color: #EF5350;
+        box-shadow: 0 3px 4px 0 rgba(0, 0, 0, .14), 0 3px 3px -2px rgba(0, 0, 0, .2), 0 1px 8px 0 rgba(0, 0, 0, .12);
+        transition: 1s cubic-bezier(0.22, 0.61, 0.36, 1);
+        position: relative;
+        display: block;
+        content: '';
+        box-sizing: border-box;
+        overflow: visible;
+        text-align: left;
+        animation: recording-background-color 2s infinite ease-in-out;
+        @include smartphone-vertical {
+            width: 19px;
+            height: 19px;
+            border: 6px solid #515151;
+        }
+
+        &:before {
+            width: 13px;
+            height: 13px;
+            background: rgba(239, 83, 80, 0.2);
+            border-radius: 50%;
+            position: absolute;
+            margin-top: -3px;
+            margin-left: -3px;
+            content: '';
+            transition: 1s cubic-bezier(0.22, 0.61, 0.36, 1);
+            @include smartphone-vertical {
+                width: 9px;
+                height: 9px;
+            }
+        }
+
+        // 中心の赤丸が点滅するアニメーション
+        @keyframes recording-background-color {
+            0% { background-color: rgba(239, 83, 80, 0.7); }
+            50% { background-color: rgba(239, 83, 80, 1); }
+            100% { background-color: rgba(239, 83, 80, 0.7); }
         }
     }
 
@@ -314,11 +359,26 @@ const handleToggleEnabled = async () => {
         justify-content: center;
         flex-grow: 1;
         min-width: 0;
+        cursor: pointer;
+        border-radius: 6px;
+        padding: 4px;
+        margin: -4px;
+        transition: background-color 0.15s;
+
+        &:hover {
+            background-color: rgba(var(--v-theme-primary), 0.08);
+        }
 
         &-header {
             display: flex;
             align-items: center;
             margin-bottom: 2px;
+            @include desktop {
+                margin-bottom: 4px;
+            }
+            @include tablet-horizontal {
+                margin-bottom: 4px;
+            }
         }
 
         &-title {
@@ -363,18 +423,22 @@ const handleToggleEnabled = async () => {
             display: flex;
             align-items: center;
             flex-wrap: wrap;
-            gap: 10px;
-            margin-bottom: 3px;
+            gap: 10px 12px;
+            margin-bottom: 2px;
             font-size: 13.8px;
+            @include tablet-horizontal {
+                row-gap: 4px;
+            }
             @include tablet-vertical {
-                gap: 8px;
+                gap: 3px 6px;
             }
             @include smartphone-horizontal {
-                gap: 8px;
+                gap: 3px 6px;
             }
             @include smartphone-vertical {
                 row-gap: 1px;
                 font-size: 12px;
+                margin-bottom: 0px;
             }
 
             &-broadcaster {
@@ -382,7 +446,7 @@ const handleToggleEnabled = async () => {
                 align-items: center;
                 min-width: 0;
                 @include smartphone-vertical {
-                    margin-bottom: 2px;
+                    margin-bottom: 1px;
                 }
 
                 &-icon {
@@ -463,57 +527,65 @@ const handleToggleEnabled = async () => {
                     font-size: 11px;
                 }
             }
-
-            &-comment {
-                border-left: 1px solid rgb(var(--v-theme-text-darken-1));
-                padding-left: 8px;
-                @include tablet-vertical {
-                    margin-top: 2px;
-                    margin-left: 0px;
-                    border-left: none;
-                    padding-left: 0px;
-                }
-                @include smartphone-horizontal {
-                    margin-top: 2px;
-                    margin-left: 0px;
-                    border-left: none;
-                    padding-left: 0px;
+            &-size-comment {
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 10px;
+                @include desktop {
+                    margin-left: auto;
                 }
                 @include smartphone-vertical {
-                    margin-top: 1px;
-                    margin-left: 0px;
-                    border-left: none;
-                    padding-left: 0px;
+                    margin-top: 2px;
                 }
             }
         }
 
         &-description {
+            display: -webkit-box;
+            margin-top: 2px;
             color: rgb(var(--v-theme-text-darken-1));
             font-size: 11.5px;
             line-height: 1.55;
             overflow-wrap: break-word;
             font-feature-settings: "palt" 1;
             letter-spacing: 0.07em;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
+            -webkit-line-clamp: 1;
             -webkit-box-orient: vertical;
             overflow: hidden;
             @include tablet-vertical {
-                margin-top: 3.5px;
                 font-size: 11px;
             }
             @include smartphone-horizontal {
-                margin-top: 3.5px;
                 font-size: 11px;
             }
             @include smartphone-vertical {
-                margin-top: 1.5px;
-                font-size: 11px;
-                line-height: 1.45;
-                -webkit-line-clamp: 1;
+                display: none;
+            }
+        }
+    }
+
+    &__recording {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+
+        &-icon {
+            margin-bottom: 3px;
+            @include smartphone-vertical {
+                margin-bottom: 2px;
+            }
+        }
+
+        &-label {
+            font-size: 10px;
+            color: rgb(var(--v-theme-text-darken-1));
+            text-align: center;
+            @include smartphone-vertical {
+                font-size: 9px;
             }
         }
     }
 }
+
 </style>
