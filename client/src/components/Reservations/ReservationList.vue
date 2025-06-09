@@ -30,6 +30,15 @@
                     hide-details
                     @update:model-value="$emit('update:sortOrder', $event)">
                 </v-select>
+                <v-btn v-if="showRefreshButton"
+                    variant="text"
+                    class="reservation-list__refresh-button mr-2"
+                    :loading="isLoading"
+                    :disabled="isLoading"
+                    @click="$emit('refresh')">
+                    <Icon icon="fluent:arrow-sync-16-regular" width="20px" height="20px" />
+                    <span class="ml-1">更新</span>
+                </v-btn>
                 <v-btn v-if="showMoreButton"
                     variant="text"
                     class="reservation-list__more"
@@ -101,6 +110,7 @@ const props = withDefaults(defineProps<{
     hidePagination?: boolean;
     showMoreButton?: boolean;
     showBackButton?: boolean;
+    showRefreshButton?: boolean;
     showEmptyMessage?: boolean;
     emptyIcon?: string;
     emptyMessage?: string;
@@ -114,6 +124,7 @@ const props = withDefaults(defineProps<{
     hidePagination: false,
     showMoreButton: false,
     showBackButton: false,
+    showRefreshButton: false,
     showEmptyMessage: true,
     emptyIcon: 'fluent:warning-20-regular',
     emptyMessage: '録画予約が見つかりませんでした。',
@@ -161,6 +172,7 @@ const emit = defineEmits<{
     (e: 'update:page', page: number): void;
     (e: 'update:sortOrder', order: 'desc' | 'asc'): void;
     (e: 'more'): void;
+    (e: 'refresh'): void;
     (e: 'delete', reservation_id: number): void;
 }>();
 
@@ -299,6 +311,12 @@ const handleReservationSave = (updatedReservation: IReservation) => {
             padding-bottom: 6px !important;
             min-height: unset !important;
         }
+    }
+
+    &__refresh-button {
+        padding: 0 10px;
+        font-size: 15px;
+        letter-spacing: 0.05em;
     }
 
     &__more {

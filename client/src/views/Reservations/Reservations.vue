@@ -20,8 +20,10 @@
                         :is-loading="is_loading"
                         :show-back-button="true"
                         :show-empty-message="!is_loading"
+                        :showRefreshButton="true"
                         @update:page="updatePage"
                         @update:sort-order="updateSortOrder"
+                        @refresh="refreshReservations"
                         @delete="handleReservationDeleted">
                     </ReservationList>
                 </div>
@@ -145,6 +147,24 @@ function handleReservationDeleted(reservation_id: number) {
     all_reservations.value = all_reservations.value.filter(reservation => reservation.id !== reservation_id);
     // 表示データを更新
     updateDisplayData();
+}
+
+/**
+ * 録画予約一覧を更新する
+ */
+async function refreshReservations() {
+    is_loading.value = true;
+    try {
+        const result = await Reservations.fetchReservations();
+        if (result) {
+            all_reservations.value = result.reservations;
+            updateDisplayData();
+        }
+    } catch (error) {
+        console.error('Failed to refresh reservations:', error);
+    } finally {
+        is_loading.value = false;
+    }
 }
 
 // クエリパラメータが変更されたら表示データを更新（再取得はしない）
