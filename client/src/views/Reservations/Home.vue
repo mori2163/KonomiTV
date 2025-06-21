@@ -22,8 +22,8 @@
                         :showMoreButton="true"
                         :isLoading="is_loading"
                         :showEmptyMessage="!is_loading"
-                        :emptyIcon="'mdi-calendar-clock'"
-                        :emptyMessage="'放送が近い録画予約はありません。'"
+                        :emptyIcon="'fluent:timer-20-regular'"
+                        :emptyMessage="'まだ録画予約がありません。'"
                         :emptySubMessage="'番組表から録画予約を追加できます。'"
                         :showRefreshButton="true"
                         @refresh="updateAllSections"
@@ -146,6 +146,7 @@ onUnmounted(() => {
     display: flex;
     flex-direction: column;
     width: 100%;
+    min-width: 0;  // very important!!! これがないと要素がはみ出す
 }
 
 .reservations-home-container {

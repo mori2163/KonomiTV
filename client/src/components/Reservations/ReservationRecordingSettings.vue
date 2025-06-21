@@ -1,5 +1,13 @@
 <template>
     <div class="reservation-recording-settings">
+        <!-- 録画中の警告バナー -->
+        <div v-if="reservation.is_recording_in_progress" class="recording-warning-banner">
+            <Icon icon="fluent:warning-16-filled" class="recording-warning-banner__icon" />
+            <span class="recording-warning-banner__text">
+                録画中の録画設定の変更はできません。
+            </span>
+        </div>
+
         <!-- 録画予約の有効/無効 -->
         <div class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__header">
@@ -24,10 +32,11 @@
         <div class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画予約の優先度</div>
             <div class="reservation-recording-settings__description mb-0">
-                放送時間が重なりチューナーが足りないときは、より優先度が高い予約を優先して録画します。
+                放送時間が重なりチューナーが足りないときは、より優先度が高い予約から優先的に録画します。
             </div>
             <div class="reservation-recording-settings__slider">
                 <v-slider
+                    :disabled="reservation.is_recording_in_progress"
                     v-model="settings.priority"
                     :min="1"
                     :max="5"
@@ -49,6 +58,7 @@
                 空欄にすると、デフォルトの録画フォルダに保存されます。
             </div>
             <v-text-field
+                :disabled="reservation.is_recording_in_progress"
                 v-model="recordingFolderPath"
                 color="primary"
                 variant="outlined"
@@ -63,9 +73,13 @@
         <div class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画ファイル名テンプレート (マクロ)</div>
             <div class="reservation-recording-settings__description">
-                空欄にすると、デフォルトの録画ファイル名テンプレート (マクロ) が録画ファイル名の変更に利用されます。
+                空欄にすると、デフォルトの録画ファイル名テンプレート (マクロ) が録画ファイル名の変更に利用されます。<br>
+                <div class="mt-1">
+                    <a class="link" href="https://github.com/xtne6f/EDCB/blob/work-plus-s/Document/Readme_EpgTimer.txt#L929-L1008" target="_blank">テンプレート構文の一覧</a> / <a class="link" href="https://github.com/xtne6f/EDCB/blob/work-plus-s/Document/Readme_Mod.txt#%E3%83%9E%E3%82%AF%E3%83%AD" target="_blank">xtne6f 版での追加差分</a>
+                </div>
             </div>
             <v-text-field
+                :disabled="reservation.is_recording_in_progress"
                 v-model="recordingFileNameTemplate"
                 color="primary"
                 variant="outlined"
@@ -84,6 +98,7 @@
             </div>
             <div class="reservation-recording-settings__margin-default">
                 <v-checkbox
+                    :disabled="reservation.is_recording_in_progress"
                     id="use-default-margin"
                     v-model="useDefaultMargin"
                     color="primary"
@@ -98,7 +113,7 @@
             </div>
             <div class="reservation-recording-settings__margin-controls">
                 <v-text-field
-                    :disabled="useDefaultMargin"
+                    :disabled="reservation.is_recording_in_progress || useDefaultMargin"
                     v-model.number="settings.recording_start_margin"
                     color="primary"
                     variant="outlined"
@@ -111,7 +126,7 @@
                     @update:model-value="handleChange">
                 </v-text-field>
                 <v-text-field
-                    :disabled="useDefaultMargin"
+                    :disabled="reservation.is_recording_in_progress || useDefaultMargin"
                     v-model.number="settings.recording_end_margin"
                     color="primary"
                     variant="outlined"
@@ -134,6 +149,7 @@
                 [録画する] に設定しておくことを強くおすすめします。
             </div>
             <v-select
+                :disabled="reservation.is_recording_in_progress"
                 v-model="settings.caption_recording_mode"
                 :items="captionRecordingOptions"
                 color="primary"
@@ -152,6 +168,7 @@
                 [録画しない] に設定しておくことを強くおすすめします。
             </div>
             <v-select
+                :disabled="reservation.is_recording_in_progress"
                 v-model="settings.data_broadcasting_recording_mode"
                 :items="dataBroadcastingRecordingOptions"
                 color="primary"
@@ -169,6 +186,7 @@
                 通常は [何もしない] のままで大丈夫です。録画後に録画 PC をスリープさせておきたい方のみ設定してください。環境によっては復帰できず以降の録画に失敗することがあります。
             </div>
             <v-select
+                :disabled="reservation.is_recording_in_progress"
                 v-model="settings.post_recording_mode"
                 :items="postRecordingOptions"
                 color="primary"
@@ -186,6 +204,7 @@
                 通常は空欄のままで大丈夫です。録画後に指定の {{ versionStore.is_linux_environment ? '.sh / .lua' : '.bat / .ps1 / .lua' }} スクリプトを実行させたい方のみ設定してください。
             </div>
             <v-text-field
+                :disabled="reservation.is_recording_in_progress"
                 v-model="settings.post_recording_bat_file_path"
                 color="primary"
                 variant="outlined"
@@ -199,7 +218,7 @@
 </template>
 <script lang="ts" setup>
 
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, toRaw } from 'vue';
 
 import { type IReservation, type IRecordSettings } from '@/services/Reservations';
 import useVersionStore from '@/stores/VersionStore';
@@ -220,24 +239,55 @@ const emit = defineEmits<{
 const versionStore = useVersionStore();
 
 // 設定のコピーを作成（元の設定を変更しないため）
-const settings = ref<IRecordSettings>({ ...props.reservation.record_settings });
+const settings = ref<IRecordSettings>(structuredClone(toRaw(props.reservation.record_settings)));
 
 // 初期設定を保存（変更検知用）
-const initialSettings = ref<IRecordSettings>({ ...props.reservation.record_settings });
+const initialSettings = ref<IRecordSettings>(structuredClone(toRaw(props.reservation.record_settings)));
 
-// 録画フォルダパス（録画フォルダ配列の最初の要素）
-const recordingFolderPath = ref(
-    settings.value.recording_folders.length > 0
+// 録画フォルダパス・録画ファイル名テンプレートの computed（settings.value を単一の情報源とする）
+// 録画フォルダは仕様上は複数指定できるが、複数指定はほとんど使われないので、KonomiTV では常に 0 番目の要素を使用する
+// 録画フォルダが空の場合はデフォルトの録画フォルダに保存される（フォーム上は空欄としておく）
+const recordingFolderPath = computed({
+    get: () => settings.value.recording_folders.length > 0
         ? settings.value.recording_folders[0].recording_folder_path
-        : ''
-);
+        : '',
+    set: (value: string) => {
+        updateRecordingFolderSettings(value, recordingFileNameTemplate.value);
+    },
+});
 
-// 録画ファイル名テンプレート
-const recordingFileNameTemplate = ref(
-    settings.value.recording_folders.length > 0
+const recordingFileNameTemplate = computed({
+    get: () => settings.value.recording_folders.length > 0
         ? settings.value.recording_folders[0].recording_file_name_template || ''
-        : ''
-);
+        : '',
+    set: (value: string) => {
+        updateRecordingFolderSettings(recordingFolderPath.value, value);
+    },
+});
+
+// 録画フォルダ設定を更新する関数
+const updateRecordingFolderSettings = (folderPath: string, fileNameTemplate: string) => {
+    const hasFolderPath = folderPath.trim() !== '';
+    const hasFileNameTemplate = fileNameTemplate.trim() !== '';
+
+    if (!hasFolderPath && !hasFileNameTemplate) {
+        // 両方とも空の場合は空リストにしてデフォルト設定を使用
+        settings.value.recording_folders = [];
+    } else {
+        // どちらか一方でも指定されている場合は新しい要素を追加
+        if (settings.value.recording_folders.length === 0) {
+            settings.value.recording_folders.push({
+                recording_folder_path: '',
+                recording_file_name_template: null,
+                is_oneseg_separate_recording_folder: false,
+            });
+        }
+        // 録画フォルダパスとマクロを更新
+        // 録画フォルダは仕様上は複数指定できるが、複数指定はほとんど使われないので、KonomiTV では常に 0 番目の要素を使用する
+        settings.value.recording_folders[0].recording_folder_path = folderPath;
+        settings.value.recording_folders[0].recording_file_name_template = fileNameTemplate || null;
+    }
+};
 
 // デフォルトマージン使用フラグ
 const useDefaultMargin = ref(
@@ -279,20 +329,8 @@ watch(hasChangesComputed, (newValue) => {
     emit('changesDetected', newValue);
 });
 
-// 変更時の処理
+// 変更時の処理（settings.value の変更を親に通知）
 const handleChange = () => {
-    // 録画フォルダ設定を更新
-    if (settings.value.recording_folders.length === 0) {
-        settings.value.recording_folders.push({
-            recording_folder_path: '',
-            recording_file_name_template: null,
-            is_oneseg_separate_recording_folder: false,
-        });
-    }
-
-    settings.value.recording_folders[0].recording_folder_path = recordingFolderPath.value;
-    settings.value.recording_folders[0].recording_file_name_template = recordingFileNameTemplate.value || null;
-
     emit('updateSettings', settings.value);
 };
 
@@ -310,16 +348,9 @@ const handleMarginDefaultChange = () => {
 
 // props の予約情報が変更された時の処理
 watch(() => props.reservation, (newReservation) => {
-    settings.value = { ...newReservation.record_settings };
-    initialSettings.value = { ...newReservation.record_settings };
-
-    // フォルダパス等も再設定
-    recordingFolderPath.value = settings.value.recording_folders.length > 0
-        ? settings.value.recording_folders[0].recording_folder_path
-        : '';
-    recordingFileNameTemplate.value = settings.value.recording_folders.length > 0
-        ? settings.value.recording_folders[0].recording_file_name_template || ''
-        : '';
+    settings.value = structuredClone(toRaw(newReservation.record_settings));
+    initialSettings.value = structuredClone(toRaw(newReservation.record_settings));
+    // フォルダパス等は computed で自動的に更新される
 }, { deep: true });
 
 // コンポーネントマウント時にバージョン情報を取得
@@ -391,6 +422,31 @@ onMounted(async () => {
         &-text {
             font-size: 12.5px;
         }
+    }
+}
+
+// 録画中の警告バナー
+.recording-warning-banner {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    margin-bottom: 4px;
+    background-color: rgb(var(--v-theme-warning-darken-3), 0.5);
+    border-radius: 6px;
+
+    &__icon {
+        color: rgb(var(--v-theme-warning));
+        width: 22px;
+        height: 22px;
+        margin-right: 8px;
+        flex-shrink: 0;
+    }
+
+    &__text {
+        font-size: 13px;
+        font-weight: 500;
+        line-height: 1.5;
+        color: rgb(var(--v-theme-warning-lighten-1));
     }
 }
 
