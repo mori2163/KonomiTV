@@ -1,4 +1,3 @@
-
 import asyncio
 import atexit
 import mimetypes
@@ -28,6 +27,7 @@ from app.routers import (
     CapturesRouter,
     ChannelsRouter,
     DataBroadcastingRouter,
+    DiscordRouter,
     LiveStreamsRouter,
     MaintenanceRouter,
     NiconicoRouter,
@@ -76,6 +76,7 @@ app.include_router(ReservationsRouter.router)
 app.include_router(ReservationConditionsRouter.router)
 app.include_router(CapturesRouter.router)
 app.include_router(DataBroadcastingRouter.router)
+app.include_router(DiscordRouter.router)
 app.include_router(NiconicoRouter.router)
 app.include_router(TwitterRouter.router)
 app.include_router(UsersRouter.router)
@@ -261,8 +262,8 @@ async def Shutdown():
         recorded_scan_task = None
 
     # Discord Bot を停止する
-    ## トークンが設定されていない場合は停止処理も不要
-    if CONFIG.discord.token:
+    ## Discord 連携が有効な場合のみ停止処理を行う
+    if CONFIG.discord.enabled and CONFIG.discord.token:
         logging.info('Discord Bot stopping...')
         await stop_discord_bot()
 
