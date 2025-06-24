@@ -226,8 +226,15 @@ class Settings {
             }
             return null;
         }
-        
-        return response.data;
+
+        const settings = response.data;
+
+        // channel_id を確実に文字列として扱う（数値精度問題の回避）
+        if (settings.discord.channel_id !== null) {
+            settings.discord.channel_id = String(settings.discord.channel_id);
+        }
+
+        return settings;
     }
 
     /**

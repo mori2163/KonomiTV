@@ -21,6 +21,7 @@ from pydantic import (
     UrlConstraints,
     ValidationError,
     ValidationInfo,
+    field_serializer,
     confloat,
     field_validator,
 )
@@ -314,6 +315,33 @@ class _ServerSettingsDiscord(BaseModel):
     channel_id: int | None = None
     notify_server: bool = False
     notify_recording: bool = False
+
+    @field_validator('channel_id', mode='before')
+    @classmethod
+    def validate_channel_id(cls, v: Any) -> int | None:
+        """
+        channel_id の値を検証・変換する
+        文字列として受け取った場合は整数に変換する（フロントエンドからの送信時）
+        """
+        if v is None or v == '':
+            return None
+        if isinstance(v, str):
+            try:
+                return int(v)
+            except ValueError:
+                raise ValueError('channel_id must be a valid integer')
+        return v
+
+    @field_serializer('channel_id')
+    def serialize_channel_id(self, value: int | None) -> str | None:
+        """
+        channel_id を JSON レスポンス用に文字列として出力する
+        JavaScript の Number.MAX_SAFE_INTEGER を超える値でも精度を保つため
+        """
+        if value is None:
+            return None
+        return str(value)
+
 
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()
