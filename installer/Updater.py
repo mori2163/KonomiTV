@@ -32,12 +32,13 @@ from Utils import ShowPanel
 from Utils import ShowSubProcessErrorLog
 
 
-def Updater(version: str) -> None:
+def Updater(version: str, install_fork: bool) -> None:
     """
     KonomiTV のアップデーターの実装
 
     Args:
         version (str): KonomiTV をアップデートするバージョン
+        install_fork (bool): フォーク版をインストールするかどうか
     """
 
     ShowPanel([
@@ -277,11 +278,14 @@ def Updater(version: str) -> None:
         progress = CreateDownloadInfiniteProgress()
 
         # GitHub からソースコードをダウンロード
-        ## latest の場合は master ブランチを、それ以外は指定されたバージョンのタグをダウンロード
-        if version == 'latest':
-            source_code_response = requests.get('https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/heads/master')
+        # フォーク版の場合は mori2163/KonomiTV から、それ以外は tsukumijima/KonomiTV からダウンロード
+        if install_fork is True:
+            source_code_response = requests.get('https://codeload.github.com/mori2163/KonomiTV/zip/refs/heads/master')
         else:
-            source_code_response = requests.get(f'https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/tags/v{version}')
+            if version == 'latest':
+                source_code_response = requests.get('https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/heads/master')
+            else:
+                source_code_response = requests.get(f'https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/tags/v{version}')
         task_id = progress.add_task('', total=None)
 
         # ダウンロードしたデータを随時一時ファイルに書き込む
@@ -296,12 +300,18 @@ def Updater(version: str) -> None:
 
         # ソースコードを解凍して展開
         shutil.unpack_archive(source_code_file.name, update_path.parent, format='zip')
-        if version == 'latest':
+        # フォーク版の場合は KonomiTV-master/ 、それ以外は KonomiTV-master/ (master ブランチをダウンロードした場合)
+        # または KonomiTV-{version}/ (タグをダウンロードした場合)
+        if install_fork is True:
             shutil.copytree(update_path.parent / 'KonomiTV-master/', update_path, dirs_exist_ok=True)
             shutil.rmtree(update_path.parent / 'KonomiTV-master/', ignore_errors=True)
         else:
-            shutil.copytree(update_path.parent / f'KonomiTV-{version}/', update_path, dirs_exist_ok=True)
-            shutil.rmtree(update_path.parent / f'KonomiTV-{version}/', ignore_errors=True)
+            if version == 'latest':
+                shutil.copytree(update_path.parent / 'KonomiTV-master/', update_path, dirs_exist_ok=True)
+                shutil.rmtree(update_path.parent / 'KonomiTV-master/', ignore_errors=True)
+            else:
+                shutil.copytree(update_path.parent / f'KonomiTV-{version}/', update_path, dirs_exist_ok=True)
+                shutil.rmtree(update_path.parent / f'KonomiTV-{version}/', ignore_errors=True)
         Path(source_code_file.name).unlink()
 
     # ***** サーバー設定ファイル (config.yaml) の更新 *****

@@ -38,12 +38,13 @@ from Utils import SaveConfig
 from Utils import ShowPanel
 
 
-def Installer(version: str) -> None:
+def Installer(version: str, install_fork: bool) -> None:
     """
     KonomiTV のインストーラーの実装
 
     Args:
         version (str): KonomiTV をインストールするバージョン
+        install_fork (bool): フォーク版をインストールするかどうか
     """
 
     # プラットフォームタイプ
@@ -534,8 +535,15 @@ def Installer(version: str) -> None:
         progress = CreateDownloadInfiniteProgress()
 
         # GitHub からソースコードをダウンロード
-        # versionごとに管理すると大変なため、全てmasterブランチからダウンロードする
-        source_code_response = requests.get('https://codeload.github.com/mori2163/KonomiTV/zip/refs/heads/master')
+        # フォーク版の場合は mori2163/KonomiTV から、それ以外は tsukumijima/KonomiTV からダウンロード
+        ## latest の場合は master ブランチを、それ以外は指定されたバージョンのタグをダウンロード
+        if install_fork is True:
+            source_code_response = requests.get('https://codeload.github.com/mori2163/KonomiTV/zip/refs/heads/master')
+        else:
+            if version == 'latest':
+                source_code_response = requests.get('https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/heads/master')
+            else:
+                source_code_response = requests.get(f'https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/tags/v{version}')
         task_id = progress.add_task('', total=None)
 
         # ダウンロードしたデータを随時一時ファイルに書き込む
@@ -550,7 +558,15 @@ def Installer(version: str) -> None:
 
         # ソースコードを解凍して展開
         shutil.unpack_archive(source_code_file.name, install_path.parent, format='zip')
-        shutil.move(install_path.parent / 'KonomiTV-master/', install_path)
+        # フォーク版の場合は KonomiTV-master/ 、それ以外は KonomiTV-master/ (master ブランチをダウンロードした場合)
+        # または KonomiTV-{version}/ (タグをダウンロードした場合)
+        if install_fork is True:
+            shutil.move(install_path.parent / 'KonomiTV-master/', install_path)
+        else:
+            if version == 'latest':
+                shutil.move(install_path.parent / 'KonomiTV-master/', install_path)
+            else:
+                shutil.move(install_path.parent / f'KonomiTV-{version}/', install_path)
         Path(source_code_file.name).unlink()
 
     # ***** リッスンポートの重複チェック *****

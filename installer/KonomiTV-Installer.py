@@ -122,10 +122,17 @@ def main():
         '    安定動作は保証されておらずサポートもありませんので、ご了承の上ご利用ください。',
     ], padding=(1, 2, 1, 2))
 
+    install_type = CustomPrompt.ask('フォーク版をインストールしますか？(y/n)', default='y', choices=['y', 'n'])
+
     # 実行タイプ (インストール or アップデート or アンインストール)
     ## choices を指定することで、自動的にバリデーションが行われる（超便利）
-    run_type = int(CustomPrompt.ask('インストール(1) / アップデート(2) / アンインストール(3)\n  開発版をインストール(4) / 開発版にアップデート(5)', default='1', choices=['1', '2', '3', '4', '5']))
-
+    if install_type == "y":
+        # フォーク版の場合は、開発版のインストール/アップデートは行わない
+        run_type = int(CustomPrompt.ask('インストール(1) / アップデート(2) / アンインストール(3)', default='1', choices=['1', '2', '3']))
+        install_fork = True
+    else:
+        run_type = int(CustomPrompt.ask('インストール(1) / アップデート(2) / アンインストール(3)\n  開発版をインストール(4) / 開発版にアップデート(5)', default='1', choices=['1', '2', '3', '4', '5']))
+        install_fork = False
     # Windows: コンソール出力前のおまじないとして、適当な PowerShell コマンドを実行する
     ## なぜ直るのかは全くもって謎だが、一度 PowerShell コマンドを実行しておくことで、print(Padding('Test', (1, 2, 0, 2)) のように
     ## Padding ありで print() した際に余計な改行が入る問題 (Rich または conhost.exe のバグ？) を回避することができる
@@ -140,15 +147,15 @@ def main():
 
     # 実行タイプごとにそれぞれの実装を呼び出す
     if run_type == 1:
-        Installer(TARGET_VERSION)
+        Installer(TARGET_VERSION, install_fork)
     elif run_type == 2:
-        Updater(TARGET_VERSION)
+        Updater(TARGET_VERSION, install_fork)
     elif run_type == 3:
         Uninstaller()
     elif run_type == 4:
-        Installer('latest')
+        Installer('latest', False)
     elif run_type == 5:
-        Updater('latest')
+        Updater('latest', False)
 
 
 if __name__ == '__main__':
