@@ -309,9 +309,11 @@ class _ServerSettingsCapture(BaseModel):
     upload_folders: list[DirectoryPath] = []
 
 class _ServerSettingsDiscord(BaseModel):
+    enabled: bool = False
     token: str | None = None
-    log_channel_id: int | None = None
-    log_enabled: bool = False
+    channel_id: int | None = None
+    notify_server: bool = False
+    notify_recording: bool = False
 
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()

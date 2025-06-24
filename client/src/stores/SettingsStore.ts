@@ -1,4 +1,3 @@
-
 import { isEqual, hash } from 'ohash';
 import { defineStore } from 'pinia';
 
@@ -67,6 +66,13 @@ export interface ILocalClientSettings extends IClientSettings {
     capture_filename_pattern: string;
     capture_copy_to_clipboard: boolean;
     sync_settings: boolean;
+    discord: {
+        enabled: boolean;
+        token: string | null;
+        channel_id: string | null;
+        notify_server: boolean;
+        notify_recording: boolean;
+    };
     prefer_posting_to_nicolive: boolean;
     comment_speed_rate: number;
     comment_font_size: number;
@@ -203,6 +209,16 @@ export const ILocalClientSettingsDefault: ILocalClientSettings = {
 
     // 設定を同期する (Default: 同期しない) (同期無効)
     sync_settings: false,
+
+    // ***** 設定 → Discord *****
+
+    discord: {
+        enabled: false,
+        token: null,
+        channel_id: null,
+        notify_server: true,
+        notify_recording: true,
+    },
 
     // ***** 設定 → ニコニコ実況 *****
 

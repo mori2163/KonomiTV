@@ -116,6 +116,13 @@ export interface IServerSettings {
     capture: {
         upload_folders: string[];
     };
+    discord: {
+        enabled: boolean;
+        token: string | null;
+        channel_id: string | null;
+        notify_server: boolean;
+        notify_recording: boolean;
+    };
 }
 
 /* サーバー設定を表すインターフェースのデフォルト値 */
@@ -144,6 +151,13 @@ export const IServerSettingsDefault: IServerSettings = {
     },
     capture: {
         upload_folders: [],
+    },
+    discord: {
+        enabled: false,
+        token: null,
+        channel_id: null,
+        notify_server: false,
+        notify_recording: false,
     },
 };
 
@@ -212,7 +226,7 @@ class Settings {
             }
             return null;
         }
-
+        
         return response.data;
     }
 

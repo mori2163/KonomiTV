@@ -104,12 +104,19 @@ capture:
 # ============================== Discord連携の設定 ==============================
 discord:
 
-    # Discord連携をするbotのトークンを入力してください
-    token: "YOUR_TOKEN"
+    # Discord連携を有効にするか
+    enabled: true
 
-    ### ここからは設定する必要はありません。 ###
-    # 起動/終了時にログを出力するチャンネルのID
-    log_channel_id:
+    # Discord Bot のトークン
+    # Discord Bot を作成し、そのトークンをここに入力してください。
+    token: 'YOUR_DISCORD_BOT_TOKEN'
 
-    # ログを出力するか
-    log_enabled: true
+    # 通知を送信する Discord チャンネルの ID
+    # 通知を送信したいチャンネルで右クリックし、「IDをコピー」で取得した ID を入力してください。
+    channel_id: 'YOUR_DISCORD_CHANNEL_ID'
+
+    # サーバーの起動/終了時に通知を送信するか
+    notify_server: true
+
+    # 録画予約の開始/完了時に通知を送信するか
+    notify_recording: true
