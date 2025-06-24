@@ -259,6 +259,23 @@ class Settings {
 
         return true;
     }
+    /**
+     * Discord の接続状態を取得する
+     * @returns Discord の接続状態
+     */
+    static async fetchDiscordStatus(): Promise<{connected: boolean}> {
+        try {
+            const response = await APIClient.get<{connected: boolean}>('/discord/status');
+            if (response.type === 'success') {
+                return response.data;
+            }
+            console.error('Discord status check failed:', response.data.detail);
+            return { connected: false };
+        } catch (error) {
+            console.error('Discord status check failed:', error);
+            return { connected: false };
+        }
+    }
 }
 
 export default Settings;
