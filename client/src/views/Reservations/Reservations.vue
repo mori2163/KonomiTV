@@ -23,7 +23,7 @@
                         :showRefreshButton="true"
                         @update:page="updatePage"
                         @update:sort-order="updateSortOrder"
-                        @refresh="refreshReservations"
+                        @refresh="updateAllSections"
                         @delete="handleReservationDeleted">
                     </ReservationList>
                 </div>
@@ -151,25 +151,6 @@ function handleReservationDeleted(reservation_id: number) {
     updateAllSections();
 }
 
-<<<<<<< HEAD
-/**
- * 録画予約一覧を更新する
- */
-async function refreshReservations() {
-    is_loading.value = true;
-    try {
-        const result = await Reservations.fetchReservations();
-        if (result) {
-            all_reservations.value = result.reservations;
-            updateDisplayData();
-        }
-    } catch (error) {
-        console.error('Failed to refresh reservations:', error);
-    } finally {
-        is_loading.value = false;
-    }
-}
-=======
 // 全セクションの更新を実行
 const updateAllSections = async () => {
     try {
@@ -198,7 +179,6 @@ const stopAutoRefresh = () => {
         autoRefreshInterval.value = null;
     }
 };
->>>>>>> 26e94e2ce38f13de2c08d911c9ae0e61d8d1eef9
 
 // クエリパラメータが変更されたら表示データを更新（再取得はしない）
 watch(() => route.query, async (newQuery) => {
