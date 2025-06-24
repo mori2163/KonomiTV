@@ -6,6 +6,10 @@ from typing import Dict, List, Tuple, Optional
 
 from app import logging
 from app.config import Config, SaveConfig
+
+# Botが実行中かどうかを示すグローバル変数
+is_bot_running: bool = False
+
 from fastapi import HTTPException
 from app.models.Channel import Channel
 from app import schemas # schemas をインポート
@@ -27,6 +31,8 @@ bot = commands.Bot(
 @bot.event
 async def on_ready():
     """起動時に実行されるイベントハンドラ"""
+    global is_bot_running
+    is_bot_running = True
     if bot.user:
         logging.info(f'[DiscordBot] ✅ Login successful! (User: {bot.user} (ID: {bot.user.id})')
     else:
@@ -40,7 +46,15 @@ async def on_ready():
         logging.error(f'[DiscordBot] Error synchronizing command tree: {e}')
 
      # 起動時にログチャンネルにメッセージを送信
-    await send_bot_status_message("startup")
+    if config.discord.notify_server:
+        await send_bot_status_message("startup")
+
+@bot.event
+async def on_disconnect():
+    """切断時に実行されるイベントハンドラ"""
+    global is_bot_running
+    is_bot_running = False
+    logging.info('[DiscordBot] 🔌 Disconnected from Discord.')
 
 async def setup():
     """"ボットの初期設定を行う"""
@@ -63,13 +77,8 @@ class UtilityCog(commands.Cog):
             color=0x00ff00
         )
         embed.add_field(
-            name="/setting log_channel",
-            value="ログ出力チャンネルを設定する",
-            inline=False
-        )
-        embed.add_field(
-            name="/setting enable_log",
-            value="ログ出力の有効/無効を切り替える",
+            name="/setting channel",
+            value="通知チャンネルを設定する",
             inline=False
         )
         embed.add_field(
@@ -256,70 +265,44 @@ class SettingCog(commands.Cog):
         description="各種設定を行う"
     )
 
-    #ログを出力するチャンネルの設定をするサブコマンド
-    @setting.command(name="log_channel", description="ログチャンネルを設定")
-    async def log_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        """ログチャンネルを設定"""
+    #通知チャンネルの設定をするサブコマンド
+    @setting.command(name="channel", description="通知チャンネルを設定")
+    async def channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        """通知チャンネルを設定"""
         try:
             #引数からチャンネルIDを変更
-            config.discord.log_channel_id = channel.id
+            config.discord.channel_id = channel.id
 
             # 設定ファイルを保存
             SaveConfig(config)
 
             await interaction.response.send_message(
-                f"✅ログチャンネルを{channel.mention}に設定しました。",
+                f"✅通知チャンネルを{channel.mention}に設定しました。",
                 ephemeral=True
             )
-            logging.info(f'[DiscordBot] Log channel set to {channel.name} (ID: {channel.id})')
+            logging.info(f'[DiscordBot] Notification channel set to {channel.name} (ID: {channel.id})')
 
         #エラー時の処理
         except Exception as e:
-            logging.error(f'[DiscordBot] Error setting log channel: {e}')
+            logging.error(f'[DiscordBot] Error setting notification channel: {e}')
             await interaction.response.send_message(
-                f'❌ログチャンネルの設定に失敗しました。',
+                f'❌通知チャンネルの設定に失敗しました。',
                   ephemeral=True
-            )
-
-    #ログの出力を有効/無効にするサブコマンド
-    @setting.command(name="enable_log",description="ログ出力の有効/無効を切り替えます。")
-    @app_commands.describe(enabled="ログ出力の有効にするか無効にするか")
-
-    async def log_enabled(self, interaction: discord.Interaction, enabled: bool):
-        """ログ出力の有無を設定"""
-        try:
-            #有効にするかを設定
-            config.discord.log_enabled = enabled
-            SaveConfig(config) # 設定ファイルを保存
-
-            status = "有効" if enabled else "無効"
-            await interaction.response.send_message(
-                f"✅ログ出力を{status}に設定しました。",
-                ephemeral=True
-            )
-            logging.info(f'[DiscordBot] Log enabled set to {status} by {interaction.user.name} (ID: {interaction.user.id})')
-
-        #エラー時の処理
-        except Exception as e:
-            logging.error(f'[DiscordBot] Error setting log enabled: {e}')
-            await interaction.response.send_message(
-                f'❌ログ出力設定の中にエラーが発生しました。\n{e}',
-                ephemeral=True
             )
 
 async def start_discord_bot():
     """Discord ボットを起動する"""
 
     # Discord トークンが設定されているか確認
-    if config.discord.token is None:
-        logging.error("[Discord Bot] Discord Bot token is not configured correctly. Aborting startup.")
+    if not config.discord.enabled or not config.discord.token:
+        logging.info("[Discord Bot] Discord Bot is disabled or token is not configured. Aborting startup.")
         return # トークンがなければ起動しない
 
     try:
         # コグの登録など、ボット起動前の非同期セットアップ
         await setup()
         # ボットを非同期で起動
-        logging.info("Discord Bot started successfully.")
+        logging.info("Discord Bot starting...")
         await bot.start(config.discord.token)
 
     #ログインに失敗した際の処理
@@ -331,25 +314,28 @@ async def start_discord_bot():
 
 async def stop_discord_bot():
     """Discord ボットを停止する"""
+    global is_bot_running
     try:
         # 停止メッセージを送信
-        await send_bot_status_message("shutdown")
+        if config.discord.notify_server:
+            await send_bot_status_message("shutdown")
         # ボットを停止
         await bot.close()
+        is_bot_running = False
         logging.info("[DiscordBot] Discord Bot stopped successfully.")
     except Exception as e:
         logging.error(f"[Discord Bot] An internal error occurred while stopping the bot. Error details: {e}")
 
 
 async def send_bot_status_message(status:str):
-    """ボットの状態をログチャンネルに送信する共通関数"""
+    """ボットの状態を通知チャンネルに送信する共通関数"""
     try:
-        channel_id = config.discord.log_channel_id
+        channel_id = config.discord.channel_id
 
-        if not channel_id or not config.discord.log_enabled:
+        if not channel_id:
             return
 
-        channel = await bot.fetch_channel(channel_id)
+        channel = await bot.fetch_channel(int(channel_id))
         # チャンネルが存在しているかを確認
         if channel and isinstance(channel, discord.TextChannel):
             time = datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
@@ -365,10 +351,10 @@ async def send_bot_status_message(status:str):
             logging.info(f'[DiscordBot] Sent {status} message to #{channel.name} (ID: {channel.id})')
         elif channel:
             # テキストチャンネル以外が見つかった場合
-            logging.warning(f'[DiscordBot] Configured log channel (ID: {channel_id}) is not a TextChannel.')
+            logging.warning(f'[DiscordBot] Configured notification channel (ID: {channel_id}) is not a TextChannel.')
         else:
             # チャンネルが見つからなかった場合
-            logging.warning(f'[DiscordBot] Log channel (ID: {channel_id}) not found.')
+            logging.warning(f'[DiscordBot] Notification channel (ID: {channel_id}) not found.')
     except Exception as e:
         logging.error(f'[DiscordBot] Error sending {status} message: {e}')
 
