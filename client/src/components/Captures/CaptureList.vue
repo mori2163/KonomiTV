@@ -143,7 +143,7 @@ const openDrawer = (capture: ICapture) => {
         }
 
         @media (max-width: 960px) {
-            display: none; 
+            display: none;
         }
     }
 
@@ -218,6 +218,8 @@ const openDrawer = (capture: ICapture) => {
         position: relative;
         border-radius: 8px;
         overflow: hidden;
+        background: rgb(var(--v-theme-background-lighten-1));
+        padding: 16px;
         transition: padding-right 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
 
         &--drawer-visible {
