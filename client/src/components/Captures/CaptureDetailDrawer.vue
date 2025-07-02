@@ -3,14 +3,20 @@
         :class="{ 'capture-detail-drawer__scrim--visible': isVisible }"
         @click="handleClose"></div>
 
-    <div class="capture-detail-drawer" :class="{ 'capture-detail-drawer--visible': isVisible }">
+    <div class="capture-detail-drawer"
+        :class="{
+            'capture-detail-drawer--visible': isVisible,
+            'capture-detail-drawer--bottom-sheet': display.smAndDown.value,
+        }">
         <div class="capture-detail-drawer__header">
             <div class="capture-detail-drawer__title">キャプチャ情報</div>
             <v-spacer></v-spacer>
             <v-btn icon variant="flat" @click="handleClose">
-                <Icon icon="fluent:dismiss-16-filled" />
+                <v-icon icon="mdi-close" />
             </v-btn>
         </div>
+
+        <v-img v-if="capture && display.smAndDown.value" :src="capture.url" aspect-ratio="1.7778" class="capture-detail-drawer__image"></v-img>
 
         <div v-if="capture" class="capture-detail-drawer__content">
             <div class="capture-detail-drawer__property">
@@ -31,21 +37,55 @@
             </div>
             <div class="capture-detail-drawer__property">
                 <div class="capture-detail-drawer__property-label">パス</div>
-                <div class="capture-detail-drawer__property-value capture-detail-drawer__property-value--path">{{ capture.path }}</div>
+                <div class="capture-detail-drawer__property-value-container">
+                    <div class="capture-detail-drawer__property-value capture-detail-drawer__property-value--path">{{ capture.path }}</div>
+                    <v-btn
+                        v-if="display.smAndDown.value"
+                        class="capture-detail-drawer__fullscreen-button"
+                        variant="tonal"
+                        size="large"
+                        @click="is_fullscreen_showing = true">
+                        <v-icon icon="mdi-fullscreen" class="mr-1" size="large" />
+                        <span>全画面表示</span>
+                    </v-btn>
+                </div>
             </div>
         </div>
 
         <div class="capture-detail-drawer__footer">
+            <v-btn
+                v-if="!display.smAndDown.value"
+                class="mb-4"
+                block
+                size="large"
+                variant="tonal"
+                @click="is_fullscreen_showing = true">
+                <v-icon icon="mdi-fullscreen" class="mr-1" size="large" />
+                <span>全画面表示</span>
+            </v-btn>
             <v-btn color="secondary" block size="large" @click="downloadCapture">
-                <Icon icon="fluent:download-16-regular" class="mr-2" />
+                <v-icon icon="mdi-download" class="mr-2" />
                 <span>ダウンロード</span>
             </v-btn>
         </div>
     </div>
+
+    <!-- 全画面表示ビューワー -->
+    <div v-if="is_fullscreen_showing && capture" class="fullscreen-viewer" @click.self="is_fullscreen_showing = false">
+        <img :src="capture.url" class="fullscreen-viewer__image" @click.stop>
+        <v-btn
+            class="fullscreen-viewer__close-button"
+            icon="mdi-close"
+            size="large"
+            variant="flat"
+            @click="is_fullscreen_showing = false">
+        </v-btn>
+    </div>
 </template>
 
 <script lang="ts" setup>
-import { computed, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { useDisplay } from 'vuetify';
 
 import Message from '@/message';
 import { ICapture } from '@/services/Captures';
@@ -60,6 +100,10 @@ const emit = defineEmits<{
     (e: 'update:modelValue', value: boolean): void;
 }>();
 
+const display = useDisplay();
+
+const is_fullscreen_showing = ref(false);
+
 const isVisible = computed({
     get: () => props.modelValue,
     set: (value) => emit('update:modelValue', value),
@@ -70,7 +114,22 @@ watch(isVisible, (newValue) => {
     if (newValue) {
         document.documentElement.classList.add('v-overlay-scroll-blocked');
     } else {
-        document.documentElement.classList.remove('v-overlay-scroll-blocked');
+        // フルスクリーン表示がアクティブでない場合のみスクロールロックを解除
+        if (is_fullscreen_showing.value === false) {
+            document.documentElement.classList.remove('v-overlay-scroll-blocked');
+        }
+    }
+});
+
+// フルスクリーン表示が開かれたら、ページ全体のスクロールを無効化する
+watch(is_fullscreen_showing, (newValue) => {
+    if (newValue) {
+        document.documentElement.classList.add('v-overlay-scroll-blocked');
+    } else {
+        // ドロワーが非表示の場合のみスクロールロックを解除
+        if (isVisible.value === false) {
+            document.documentElement.classList.remove('v-overlay-scroll-blocked');
+        }
     }
 });
 
@@ -93,6 +152,9 @@ const downloadCapture = async () => {
         Message.error('キャプチャのダウンロードに失敗しました。');
     }
 };
+
+// window をテンプレート内で使えるようにする
+const window = self;
 
 </script>
 
@@ -132,10 +194,27 @@ const downloadCapture = async () => {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.16);
     z-index: 1010;
     transform: translateX(100%);
-    transition: transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transition: transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1), border-radius 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
 
     &--visible {
         transform: translateX(0);
+    }
+
+    // ボトムシート用のスタイル
+    &--bottom-sheet {
+        top: auto;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100% !important;
+        border-top-left-radius: 16px;
+        border-top-right-radius: 16px;
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+        transform: translateY(100%);
+        &.capture-detail-drawer--visible {
+            transform: translateY(0);
+        }
     }
 
     @media (max-width: 480px) {
@@ -150,11 +229,22 @@ const downloadCapture = async () => {
         background: rgb(var(--v-theme-background-lighten-1));
         border-bottom: 1px solid rgb(var(--v-theme-background-lighten-2));
         border-top-left-radius: 16px;
+        border-top-right-radius: 0;
+        transition: border-radius 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+
+        .capture-detail-drawer--bottom-sheet & {
+            border-top-right-radius: 16px;
+        }
     }
 
     &__title {
         font-size: 20px;
         font-weight: 700;
+    }
+
+    &__image {
+        flex-shrink: 0;
+        border-bottom: 1px solid rgb(var(--v-theme-background-lighten-2));
     }
 
     &__content {
@@ -178,6 +268,12 @@ const downloadCapture = async () => {
         margin-bottom: 6px;
     }
 
+    &__property-value-container {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
     &__property-value {
         font-size: 15px;
         font-weight: 500;
@@ -188,9 +284,54 @@ const downloadCapture = async () => {
         }
     }
 
+    &__fullscreen-button {
+        margin-top: 12px;
+        align-self: flex-end;
+    }
+
     &__footer {
         padding: 16px;
         border-top: 1px solid rgb(var(--v-theme-background-lighten-2));
+    }
+}
+
+.fullscreen-viewer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 1011; // ドロワーより手前に表示
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0px 16px;
+    cursor: zoom-out;
+
+    &__image {
+        max-width: 100%;
+        max-height: 100%;
+        border-radius: 4px;
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+        cursor: default;
+
+        @media (max-width: 600px) {
+            transform: rotate(90deg);
+            max-width: 100vh;
+            max-height: 100vw;
+        }
+    }
+
+    &__close-button {
+        position: absolute;
+        right: 16px;
+        bottom: 16px;
+        background-color: rgba(0, 0, 0, 0.5);
+        color: white;
+        &:hover {
+            background-color: rgba(0, 0, 0, 0.7);
+        }
     }
 }
 </style>
