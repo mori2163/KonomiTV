@@ -5,7 +5,32 @@ import Message from '@/message';
 import APIClient from '@/services/APIClient';
 
 
+interface ICapture {
+    path: string;
+    name: string;
+    size: number;
+    url: string;
+    time: string | null;
+    program_title: string | null;
+    channel_name: string | null;
+}
+
 class Captures {
+
+    /**
+     * キャプチャの一覧を取得する
+     * @returns キャプチャの一覧
+     */
+    static async fetchCaptures(): Promise<ICapture[] | null> {
+        const response = await APIClient.get<ICapture[]>('/captures');
+        if (response.type === 'success') {
+            response.data.forEach(capture => {
+                capture.url = `/api${capture.url}`;
+            });
+            return response.data;
+        }
+        return null;
+    }
 
     /**
      * キャプチャをサーバーにアップロードし保存する
@@ -64,7 +89,7 @@ class Captures {
         }
     }
 
-    // TODO: キャプチャ管理機能の実装時に API を追加する
 }
 
+export { ICapture, Captures };
 export default Captures;

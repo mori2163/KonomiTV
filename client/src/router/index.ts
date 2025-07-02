@@ -55,6 +55,16 @@ const router = createRouter({
             component: () => import('@/views/Mylist.vue'),
         },
         {
+            path: '/captures/',
+            name: 'Captures',
+            component: () => import('@/views/Captures/Home.vue'),
+        },
+        {
+            path: '/captures/all',
+            name: 'Captures All',
+            component: () => import('@/views/Captures/All.vue'),
+        },
+        {
             path: '/watched-history/',
             name: 'Watched History',
             component: () => import('@/views/WatchedHistory.vue'),

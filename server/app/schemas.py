@@ -575,3 +575,14 @@ class VersionInformation(BaseModel):
     environment: Literal['Windows', 'Linux', 'Linux-Docker', 'Linux-ARM']
     backend: Literal['EDCB', 'Mirakurun']
     encoder: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc']
+
+# ***** キャプチャ *****
+
+class Capture(BaseModel):
+    path: str
+    name: str
+    size: int
+    url: str
+    time: datetime | None
+    program_title: str | None
+    channel_name: str | None

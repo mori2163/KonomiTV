@@ -612,7 +612,22 @@ class CaptureManager implements PlayerManager {
 
         // 正規表現を使用した一括置換
         const regex = new RegExp(sorted_macros.map(macro => macro.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
-        return filename_pattern.replace(regex, match => replacements[match]);
+        let filename = filename_pattern.replace(regex, match => replacements[match]);
+
+        // ファイル名に使えない文字を全角に置換
+        // \ / : * ? " < > | は Windows のファイル名で使えない
+        // ref: https://docs.microsoft.com/ja-jp/windows/win32/fileio/naming-a-file
+        filename = filename.replace(/\\/g, '￥');
+        filename = filename.replace(/\//g, '／');
+        filename = filename.replace(/:/g, '：');
+        filename = filename.replace(/\*/g, '＊');
+        filename = filename.replace(/\?/g, '？');
+        filename = filename.replace(/"/g, '”');
+        filename = filename.replace(/</g, '＜');
+        filename = filename.replace(/>/g, '＞');
+        filename = filename.replace(/\|/g, '｜');
+
+        return filename;
     }
 }
 

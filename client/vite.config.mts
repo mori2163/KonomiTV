@@ -52,6 +52,14 @@ export default defineConfig({
         port: 7011,
         strictPort: true,
         allowedHosts: true,
+        // API サーバーへのリクエストをプロキシする
+        // ref: https://vitejs.dev/config/server-options.html#server-proxy
+        proxy: {
+            '/api': {
+                target: 'http://localhost:7000/',
+                changeOrigin: true,
+            },
+        }
     },
     preview: {
         host: '0.0.0.0',
