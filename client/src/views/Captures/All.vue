@@ -17,6 +17,7 @@
                         title="すべてのキャプチャ"
                         :captures="captures"
                         :is-loading="is_loading"
+                        @delete="fetchAllCaptures"
                     />
                 </div>
             </div>

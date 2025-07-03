@@ -1,4 +1,5 @@
 import errno
+import os
 import re
 import shutil
 from datetime import datetime
@@ -217,4 +218,42 @@ def CaptureUploadAPI(
     raise HTTPException(
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
         detail = 'No available folder to save the file',
+    )
+
+
+@router.delete(
+    '/{capture_name}',
+    summary = 'キャプチャ画像削除 API',
+    status_code = status.HTTP_204_NO_CONTENT,
+)
+def CaptureDeleteAPI(capture_name: str):
+    """
+    指定されたキャプチャ画像を削除する。
+    """
+
+    # ファイル名に / や .. が含まれている場合はエラー
+    if '/' in capture_name or '..' in capture_name:
+        raise HTTPException(
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail = 'Specified capture_name is invalid',
+        )
+
+    # upload_folders の中からファイルを探して削除
+    for upload_folder in Config().capture.upload_folders:
+        filepath = Path(upload_folder) / capture_name
+        if filepath.exists():
+            try:
+                os.remove(filepath)
+            except Exception as ex:
+                logging.error(f'[CapturesRouter][CaptureDeleteAPI] Failed to delete capture: {filepath}', exc_info=ex)
+                raise HTTPException(
+                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail = 'Failed to delete capture',
+                )
+            return
+
+    # ファイルが見つからなかった場合は 404
+    raise HTTPException(
+        status_code = status.HTTP_404_NOT_FOUND,
+        detail = 'Capture not found',
     )

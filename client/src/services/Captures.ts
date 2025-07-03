@@ -89,6 +89,19 @@ class Captures {
         }
     }
 
+    /**
+     * キャプチャをサーバーから削除する
+     * @param capture_name 削除するキャプチャのファイル名
+     * @returns 成否
+     */
+    static async deleteCapture(capture_name: string): Promise<boolean> {
+        const response = await APIClient.delete(`/captures/${capture_name}`);
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, 'キャプチャの削除に失敗しました。');
+            return false;
+        }
+        return true;
+    }
 }
 
 export { ICapture, Captures };

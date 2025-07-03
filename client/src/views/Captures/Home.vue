@@ -18,6 +18,7 @@
                         :is-loading="is_loading"
                         :show-more-button="true"
                         @more="$router.push('/captures/all/')"
+                        @delete="fetchAllCaptures"
                     />
                 </div>
             </div>

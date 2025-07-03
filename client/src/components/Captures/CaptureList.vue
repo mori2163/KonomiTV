@@ -57,7 +57,7 @@
                 </v-card>
             </div>
         </div>
-        <CaptureDetailDrawer v-model="is_drawer_showing" :capture="selected_capture" />
+        <CaptureDetailDrawer v-model="is_drawer_showing" :capture="selected_capture" @delete="$emit('delete')" />
         <div class="capture-list__image-viewer" :class="{'capture-list__image-viewer--visible': is_drawer_showing}">
             <v-img v-if="selected_capture" :src="selected_capture.url" cover class="capture-list__image-viewer-image"></v-img>
         </div>
@@ -96,6 +96,7 @@ withDefaults(defineProps<{
 defineEmits<{
     (e: 'refresh'): void;
     (e: 'more'): void;
+    (e: 'delete'): void;
 }>();
 
 // ドロワーの表示状態

@@ -67,6 +67,10 @@
                 <v-icon icon="mdi-download" class="mr-2" />
                 <span>ダウンロード</span>
             </v-btn>
+            <v-btn class="mt-4" color="error" block size="large" @click="deleteCapture">
+                <v-icon icon="mdi-delete" class="mr-2" />
+                <span>削除</span>
+            </v-btn>
         </div>
     </div>
 
@@ -81,6 +85,37 @@
             @click="is_fullscreen_showing = false">
         </v-btn>
     </div>
+
+    <!-- 削除確認ダイアログ -->
+    <v-dialog v-model="is_delete_dialog_showing" max-width="715">
+        <v-card>
+            <v-card-title class="d-flex justify-center pt-6 font-weight-bold">
+                キャプチャを削除しますか？
+            </v-card-title>
+                <div v-if="capture" class="mb-4 text-center">
+                    <div class="text-h7 text-text mb-2">{{ capture.name }}</div>
+                </div>
+            <v-card-text class="pt-2 pb-0">
+                <div class="warning-banner warning-banner--normal">
+                    <Icon icon="fluent:info-16-regular" class="warning-banner__icon" />
+                    <span class="warning-banner__text warning-banner__text--large">
+                        この操作は元に戻せません。
+                    </span>
+                </div>
+            </v-card-text>
+            <v-card-actions class="pt-4 px-6 pb-6">
+                <v-spacer></v-spacer>
+                <v-btn color="text" variant="text" @click="is_delete_dialog_showing = false">
+                    <Icon icon="fluent:dismiss-20-regular" width="18px" height="18px" />
+                    <span class="ml-1">キャンセル</span>
+                </v-btn>
+                <v-btn class="px-3" color="error" variant="flat" @click="confirmDelete">
+                    <Icon icon="fluent:delete-20-regular" width="18px" height="18px" />
+                    <span class="ml-1">削除</span>
+                </v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
 </template>
 
 <script lang="ts" setup>
@@ -88,7 +123,7 @@ import { computed, ref, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 
 import Message from '@/message';
-import { ICapture } from '@/services/Captures';
+import { Captures, ICapture } from '@/services/Captures';
 import Utils, { dayjs } from '@/utils';
 
 const props = defineProps<{
@@ -98,6 +133,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
     (e: 'update:modelValue', value: boolean): void;
+    (e: 'delete'): void;
 }>();
 
 const display = useDisplay();
@@ -153,12 +189,63 @@ const downloadCapture = async () => {
     }
 };
 
+const is_delete_dialog_showing = ref(false);
+
+const deleteCapture = async () => {
+    if (!props.capture) return;
+    is_delete_dialog_showing.value = true;
+};
+
+const confirmDelete = async () => {
+    if (!props.capture) return;
+
+    is_delete_dialog_showing.value = false;
+    const result = await Captures.deleteCapture(props.capture.name);
+    if (result) {
+        Message.success('キャプチャを削除しました。');
+        emit('delete');
+        handleClose();
+    }
+};
+
 // window をテンプレート内で使えるようにする
 const window = self;
 
 </script>
 
 <style lang="scss" scoped>
+
+.warning-banner {
+    display: flex;
+    align-items: center;
+    padding: 12px;
+    border-radius: 5px;
+    color: rgb(var(--v-theme-text));
+    background-color: rgb(var(--v-theme-background-lighten-2));
+
+    &--normal {
+        background-color: rgb(var(--v-theme-background-lighten-2));
+    }
+    &--recording {
+        color: rgb(var(--v-theme-error));
+        background-color: rgba(var(--v-theme-error), 0.1);
+    }
+    &--keyword {
+        color: rgb(var(--v-theme-secondary));
+        background-color: rgba(var(--v-theme-secondary), 0.1);
+    }
+
+    &__icon {
+        flex-shrink: 0;
+        margin-right: 8px;
+    }
+    &__text {
+        font-size: 13.5px;
+        &--large {
+            font-size: 15px;
+        }
+    }
+}
 
 .capture-detail-drawer__scrim {
     position: fixed;
