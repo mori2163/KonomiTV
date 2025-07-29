@@ -40,7 +40,7 @@ jobs:
       - name: Install Dependencies
         working-directory: installer/
         run: |
-          uv pip install -r pyproject.toml
+          uv pip install --system -r pyproject.toml
 
       # インストーラーを PyInstaller でビルド
       - name: Build Installer with PyInstaller
@@ -121,7 +121,7 @@ jobs:
         working-directory: installer/
         run: |
           docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c \
-            'uv pip install -r pyproject.toml&& uv run task build-linux'
+            'uv pip install --system -r pyproject.toml && uv run task build-linux'
           if [ "${{ matrix.arch }}" == "arm64" ]; then
             echo "Renaming artifact for ARM build..."
             sudo mv dist/KonomiTV-Installer.elf dist/KonomiTV-Installer-ARM.elf
