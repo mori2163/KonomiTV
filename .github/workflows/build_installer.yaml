@@ -27,22 +27,20 @@ jobs:
 
       # Python 3.11 環境をセットアップ
       ## 事前に Runner 自体に入っている Python に uv をインストールしておく必要がある
-      - name: Install uv (for Runner)
-        run: |
-          python -m pip install uv
+
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'uv'
-          cache-dependency-path: '${{ github.workspace }}/installer/uv.lock'
 
-      # インストーラーの依存関係をインストール
+      - name: Install uv
+        run: |
+          pip install uv
+
       - name: Install Dependencies
         working-directory: installer/
         run: |
-          pip install uv
-          uv install --no-root
+          uv pip install -r pyproject.toml
 
       # インストーラーを PyInstaller でビルド
       - name: Build Installer with PyInstaller
@@ -123,7 +121,7 @@ jobs:
         working-directory: installer/
         run: |
           docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c \
-            'uv install --no-root && uv run task build-linux'
+            'uv pip install -r pyproject.toml&& uv run task build-linux'
           if [ "${{ matrix.arch }}" == "arm64" ]; then
             echo "Renaming artifact for ARM build..."
             sudo mv dist/KonomiTV-Installer.elf dist/KonomiTV-Installer-ARM.elf
