@@ -18,8 +18,8 @@ env:
   PYTHON_TAG: '20250604'
   PYTHON_MAJOR_VERSION: '3.11'
   PYTHON_VERSION: '3.11.13'
-  # Poetry のバージョン
-  POETRY_VERSION: '1.8.5'
+  # uv のバージョン
+  UV_VERSION: '0.8.3'
   # FFmpeg のバージョン (FFmpeg-Builds のリリースを指定する)
   ## FFmpeg-Builds は毎月末のリリースが長期間保持されるため、基本毎月末のリリースを指定する
   ## FFMPEG_HWENCC_* は QSVEncC・NVEncC・VCEEncC (for Ubuntu 20.04 LTS) が依存する FFmpeg のバージョンを示す
@@ -155,8 +155,8 @@ jobs:
           mv thirdparty/VCEEncC/VCEEncC64.exe thirdparty/VCEEncC/VCEEncC.exe
           curl -L -o thirdparty/VCEEncC/License.txt https://raw.githubusercontent.com/rigaya/VCEEnc/master/VCEEnc_license.txt
 
-      # Python Standalone Builds のダウンロードと poetry のインストール
-      - name: Install Python Standalone Builds & pip & poetry
+      # Python Standalone Builds のダウンロードと uv のインストール
+      - name: Install Python Standalone Builds & pip & uv
         run: |
 
           # Python 本体のダウンロード
@@ -165,8 +165,8 @@ jobs:
           mv python/ thirdparty/Python/
           Rename-Item thirdparty/Python/LICENSE.txt License.txt
 
-          # poetry のインストール
-          thirdparty/Python/python.exe -m pip install poetry==${{ env.POETRY_VERSION }}
+          # uv のインストール
+          thirdparty/Python/python.exe -m pip install uv==${{ env.UV_VERSION }}
 
       # サードパーティーライブラリを 7z で圧縮
       # ファイルサイズ縮減のため、圧縮をかなり強めに掛けている
@@ -441,8 +441,8 @@ jobs:
           rm -rf lib/
           chmod a+x thirdparty/Library/libmediainfo.so*
 
-      # Python Standalone Builds のダウンロードと poetry のインストール
-      - name: Install Python Standalone Builds & pip & poetry
+      # Python Standalone Builds のダウンロードと uv のインストール
+      - name: Install Python Standalone Builds & pip & uv
         run: |
 
           # Python 本体のダウンロード
@@ -450,9 +450,9 @@ jobs:
           tar xvf python.tar.gz
           mv python/ thirdparty/Python/
 
-          # poetry のインストール
+          # uv のインストール
           cd thirdparty/Python/
-          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c './bin/python -m pip install poetry==${{ env.POETRY_VERSION }}'
+          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c './bin/python -m pip install uv==${{ env.UV_VERSION }}'
 
       # サードパーティーライブラリを tar.xz で圧縮
       # ファイルサイズ縮減のため、圧縮をかなり強めに掛けている

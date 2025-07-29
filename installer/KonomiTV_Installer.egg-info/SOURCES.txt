@@ -1,0 +1,7 @@
+KonomiTV-Installer.py
+pyproject.toml
+KonomiTV_Installer.egg-info/PKG-INFO
+KonomiTV_Installer.egg-info/SOURCES.txt
+KonomiTV_Installer.egg-info/dependency_links.txt
+KonomiTV_Installer.egg-info/requires.txt
+KonomiTV_Installer.egg-info/top_level.txt

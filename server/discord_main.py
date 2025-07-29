@@ -1,20 +1,23 @@
-import discord
-from discord.ext import commands
-from discord import app_commands
 import datetime
-from typing import Dict, List, Tuple, Optional
 
-from app import logging
+import discord
+from discord import app_commands
+from discord.ext import commands
+from fastapi import HTTPException
+
+from app import (
+    logging,
+    schemas,  # schemas をインポート
+)
 from app.config import Config, SaveConfig
+from app.models.Channel import Channel
+from app.models.Program import Program
+from app.routers.VideosRouter import VideosAPI
+
 
 # Botが実行中かどうかを示すグローバル変数
 is_bot_running: bool = False
 
-from fastapi import HTTPException
-from app.models.Channel import Channel
-from app import schemas # schemas をインポート
-from app.models.Program import Program
-from app.routers.VideosRouter import VideosAPI
 
 config = Config()
 
@@ -286,7 +289,7 @@ class SettingCog(commands.Cog):
         except Exception as e:
             logging.error(f'[DiscordBot] Error setting notification channel: {e}')
             await interaction.response.send_message(
-                f'❌通知チャンネルの設定に失敗しました。',
+                '❌通知チャンネルの設定に失敗しました。',
                   ephemeral=True
             )
 
@@ -358,7 +361,7 @@ async def send_bot_status_message(status:str):
     except Exception as e:
         logging.error(f'[DiscordBot] Error sending {status} message: {e}')
 
-def format_program_info(program: Optional[Program]):
+def format_program_info(program: Program | None):
     """番組情報をフォーマットする"""
     if not program:
         return "情報なし"
@@ -371,11 +374,11 @@ def format_program_info(program: Optional[Program]):
             f"{program.description or '詳細情報なし'}")
 
 # チャンネル情報取得
-async def get_specific_channels(channel_types: List[str] = ['GR', 'BS', 'CS']) -> Dict[str, List[Tuple[str, str]]]:
+async def get_specific_channels(channel_types: list[str] = ['GR', 'BS', 'CS']) -> dict[str, list[tuple[str, str]]]:
     """
     指定されたチャンネルタイプのチャンネルID(display_channel_id)と名前のリストを取得する。
     """
-    channels_data: Dict[str, List[Tuple[str, str]]] = {ch_type: [] for ch_type in channel_types}
+    channels_data: dict[str, list[tuple[str, str]]] = {ch_type: [] for ch_type in channel_types}
     try:
         # 視聴可能なチャンネルをデータベースから取得 (タイプ、チャンネル番号、リモコンID順)
         all_channels = await Channel.filter(is_watchable=True).order_by('type', 'channel_number', 'remocon_id')

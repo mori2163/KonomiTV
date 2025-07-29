@@ -692,7 +692,7 @@ def Installer(version: str, install_fork: bool) -> None:
             if Path(install_path / 'server/thirdparty/.gitkeep').exists() is False:
                 Path(install_path / 'server/thirdparty/.gitkeep').touch()
 
-        # ***** poetry 環境の構築 (依存パッケージのインストール) *****
+        # ***** uv 環境の構築 (依存パッケージのインストール) *****
 
         # Python の実行ファイルのパス (Windows と Linux で異なる)
         if platform_type == 'Windows':
@@ -700,10 +700,10 @@ def Installer(version: str, install_fork: bool) -> None:
         elif platform_type == 'Linux':
             python_executable_path = install_path / 'server/thirdparty/Python/bin/python'
 
-        # poetry env use を実行
+        # uv env use を実行
         result = RunSubprocessDirectLogOutput(
             'Python の仮想環境を作成しています…',
-            [python_executable_path, '-m', 'poetry', 'env', 'use', python_executable_path],
+            [python_executable_path, '-m', 'uv', 'env', 'use', python_executable_path],
             cwd = install_path / 'server/',  # カレントディレクトリを KonomiTV サーバーのベースディレクトリに設定
             environment = {'PYTHON_KEYRING_BACKEND': 'keyring.backends.null.Keyring'},  # Windows で SSH 接続時に発生するエラーを回避
             error_message = 'Python の仮想環境の作成中に予期しないエラーが発生しました。',
@@ -711,11 +711,11 @@ def Installer(version: str, install_fork: bool) -> None:
         if result is False:
             return  # 処理中断
 
-        # poetry install を実行
+        # uv install を実行
         # --no-root: プロジェクトのルートパッケージをインストールしない
         result = RunSubprocessDirectLogOutput(
             '依存パッケージをインストールしています…',
-            [python_executable_path, '-m', 'poetry', 'install', '--only', 'main', '--no-root'],
+            [python_executable_path, '-m', 'uv', 'install', '--only', 'main', '--no-root'],
             cwd = install_path / 'server/',  # カレントディレクトリを KonomiTV サーバーのベースディレクトリに設定
             environment = {'PYTHON_KEYRING_BACKEND': 'keyring.backends.null.Keyring'},  # Windows で SSH 接続時に発生するエラーを回避
             error_message = '依存パッケージのインストール中に予期しないエラーが発生しました。',
@@ -1085,7 +1085,7 @@ def Installer(version: str, install_fork: bool) -> None:
             with progress:
                 service_install_result = subprocess.run(
                     args = [
-                        python_executable_path, '-m', 'poetry', 'run', 'python', 'KonomiTV-Service.py', 'install',
+                        python_executable_path, '-m', 'uv', 'run', 'python', 'KonomiTV-Service.py', 'install',
                         '--username', current_user_name, '--password', current_user_password,
                     ],
                     cwd = install_path / 'server/',  # カレントディレクトリを KonomiTV サーバーのベースディレクトリに設定
@@ -1108,7 +1108,7 @@ def Installer(version: str, install_fork: bool) -> None:
             progress.add_task('', total=None)
             with progress:
                 service_start_result = subprocess.run(
-                    args = [python_executable_path, '-m', 'poetry', 'run', 'python', 'KonomiTV-Service.py', 'start'],
+                    args = [python_executable_path, '-m', 'uv', 'run', 'python', 'KonomiTV-Service.py', 'start'],
                     cwd = install_path / 'server/',  # カレントディレクトリを KonomiTV サーバーのベースディレクトリに設定
                     stdout = subprocess.PIPE,  # 標準出力をキャプチャする
                     stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない

@@ -153,7 +153,7 @@ def Updater(version: str, install_fork: bool) -> None:
         progress.add_task('', total=None)
         with progress:
             service_stop_result = subprocess.run(
-                args = [python_executable_path, '-m', 'poetry', 'run', 'python', 'KonomiTV-Service.py', 'stop'],
+                args = [python_executable_path, '-m', 'uv', 'run', 'python', 'KonomiTV-Service.py', 'stop'],
                 cwd = update_path / 'server/',  # カレントディレクトリを KonomiTV サーバーのベースディレクトリに設定
                 stdout = subprocess.PIPE,  # 標準出力をキャプチャする
                 stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
@@ -259,8 +259,8 @@ def Updater(version: str, install_fork: bool) -> None:
         Path(update_path / 'server/KonomiTV-Service.py').unlink(missing_ok=True)
         Path(update_path / 'server/Pipfile').unlink(missing_ok=True)
         Path(update_path / 'server/Pipfile.lock').unlink(missing_ok=True)
-        Path(update_path / 'server/poetry.lock').unlink(missing_ok=True)
-        Path(update_path / 'server/poetry.toml').unlink(missing_ok=True)
+        Path(update_path / 'server/uv.lock').unlink(missing_ok=True)
+        Path(update_path / 'server/uv.toml').unlink(missing_ok=True)
         Path(update_path / 'server/pyproject.toml').unlink(missing_ok=True)
         Path(update_path / '.dockerignore').unlink(missing_ok=True)
         Path(update_path / '.editorconfig').unlink(missing_ok=True)
@@ -414,10 +414,10 @@ def Updater(version: str, install_fork: bool) -> None:
         # すでに仮想環境があると稀に更新がうまく行かないことがあるため、アップデート毎に作り直す
         shutil.rmtree(update_path / 'server/.venv/', ignore_errors=True)
 
-        # poetry env use を実行
+        # uv env use を実行
         result = RunSubprocessDirectLogOutput(
             'Python の仮想環境を作成しています…',
-            [python_executable_path, '-m', 'poetry', 'env', 'use', python_executable_path],
+            [python_executable_path, '-m', 'uv', 'env', 'use', python_executable_path],
             cwd = update_path / 'server/',  # カレントディレクトリを KonomiTV サーバーのベースディレクトリに設定
             environment = {'PYTHON_KEYRING_BACKEND': 'keyring.backends.null.Keyring'},  # Windows で SSH 接続時に発生するエラーを回避
             error_message = 'Python の仮想環境の作成中に予期しないエラーが発生しました。',
@@ -425,11 +425,11 @@ def Updater(version: str, install_fork: bool) -> None:
         if result is False:
             return  # 処理中断
 
-        # poetry install を実行
+        # uv install を実行
         # --no-root: プロジェクトのルートパッケージをインストールしない
         result = RunSubprocessDirectLogOutput(
             '依存パッケージを更新しています…',
-            [python_executable_path, '-m', 'poetry', 'install', '--only', 'main', '--no-root'],
+            [python_executable_path, '-m', 'uv', 'install', '--only', 'main', '--no-root'],
             cwd = update_path / 'server/',  # カレントディレクトリを KonomiTV サーバーのベースディレクトリに設定
             environment = {'PYTHON_KEYRING_BACKEND': 'keyring.backends.null.Keyring'},  # Windows で SSH 接続時に発生するエラーを回避
             error_message = '依存パッケージの更新中に予期しないエラーが発生しました。',
@@ -461,7 +461,7 @@ def Updater(version: str, install_fork: bool) -> None:
         progress.add_task('', total=None)
         with progress:
             service_start_result = subprocess.run(
-                args = [python_executable_path, '-m', 'poetry', 'run', 'python', 'KonomiTV-Service.py', 'start'],
+                args = [python_executable_path, '-m', 'uv', 'run', 'python', 'KonomiTV-Service.py', 'start'],
                 cwd = update_path / 'server/',  # カレントディレクトリを KonomiTV サーバーのベースディレクトリに設定
                 stdout = subprocess.PIPE,  # 標準出力をキャプチャする
                 stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない

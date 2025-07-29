@@ -84,13 +84,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /code/server/
 COPY --from=thirdparty-downloader /thirdparty/ /code/server/thirdparty/
 
-# Poetry の依存パッケージリストだけをコピー
-COPY ./server/pyproject.toml ./server/poetry.lock ./server/poetry.toml /code/server/
+# uv の依存パッケージリストだけをコピー
+COPY ./server/pyproject.toml ./server/uv.lock ./server/uv.toml /code/server/
 
-# 依存パッケージを poetry でインストール
+# 依存パッケージを  uvでインストール
 ## 仮想環境 (.venv) をプロジェクト直下に作成する
-RUN /code/server/thirdparty/Python/bin/python -m poetry env use /code/server/thirdparty/Python/bin/python && \
-    /code/server/thirdparty/Python/bin/python -m poetry install --only main --no-root
+RUN /code/server/thirdparty/Python/bin/python -m uv env use /code/server/thirdparty/Python/bin/python && \
+    /code/server/thirdparty/Python/bin/python -m uv install --only main --no-root
 
 # サーバーのソースコードをコピー
 COPY ./server/ /code/server/

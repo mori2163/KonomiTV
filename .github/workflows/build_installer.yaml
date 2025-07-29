@@ -26,28 +26,28 @@ jobs:
         uses: actions/checkout@v4
 
       # Python 3.11 環境をセットアップ
-      ## 事前に Runner 自体に入っている Python に Poetry をインストールしておく必要がある
-      - name: Install Poetry (for Runner)
+      ## 事前に Runner 自体に入っている Python に uv をインストールしておく必要がある
+      - name: Install uv (for Runner)
         run: |
-          python -m pip install poetry
+          python -m pip install uv
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'poetry'
-          cache-dependency-path: '${{ github.workspace }}/installer/poetry.lock'
+          cache: 'uv'
+          cache-dependency-path: '${{ github.workspace }}/installer/uv.lock'
 
       # インストーラーの依存関係をインストール
       - name: Install Dependencies
         working-directory: installer/
         run: |
-          pip install poetry
-          poetry install --no-root
+          pip install uv
+          uv install --no-root
 
       # インストーラーを PyInstaller でビルド
       - name: Build Installer with PyInstaller
         working-directory: installer/
-        run: poetry run task build-windows
+        run: uv run task build-windows
 
       # 単一実行ファイルにビルドされたインストーラーを Artifact としてアップロード
       - name: Upload Installer Executable as Artifact
@@ -96,7 +96,7 @@ jobs:
                 zlib1g \
                 zlib1g-dev
           RUN curl https://bootstrap.pypa.io/get-pip.py | python3.11
-          RUN python3.11 -m pip install poetry
+          RUN python3.11 -m pip install uv
           EOF
 
       # Ubuntu 20.04 の Docker イメージをビルド
@@ -123,7 +123,7 @@ jobs:
         working-directory: installer/
         run: |
           docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c \
-            'poetry install --no-root && poetry run task build-linux'
+            'uv install --no-root && uv run task build-linux'
           if [ "${{ matrix.arch }}" == "arm64" ]; then
             echo "Renaming artifact for ARM build..."
             sudo mv dist/KonomiTV-Installer.elf dist/KonomiTV-Installer-ARM.elf
