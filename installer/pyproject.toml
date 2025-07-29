@@ -22,3 +22,7 @@ dependencies = [
 
 [tool.setuptools]
 py-modules = ["KonomiTV-Installer"]
+
+[tool.taskipy.tasks]
+build-windows = "pyinstaller --noconfirm --onefile --windowed --icon=KonomiTV-Installer.ico --name=KonomiTV-Installer --exclude-module tkinter KonomiTV-Installer.py"
+build-linux = "pyinstaller --noconfirm --onefile --name=KonomiTV-Installer.elf KonomiTV-Installer.py"
