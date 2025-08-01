@@ -96,6 +96,57 @@ class UtilityCog(commands.Cog):
             value="録画済み番組一覧を表示",
             inline=False
         )
+        embed.add_field(
+            name="/version",
+            value="KonomiTV のバージョン情報を表示",
+            inline=False
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="version", description="バージョン情報")
+    async def version(self, interaction: discord.Interaction):
+        """KonomiTV のバージョン情報を表示"""
+        # Version API から情報を取得
+        from app.routers.VersionRouter import VersionInformationAPI
+        version_info = await VersionInformationAPI()
+
+        # バージョン比較
+        is_latest = version_info["version"] == version_info["latest_version"]
+        version_status = "最新バージョンです。" if is_latest else "⚠️ 更新があります"
+
+        embed = discord.Embed(
+            title="📺 KonomiTV バージョン情報",
+            description=f"**{version_status}**",
+            color=0x0091ff
+        )
+        embed.set_image(url="https://user-images.githubusercontent.com/39271166/134050201-8110f076-a939-4b62-8c86-7beaa3d4728c.png")
+        embed.add_field(
+            name="🔢 現在のバージョン",
+            value=f"```{version_info['version']}```",
+            inline=True
+        )
+        if version_info["latest_version"]:
+            embed.add_field(
+                name="🌐 最新バージョン",
+                value=f"```{version_info['latest_version']}```",
+                inline=True
+            )
+        embed.add_field(
+            name="💻 環境",
+            value=f"```{version_info['environment']}```",
+            inline=False
+        )
+        embed.add_field(
+            name="📡 バックエンド",
+            value=f"```{version_info['backend']}```",
+            inline=True
+        )
+        embed.add_field(
+            name="🎥 エンコーダー",
+            value=f"```{version_info['encoder']}```",
+            inline=True
+        )
+        embed.set_footer(text=f"情報取得日時: {datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
         await interaction.response.send_message(embed=embed)
 
 class ViewCog(commands.Cog):
