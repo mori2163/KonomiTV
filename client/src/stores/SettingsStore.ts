@@ -72,6 +72,7 @@ export interface ILocalClientSettings extends IClientSettings {
         channel_id: string | null;
         notify_server: boolean;
         notify_recording: boolean;
+        maintenance_user_ids?: string[];
     };
     prefer_posting_to_nicolive: boolean;
     comment_speed_rate: number;

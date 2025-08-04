@@ -120,3 +120,8 @@ discord:
 
     # 録画予約の開始/完了時に通知を送信するか
     notify_recording: true
+
+    # メンテナンスコマンドを許可するユーザーのID
+    maintenance_user_ids: [
+        'YOUR_USER_ID'
+    ]

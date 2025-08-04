@@ -315,6 +315,7 @@ class _ServerSettingsDiscord(BaseModel):
     channel_id: int | None = None
     notify_server: bool = False
     notify_recording: bool = False
+    maintenance_user_ids: list[str] = []
 
     @field_validator('channel_id', mode='before')
     @classmethod

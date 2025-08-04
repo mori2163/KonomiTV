@@ -62,6 +62,7 @@ async def setup():
     await bot.add_cog(UtilityCog(bot))
     await bot.add_cog(SettingCog(bot))
     await bot.add_cog(ViewCog(bot))
+    await bot.add_cog(MaintenanceCog(bot))
 
 class UtilityCog(commands.Cog):
     """🔧 ユーティリティコマンド集"""
@@ -314,6 +315,71 @@ class ViewCog(commands.Cog):
             # その他の予期せぬエラー
             logging.error(f'[DiscordBot] Error getting recorded list (page {page}): {e}')
             await interaction.followup.send(f"❌ 録画番組一覧の取得中に予期せぬエラーが発生しました。\nエラー詳細: {e}", ephemeral=True)
+
+class MaintenanceCog(commands.Cog):
+    """🛠️ メンテナンスコマンド集"""
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+    maintenance = app_commands.Group(
+        name="maintenance",
+        description="メンテナンス関連のコマンド"
+    )
+
+    @maintenance.command(name="restart", description="サーバーを再起動する")
+    async def restart(self, interaction: discord.Interaction):
+        """サーバーを再起動する"""
+        try:
+            # 許可されているか確認
+            if not await self.is_allowed(interaction.user):
+                await interaction.response.send_message("❌ 許可されていないユーザーです。", ephemeral=True)
+                return
+
+            # 再起動処理
+            await interaction.response.send_message("🔄 サーバーを再起動しています...1分ほどお待ち下さい。", ephemeral=True)
+            from app.routers.MaintenanceRouter import ServerRestartAPI
+            ServerRestartAPI(None)  # current_user は None でOK (ローカルアクセス)
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error processing restart command: {e}')
+            # エラーメッセージを送信 (すでにresponseが使われている場合はfollowup)
+            try:
+                await interaction.response.send_message("❌ コマンドの実行中にエラーが発生しました。", ephemeral=True)
+            except:
+                await interaction.followup.send("❌ コマンドの実行中にエラーが発生しました。", ephemeral=True)
+
+    @maintenance.command(name="shutdown", description="サーバーを終了する")
+    async def shutdown(self, interaction: discord.Interaction):
+        """サーバーを終了する"""
+        try:
+            # 許可されているか確認
+            if not await self.is_allowed(interaction.user):
+                await interaction.response.send_message("❌ 許可されていないユーザーです。", ephemeral=True)
+                return
+
+            # 終了処理
+            await interaction.response.send_message("🛑 サーバーを終了しています...", ephemeral=True)
+            from app.routers.MaintenanceRouter import ServerShutdownAPI
+            ServerShutdownAPI(None)  # current_user は None でOK (ローカルアクセス)
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error processing shutdown command: {e}')
+            # エラーメッセージを送信 (すでにresponseが使われている場合はfollowup)
+            try:
+                await interaction.response.send_message("❌ コマンドの実行中にエラーが発生しました。", ephemeral=True)
+            except:
+                await interaction.followup.send("❌ コマンドの実行中にエラーが発生しました。", ephemeral=True)
+
+    async def is_allowed(self, user: discord.User) -> bool:
+        """ユーザーが許可されているかを確認する"""
+        try:
+            # config.discord.maintenance_user_ids にユーザーIDが含まれているか確認
+            if hasattr(user, 'id') and str(user.id) in config.discord.maintenance_user_ids:
+                logging.debug(f'[DiscordBot] User {user.id} is allowed to use maintenance commands.')
+                return True
+            else:
+                logging.debug(f'[DiscordBot] User {user.id} is not allowed to use maintenance commands.')
+                return False
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error checking user permissions: {e}')
+            return False
 
 class SettingCog(commands.Cog):
     """⚙️ 設定コマンド集"""
