@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+from discord.ui import View, Button
 import datetime
 from typing import Dict, List, Tuple, Optional
 
@@ -15,6 +16,7 @@ from app.models.Channel import Channel
 from app import schemas
 from app.models.Program import Program
 from app.routers.VideosRouter import VideosAPI
+from app.routers.ReservationsRouter import ReservationsAPI, GetCtrlCmdUtil
 
 config = Config()
 
@@ -316,6 +318,99 @@ class ViewCog(commands.Cog):
             logging.error(f'[DiscordBot] Error getting recorded list (page {page}): {e}')
             await interaction.followup.send(f"❌ 録画番組一覧の取得中に予期せぬエラーが発生しました。\nエラー詳細: {e}", ephemeral=True)
 
+    @view.command(name="reservation_list", description="録画予約一覧を表示")
+    @app_commands.describe(page="表示したいページ番号 (デフォルト: 1)")
+    async def reservation_list(self, interaction: discord.Interaction, page: int = 1):
+        """録画予約一覧を表示"""
+        await interaction.response.defer()
+        try:
+            # 不正なページ番号をチェック
+            if page < 1:
+                await interaction.followup.send("❌ ページ番号は1以上を指定してください。", ephemeral=True)
+                return
+
+            # EDCB バックエンドが有効かどうかを確認
+            edcb = GetCtrlCmdUtil()
+
+            # ReservationsAPI を呼び出して予約情報を取得
+            reservations_data: schemas.Reservations = await ReservationsAPI(edcb)
+
+            if not reservations_data.reservations:
+                await interaction.followup.send("❌ 録画予約が見つかりません。", ephemeral=True)
+                return
+
+            # 1ページあたりの予約件数
+            items_per_page = 10
+            total_items = len(reservations_data.reservations)
+            total_pages = (total_items + items_per_page - 1) // items_per_page if items_per_page > 0 else 1
+
+            # 現在のページが総ページ数を超えている場合
+            if page > total_pages and total_items > 0:
+                await interaction.followup.send(f"❌ 指定されたページ番号（{page}）は総ページ数（{total_pages}）を超えています。", ephemeral=True)
+                return
+
+            # 現在のページに表示する予約を取得
+            start_index = (page - 1) * items_per_page
+            end_index = start_index + items_per_page
+            current_page_reservations = reservations_data.reservations[start_index:end_index]
+
+            # Embed を作成
+            embed = discord.Embed(
+                title=f"録画予約一覧 (ページ {page})",
+                color=0x0091ff
+            )
+
+            # 各予約を個別のフィールドとして追加
+            for i, reservation in enumerate(current_page_reservations, start_index + 1):
+                start_time_jst = reservation.program.start_time.astimezone(JST)
+                end_time_jst = reservation.program.end_time.astimezone(JST)
+
+                # 予約状況を表す絵文字とテキスト
+                if not reservation.record_settings.is_enabled:
+                    status_emoji = "⚪"  # 予約無効
+                    status_text = "予約無効"
+                elif reservation.recording_availability == "Unavailable":
+                    status_emoji = "🔴"  # 録画不可
+                    status_text = "録画不可"
+                elif reservation.recording_availability == "Partial":
+                    status_emoji = "🟠"  # 一部録画不可
+                    status_text = "一部録画不可"
+                elif reservation.is_recording_in_progress:
+                    status_emoji = "🔵"  # 録画中
+                    status_text = "録画中"
+                else:
+                    status_emoji = "🟡"  # 録画予定
+                    status_text = "録画予定"
+
+                # チャンネル情報と番組情報をフィールドとして追加
+                embed.add_field(
+                    name=f"{status_emoji} 予約 {i}: {reservation.program.title}",
+                    value=(
+                        f"チャンネル: {reservation.channel.name}\n"
+                        f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
+                        f"録画状況: {status_text}"
+                    ),
+                    inline=False
+                )
+
+            # ページ情報とタイムスタンプ
+            embed.set_footer(text=f"ページ {page} / {total_pages}・全 {total_items} 件・{datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+
+            # Viewを作成
+            view = ReservationListView(reservations_data, page, total_pages, total_items, items_per_page)
+
+            await interaction.followup.send(embed=embed, view=view)
+
+        except HTTPException as e:
+            # FastAPI の HTTPException
+            error_detail = getattr(e, 'detail', str(e))
+            logging.error(f'[DiscordBot] Error getting reservation list: {error_detail}')
+            await interaction.followup.send(f"❌ 録画予約一覧の取得中にHTTPエラーが発生しました。\n詳細: {error_detail}", ephemeral=True)
+        except Exception as e:
+            # その他の予期せぬエラー
+            logging.error(f'[DiscordBot] Error getting reservation list: {e}')
+            await interaction.followup.send(f"❌ 録画予約一覧の取得中に予期せぬエラーが発生しました。\nエラー詳細: {e}", ephemeral=True)
+
 class MaintenanceCog(commands.Cog):
     """🛠️ メンテナンスコマンド集"""
     def __init__(self, bot: commands.Bot):
@@ -519,3 +614,152 @@ async def get_specific_channels(channel_types: List[str] = ['GR', 'BS', 'CS']) -
         # エラー発生時は空の辞書を返す
         return {ch_type: [] for ch_type in channel_types}
     return channels_data
+
+
+class ReservationListView(View):
+    """録画予約一覧表示用のViewクラス"""
+    def __init__(self, reservations_data: schemas.Reservations, page: int, total_pages: int, total_items: int, items_per_page: int):
+        super().__init__(timeout=60)  # 60秒でタイムアウト
+        self.reservations_data = reservations_data
+        self.page = page
+        self.total_pages = total_pages
+        self.total_items = total_items
+        self.items_per_page = items_per_page
+
+        # 前のページボタンを追加（1ページ目でない場合）
+        if page > 1:
+            previous_button = Button(label="前のページ", style=discord.ButtonStyle.secondary, custom_id="previous_page")
+            previous_button.callback = self.previous_page
+            self.add_item(previous_button)
+
+        # 次のページボタンを追加（最後のページでない場合）
+        if page < total_pages:
+            next_button = Button(label="次のページ", style=discord.ButtonStyle.primary, custom_id="next_page")
+            next_button.callback = self.next_page
+            self.add_item(next_button)
+
+    async def previous_page(self, interaction: discord.Interaction):
+        """前のページを表示する"""
+        # 前のページ番号を計算
+        previous_page = self.page - 1
+
+        # ページ番号が1未満にならないようにする
+        if previous_page < 1:
+            await interaction.response.send_message("❌ ページ番号が不正です。", ephemeral=True)
+            return
+
+        # 現在のページに表示する予約を取得
+        start_index = (previous_page - 1) * self.items_per_page
+        end_index = start_index + self.items_per_page
+        current_page_reservations = self.reservations_data.reservations[start_index:end_index]
+
+        # Embed を作成
+        embed = discord.Embed(
+            title=f"録画予約一覧 (ページ {previous_page})",
+            color=0x0091ff
+        )
+
+        # 各予約を個別のフィールドとして追加
+        for i, reservation in enumerate(current_page_reservations, start_index + 1):
+            start_time_jst = reservation.program.start_time.astimezone(JST)
+            end_time_jst = reservation.program.end_time.astimezone(JST)
+
+            # 予約状況を表す絵文字とテキスト
+            if not reservation.record_settings.is_enabled:
+                status_emoji = "⚪"  # 予約無効
+                status_text = "予約無効"
+            elif reservation.recording_availability == "Unavailable":
+                status_emoji = "🔴"  # 録画不可
+                status_text = "録画不可"
+            elif reservation.recording_availability == "Partial":
+                status_emoji = "🟠"  # 一部録画不可
+                status_text = "一部録画不可"
+            elif reservation.is_recording_in_progress:
+                status_emoji = "🔵"  # 録画中
+                status_text = "録画中"
+            else:
+                status_emoji = "🟡"  # 録画予定
+                status_text = "録画予定"
+
+            # チャンネル情報と番組情報をフィールドとして追加
+            embed.add_field(
+                name=f"{status_emoji} 予約 {i}: {reservation.program.title}",
+                value=(
+                    f"チャンネル: {reservation.channel.name}\n"
+                    f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
+                    f"録画状況: {status_text}"
+                ),
+                inline=False
+            )
+
+        # ページ情報とタイムスタンプ
+        embed.set_footer(text=f"ページ {previous_page} / {self.total_pages}・全 {self.total_items} 件・{datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+
+        # 新しいViewを作成
+        view = ReservationListView(self.reservations_data, previous_page, self.total_pages, self.total_items, self.items_per_page)
+
+        # メッセージを更新
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    async def next_page(self, interaction: discord.Interaction):
+        """次のページを表示する"""
+        # 次のページ番号を計算
+        next_page = self.page + 1
+
+        # 現在のページが総ページ数を超えている場合
+        if next_page > self.total_pages and self.total_items > 0:
+            await interaction.response.send_message("❌ 指定されたページ番号は総ページ数を超えています。", ephemeral=True)
+            return
+
+        # 現在のページに表示する予約を取得
+        start_index = (next_page - 1) * self.items_per_page
+        end_index = start_index + self.items_per_page
+        current_page_reservations = self.reservations_data.reservations[start_index:end_index]
+
+        # Embed を作成
+        embed = discord.Embed(
+            title=f"録画予約一覧 (ページ {next_page})",
+            color=0x0091ff
+        )
+
+        # 各予約を個別のフィールドとして追加
+        for i, reservation in enumerate(current_page_reservations, start_index + 1):
+            start_time_jst = reservation.program.start_time.astimezone(JST)
+            end_time_jst = reservation.program.end_time.astimezone(JST)
+
+            # 予約状況を表す絵文字とテキスト
+            if not reservation.record_settings.is_enabled:
+                status_emoji = "⚪"  # 予約無効
+                status_text = "予約無効"
+            elif reservation.recording_availability == "Unavailable":
+                status_emoji = "🔴"  # 録画不可
+                status_text = "録画不可"
+            elif reservation.recording_availability == "Partial":
+                status_emoji = "🟠"  # 一部録画不可
+                status_text = "一部録画不可"
+            elif reservation.is_recording_in_progress:
+                status_emoji = "🔵"  # 録画中
+                status_text = "録画中"
+            else:
+                status_emoji = "🟡"  # 録画予定
+                status_text = "録画予定"
+
+            # チャンネル情報と番組情報をフィールドとして追加
+            embed.add_field(
+                name=f"{status_emoji} 予約 {i}: {reservation.program.title}",
+                value=(
+                    f"チャンネル: {reservation.channel.name}\n"
+                    f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
+                    f"録画状況: {status_text}"
+                ),
+                inline=False
+            )
+
+        # ページ情報とタイムスタンプ
+        embed.set_footer(text=f"ページ {next_page} / {self.total_pages}・全 {self.total_items} 件・{datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+
+        # 新しいViewを作成
+        view = ReservationListView(self.reservations_data, next_page, self.total_pages, self.total_items, self.items_per_page)
+
+        # メッセージを更新
+        await interaction.response.edit_message(embed=embed, view=view)
