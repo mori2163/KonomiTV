@@ -12,7 +12,7 @@ is_bot_running: bool = False
 
 from fastapi import HTTPException
 from app.models.Channel import Channel
-from app import schemas # schemas をインポート
+from app import schemas
 from app.models.Program import Program
 from app.routers.VideosRouter import VideosAPI
 
@@ -64,44 +64,48 @@ async def setup():
     await bot.add_cog(ViewCog(bot))
 
 class UtilityCog(commands.Cog):
-    """ユーティリティコマンド集"""
+    """🔧 ユーティリティコマンド集"""
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     @app_commands.command(name="help", description="コマンド一覧を表示")
     async def help(self, interaction: discord.Interaction):
         """ヘルプメッセージを表示"""
-        embed = discord.Embed(
-            title="コマンド一覧",
-            description="利用可能なスラッシュコマンド",
-            color=0x00ff00
-        )
-        embed.add_field(
-            name="/setting channel",
-            value="通知チャンネルを設定する",
-            inline=False
-        )
-        embed.add_field(
-            name="/view channel_now",
-            value="指定されたチャンネルの現在の番組情報を表示",
-            inline=False
-        )
-        embed.add_field(
-            name="/view channel_list",
-            value="指定タイプのチャンネル一覧を表示",
-            inline=False
-        )
-        embed.add_field(
-            name="/view recorded_info",
-            value="録画済み番組一覧を表示",
-            inline=False
-        )
-        embed.add_field(
-            name="/version",
-            value="KonomiTV のバージョン情報を表示",
-            inline=False
-        )
-        await interaction.response.send_message(embed=embed)
+        try:
+            embed = discord.Embed(
+                title="📺 KonomiTV Discord Bot コマンド一覧",
+                description="利用可能なスラッシュコマンド",
+                color=0x00ff00
+            )
+
+            # 各コグからコマンド情報を取得
+            for cog_name, cog in self.bot.cogs.items():
+                cog_commands = []
+                # Cog直下のコマンド
+                for command in cog.get_app_commands():
+                    if isinstance(command, app_commands.Command):
+                        cog_commands.append(f"🔹 `/{command.name}` - {command.description}")
+                    # グループコマンド
+                    elif isinstance(command, app_commands.Group):
+                        # サブコマンドのみを追加（グループ自体の説明は除外）
+                        for subcommand in command.commands:
+                            cog_commands.append(f"🔸 `/{command.name} {subcommand.name}` - {subcommand.description}")
+
+                if cog_commands:
+                    # Cogのdocstringを取得（なければCogの名前を使用）
+                    cog_description = cog.__doc__ or cog_name
+                    embed.add_field(
+                        name=f"**{cog_description}**",
+                        value="\n".join(cog_commands),
+                        inline=False
+                    )
+
+            embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error generating help message: {e}')
+            await interaction.response.send_message("❌ ヘルプメッセージの生成中にエラーが発生しました。", ephemeral=True)
 
     @app_commands.command(name="version", description="バージョン情報")
     async def version(self, interaction: discord.Interaction):
@@ -150,7 +154,7 @@ class UtilityCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
 class ViewCog(commands.Cog):
-    """ビューコマンド集"""
+    """📺 ビューコマンド集"""
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -306,7 +310,7 @@ class ViewCog(commands.Cog):
             await interaction.followup.send(f"❌ 録画番組一覧の取得中に予期せぬエラーが発生しました。\nエラー詳細: {e}", ephemeral=True)
 
 class SettingCog(commands.Cog):
-    """設定コマンド集"""
+    """⚙️ 設定コマンド集"""
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
