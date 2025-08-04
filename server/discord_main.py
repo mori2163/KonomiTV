@@ -110,13 +110,19 @@ class UtilityCog(commands.Cog):
     @app_commands.command(name="version", description="バージョン情報")
     async def version(self, interaction: discord.Interaction):
         """KonomiTV のバージョン情報を表示"""
-        # Version API から情報を取得
-        from app.routers.VersionRouter import VersionInformationAPI
-        version_info = await VersionInformationAPI()
+        try:
+            # Version API から情報を取得
+            from app.routers.VersionRouter import VersionInformationAPI
+            version_info = await VersionInformationAPI()
 
-        # バージョン比較
-        is_latest = version_info["version"] == version_info["latest_version"]
-        version_status = "最新バージョンです。" if is_latest else "⚠️ 更新があります"
+            # バージョン比較
+            is_latest = version_info["version"] == version_info["latest_version"]
+            version_status = "最新バージョンです。" if is_latest else "⚠️ 更新があります"
+
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error getting version info: {e}')
+            await interaction.response.send_message("❌ バージョン情報の取得中にエラーが発生しました。", ephemeral=True)
+            return
 
         embed = discord.Embed(
             title="📺 KonomiTV バージョン情報",
@@ -417,13 +423,16 @@ def format_program_info(program: Optional[Program]):
     """番組情報をフォーマットする"""
     if not program:
         return "情報なし"
+    try:
+        start_time_jst = program.start_time.astimezone(JST)
+        end_time_jst = program.end_time.astimezone(JST)
 
-    start_time_jst = program.start_time.astimezone(JST)
-    end_time_jst = program.end_time.astimezone(JST)
-
-    return (f"**{program.title}**\n" \
-            f"{start_time_jst.strftime('%H:%M')} - {end_time_jst.strftime('%H:%M')}\n" \
-            f"{program.description or '詳細情報なし'}")
+        return (f"**{program.title}**\n" \
+                f"{start_time_jst.strftime('%H:%M')} - {end_time_jst.strftime('%H:%M')}\n" \
+                f"{program.description or '詳細情報なし'}")
+    except Exception as e:
+        logging.error(f'[DiscordBot] Error formatting program info: {e}')
+        return "番組情報のフォーマット中にエラーが発生しました"
 
 # チャンネル情報取得
 async def get_specific_channels(channel_types: List[str] = ['GR', 'BS', 'CS']) -> Dict[str, List[Tuple[str, str]]]:
