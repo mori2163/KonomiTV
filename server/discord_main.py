@@ -270,43 +270,47 @@ class ViewCog(commands.Cog):
                 await interaction.followup.send(f"❌ 録画番組が見つかりません。(ページ: {page})", ephemeral=True)
                 return
 
-            # Embed を作成
+            # 1ページあたりの録画番組数
+            items_per_page = 10
+            total_items = recorded_programs_data.total
+            total_pages = (total_items + items_per_page - 1) // items_per_page if items_per_page > 0 else 1
+
+            # 現在のページが総ページ数を超えている場合
+            if page > total_pages and total_items > 0:
+                await interaction.followup.send(f"❌ 指定されたページ番号（{page}）は総ページ数（{total_pages}）を超えています。", ephemeral=True)
+                return
+
+             # Embed を作成
             embed = discord.Embed(
                 title=f"録画済み番組一覧 (ページ {page})",
                 color=0x0091ff
             )
-             # 各録画番組を個別のフィールドとして追加
-            for i, program in enumerate(recorded_programs_data.recorded_programs, 1):
-                start_time_jst = program.start_time.astimezone(JST)
-                end_time_jst = program.end_time.astimezone(JST)
+            # 現在のページに表示する番組を取得
+            start_index = (page - 1) * items_per_page
+            end_index = start_index + items_per_page
+            current_page_programs = recorded_programs_data.recorded_programs[start_index:end_index]
 
-            # 番組情報をフィールドとして追加
+            for i, recorded in enumerate(current_page_programs, start_index + 1):
+                start_time_jst = recorded.start_time.astimezone(JST)
+                end_time_jst = recorded.end_time.astimezone(JST)
+
                 embed.add_field(
-                    name=f"🔵番組 {i}: {program.title}",
+                    name=f"🔵録画 {i}: {recorded.title}",
                     value=(
-                        f"放送時間: {start_time_jst.strftime('%H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
-                        f"詳細: {program.description or '詳細情報なし'}"
+                        f"チャンネル: {recorded.channel.name if recorded.channel else 'なし'}\n"
+                        f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
                     ),
                     inline=False
                 )
 
-            # ページ情報をフッターに追加
-            total_items = recorded_programs_data.total
-            items_per_page = len(recorded_programs_data.recorded_programs)  # 実際のページサイズを使用
-            total_pages = (total_items + items_per_page - 1) // items_per_page if items_per_page > 0 else 1
+            # ページ情報とタイムスタンプ
+            embed.set_footer(text=f"ページ {page} / {total_pages}・全 {total_items} 件・{datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
 
-            # 現在のページが総ページ数を超えている場合（ただしデータがある場合）
-            if page > total_pages and total_items > 0:
-                embed.add_field(
-                    name="⚠️ 注意",
-                    value=f"指定されたページ番号（{page}）は総ページ数（{total_pages}）を超えています。",
-                    inline=False
-                )
+            # View (ボタン) を作成
+            view = RecordedProgramsView(recorded_programs_data, page, total_pages, total_items, items_per_page)
 
-            #ページ数とタイムスタンプ
-            embed.set_footer(text=f"ページ {page} / {total_pages}・全 {total_items} 件・{JST}")
-
-            await interaction.followup.send(embed=embed)
+            # メッセージを送信
+            await interaction.followup.send(embed=embed, view=view)
 
         except HTTPException as e:
             # FastAPI の HTTPException
@@ -615,6 +619,113 @@ async def get_specific_channels(channel_types: List[str] = ['GR', 'BS', 'CS']) -
         return {ch_type: [] for ch_type in channel_types}
     return channels_data
 
+class RecordedProgramsView(View):
+    """録画番組一覧表示用のViewクラス"""
+    def __init__(self, recorded_programs_data: schemas.RecordedPrograms, page: int, total_pages: int, total_items: int, items_per_page: int):
+        super().__init__(timeout=60)  # 60秒でタイムアウト
+        self.recorded_programs_data = recorded_programs_data
+        self.page = page
+        self.total_pages = total_pages
+        self.total_items = total_items
+        self.items_per_page = items_per_page
+
+        # 前のページボタンを追加（1ページ目でない場合）
+        if page > 1:
+            previous_button = Button(label="前のページ", style=discord.ButtonStyle.secondary, custom_id="previous_page")
+            previous_button.callback = self.previous_page
+            self.add_item(previous_button)
+
+        # 次のページボタンを追加（最後のページでない場合）
+        if page < total_pages:
+            next_button = Button(label="次のページ", style=discord.ButtonStyle.primary, custom_id="next_page")
+            next_button.callback = self.next_page
+            self.add_item(next_button)
+
+    async def previous_page(self, interaction: discord.Interaction):
+        """前のページを表示する"""
+        # 前のページ番号を計算
+        previous_page = self.page - 1
+
+        # ページ番号が1未満にならないようにする
+        if previous_page < 1:
+            await interaction.response.send_message("❌ ページ番号が不正です。", ephemeral=True)
+            return
+
+        # 現在のページに表示する予約を取得
+        start_index = (previous_page - 1) * self.items_per_page
+        end_index = start_index + self.items_per_page
+        current_page_recorded = self.recorded_programs_data.recorded_programs[start_index:end_index]
+
+        embed = discord.Embed(
+            title=f"録画済み番組一覧 (ページ {previous_page})",
+            color=0x0091ff
+        )
+
+        for i, recorded in enumerate(current_page_recorded, start_index + 1):
+            start_time_jst = recorded.start_time.astimezone(JST)
+            end_time_jst = recorded.end_time.astimezone(JST)
+
+            # チャンネル情報と番組情報をフィールドとして追加
+            embed.add_field(
+                name=f"🔵録画 {i}: {recorded.title}",
+                value=(
+                    f"チャンネル: {recorded.channel.name if recorded.channel else 'なし'}\n"
+                    f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
+                ),
+                inline=False
+            )
+
+        # ページ情報とタイムスタンプ
+        embed.set_footer(text=f"ページ {previous_page} / {self.total_pages}・全 {self.total_items} 件・{datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+
+        # 新しいView（ボタン）を作成
+        view = RecordedProgramsView(self.recorded_programs_data, previous_page, self.total_pages, self.total_items, self.items_per_page)
+
+        # メッセージを更新
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    async def next_page(self, interaction: discord.Interaction):
+        """次のページを表示する"""
+        # 次のページ番号を計算
+        next_page = self.page + 1
+
+        # 現在のページが総ページ数を超えている場合
+        if next_page > self.total_pages and self.total_items > 0:
+            await interaction.response.send_message("❌ 指定されたページ番号は総ページ数を超えています。", ephemeral=True)
+            return
+
+        # 現在のページに表示する予約を取得
+        start_index = (next_page - 1) * self.items_per_page
+        end_index = start_index + self.items_per_page
+        current_page_recorded = self.recorded_programs_data.recorded_programs[start_index:end_index]
+
+        embed = discord.Embed(
+            title=f"録画済み番組一覧 (ページ {next_page})",
+            color=0x0091ff
+        )
+
+        for i, recorded in enumerate(current_page_recorded, start_index + 1):
+            start_time_jst = recorded.start_time.astimezone(JST)
+            end_time_jst = recorded.end_time.astimezone(JST)
+
+            # チャンネル情報と番組情報をフィールドとして追加
+            embed.add_field(
+                name=f"🔵録画 {i}: {recorded.title}",
+                value=(
+                    f"チャンネル: {recorded.channel.name if recorded.channel else 'なし'}\n"
+                    f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
+                ),
+                inline=False
+            )
+
+        # ページ情報とタイムスタンプ
+        embed.set_footer(text=f"ページ {next_page} / {self.total_pages}・全 {self.total_items} 件・{datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+
+        # 新しいView（ボタン）を作成
+        view = RecordedProgramsView(self.recorded_programs_data, next_page, self.total_pages, self.total_items, self.items_per_page)
+
+        # メッセージを更新
+        await interaction.response.edit_message(embed=embed, view=view)
 
 class ReservationListView(View):
     """録画予約一覧表示用のViewクラス"""
