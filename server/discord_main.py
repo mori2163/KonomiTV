@@ -516,6 +516,33 @@ class SettingCog(commands.Cog):
                   ephemeral=True
             )
 
+    #予約通知の有効/無効を切り替えるサブコマンド
+    @setting.command(name="notify", description="予約通知の有効/無効を切り替え")
+    async def notify(self, interaction: discord.Interaction, enabled: bool):
+        """予約通知の有効/無効を切り替え"""
+        try:
+            #設定を変更
+            config.discord.notify_recording = enabled
+
+            # 設定ファイルを保存
+            SaveConfig(config)
+
+            # メッセージを送信
+            status_text = "有効" if enabled else "無効"
+            await interaction.response.send_message(
+                f"✅予約通知を{status_text}にしました。",
+                ephemeral=True
+            )
+            logging.info(f'[DiscordBot] Reservation notifications set to {status_text}')
+
+        #エラー時の処理
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error setting reservation notifications: {e}')
+            await interaction.response.send_message(
+                f'❌予約通知の設定に失敗しました。',
+                  ephemeral=True
+            )
+
 async def start_discord_bot():
     """Discord ボットを起動する"""
 
@@ -553,6 +580,10 @@ async def stop_discord_bot():
         logging.error(f"[Discord Bot] An internal error occurred while stopping the bot. Error details: {e}")
 
 
+# 通知済みの予約IDを保持するセット（開始時刻、終了時刻）
+notified_reservations_start = set()
+notified_reservations_end = set()
+
 async def send_bot_status_message(status:str):
     """ボットの状態を通知チャンネルに送信する共通関数"""
     try:
@@ -583,6 +614,45 @@ async def send_bot_status_message(status:str):
             logging.warning(f'[DiscordBot] Notification channel (ID: {channel_id}) not found.')
     except Exception as e:
         logging.error(f'[DiscordBot] Error sending {status} message: {e}')
+
+async def send_reservation_notification(reservation: schemas.Reservation, notification_type: str):
+    """予約開始時または終了時の通知を送信する関数"""
+    try:
+        channel_id = config.discord.channel_id
+
+        if not channel_id:
+            return
+
+        channel = await bot.fetch_channel(int(channel_id))
+        # チャンネルが存在しているかを確認
+        if channel and isinstance(channel, discord.TextChannel):
+            time = datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+            embed = discord.Embed(colour=0x0091ff)
+
+            start_time_jst = reservation.program.start_time.astimezone(JST)
+            end_time_jst = reservation.program.end_time.astimezone(JST)
+
+            if notification_type == "start":
+                embed.set_author(name=f"📺 録画予約開始: {reservation.program.title}")
+                embed.description = f"チャンネル: {reservation.channel.name}\n" \
+                                    f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}"
+                embed.set_footer(text=f"予約ID: {reservation.id} | {time}")
+            elif notification_type == "end":
+                embed.set_author(name=f"✅ 録画予約終了: {reservation.program.title}")
+                embed.description = f"チャンネル: {reservation.channel.name}\n" \
+                                    f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}"
+                embed.set_footer(text=f"予約ID: {reservation.id} | {time}")
+
+            await channel.send(embed=embed)
+            logging.info(f'[ReservationNotification] Sent {notification_type} notification for reservation ID {reservation.id} to #{channel.name} (ID: {channel.id})')
+        elif channel:
+            # テキストチャンネル以外が見つかった場合
+            logging.warning(f'[DiscordBot] Configured notification channel (ID: {channel_id}) is not a TextChannel.')
+        else:
+            # チャンネルが見つからなかった場合
+            logging.warning(f'[DiscordBot] Notification channel (ID: {channel_id}) not found.')
+    except Exception as e:
+        logging.error(f'[DiscordBot] Error sending {notification_type} notification for reservation ID {reservation.id}: {e}')
 
 def format_program_info(program: Optional[Program]):
     """番組情報をフォーマットする"""
