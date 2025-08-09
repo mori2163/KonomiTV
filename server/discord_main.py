@@ -568,6 +568,124 @@ class MaintenanceCog(commands.Cog):
             except:
                 await interaction.followup.send("❌ コマンドの実行中にエラーが発生しました。", ephemeral=True)
 
+    @maintenance.command(name="epg_acquire", description="EPG 獲得を開始する")
+    async def epg_acquire(self, interaction: discord.Interaction):
+        """EPG 獲得を開始する"""
+        try:
+            # 許可されているか確認
+            if not await self.is_allowed(interaction.user):
+                await interaction.response.send_message("❌ 許可されていないユーザーです。", ephemeral=True)
+                return
+
+            # バックエンドが EDCB かチェック
+            if config.general.backend != 'EDCB':
+                await interaction.response.send_message("❌ このコマンドは EDCB バックエンドでのみ利用可能です。", ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True)
+
+            # EDCB の CtrlCmdUtil を取得
+            from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
+            edcb = CtrlCmdUtil()
+
+            # EPG 獲得を開始
+            result = await edcb.sendEpgCapNow()
+
+            if result:
+                # 成功時のメッセージ
+                embed = discord.Embed(
+                    title="✅ EPG 獲得開始",
+                    description="EDCB での EPG 獲得処理を開始しました。",
+                    color=0x00ff00
+                )
+                embed.set_footer(text=f"実行時間: {datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                logging.info('[DiscordBot] EPG acquisition started successfully')
+            else:
+                embed = discord.Embed(
+                    title="❌ EPG 獲得開始失敗",
+                    description="EDCB での EPG 獲得処理の開始に失敗しました。",
+                    color=0xff0000
+                )
+                embed.set_footer(text=f"実行時間: {datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                logging.error('[DiscordBot] Failed to start EPG acquisition')
+
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error processing epg_acquire command: {e}')
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("❌ EPG 獲得コマンドの実行中にエラーが発生しました。", ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ EPG 獲得コマンドの実行中にエラーが発生しました。", ephemeral=True)
+            except:
+                logging.error('[DiscordBot] Failed to send error message to Discord')
+
+    async def is_allowed(self, user: discord.User) -> bool:
+        """ユーザーが許可されているかを確認する"""
+        try:
+            # config.discord.maintenance_user_ids にユーザーIDが含まれているか確認
+            if hasattr(user, 'id') and str(user.id) in config.discord.maintenance_user_ids:
+                logging.debug(f'[DiscordBot] User {user.id} is allowed to use maintenance commands.')
+                return True
+            else:
+                logging.debug(f'[DiscordBot] User {user.id} is not allowed to use maintenance commands.')
+                return False
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error checking user permissions: {e}')
+            return False
+
+    @maintenance.command(name="epg_reload", description="EPG を再読み込みする")
+    async def epg_reload(self, interaction: discord.Interaction):
+        """EPG を再読み込みする"""
+        try:
+            # 許可されているか確認
+            if not await self.is_allowed(interaction.user):
+                await interaction.response.send_message("❌ 許可されていないユーザーです。", ephemeral=True)
+                return
+
+            # バックエンドが EDCB かチェック
+            if config.general.backend != 'EDCB':
+                await interaction.response.send_message("❌ このコマンドは EDCB バックエンドでのみ利用可能です。", ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True)
+
+            # EDCB の CtrlCmdUtil を取得
+            from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
+            edcb = CtrlCmdUtil()
+
+            # EPG 再読み込みを開始する
+            result = await edcb.sendReloadEpg()
+
+            if result:
+                # 成功時のメッセージ
+                embed = discord.Embed(
+                    title="✅ EPG 再読み込み開始",
+                    description="EDCB での EPG 再読み込みを開始しました。",
+                    color=0x00ff00
+                )
+                embed.set_footer(text=f"実行時間: {datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                logging.info('[DiscordBot] EPG reload started successfully')
+            else:
+                embed = discord.Embed(
+                    title="❌ EPG 再読み込み開始失敗",
+                    description="EDCB での EPG 再読み込み処理の開始に失敗しました。",
+                    color=0xff0000
+                )
+                embed.set_footer(text=f"実行時間: {datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                logging.error('[DiscordBot] Failed to start EPG reload')
+
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error processing epg_reload command: {e}')
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message("❌ EPG 再読み込みコマンドの実行中にエラーが発生しました。", ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ EPG 再読み込みコマンドの実行中にエラーが発生しました。", ephemeral=True)
+            except:
+                logging.error('[DiscordBot] Failed to send error message to Discord')
+
     async def is_allowed(self, user: discord.User) -> bool:
         """ユーザーが許可されているかを確認する"""
         try:
