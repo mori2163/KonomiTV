@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord.ui import View, Button
+from discord.ui import View, Button, Select
 import datetime
 from typing import Dict, List, Tuple, Optional
 
@@ -16,7 +16,8 @@ from app.models.Channel import Channel
 from app import schemas
 from app.models.Program import Program
 from app.routers.VideosRouter import VideosAPI
-from app.routers.ReservationsRouter import ReservationsAPI, GetCtrlCmdUtil
+from app.routers.ReservationsRouter import ReservationsAPI, GetCtrlCmdUtil, AddReservationAPI
+from app.routers.ProgramsRouter import ProgramSearchAPI
 
 config = Config()
 
@@ -321,6 +322,107 @@ class ViewCog(commands.Cog):
             # その他の予期せぬエラー
             logging.error(f'[DiscordBot] Error getting recorded list (page {page}): {e}')
             await interaction.followup.send(f"❌ 録画番組一覧の取得中に予期せぬエラーが発生しました。\nエラー詳細: {e}", ephemeral=True)
+
+    @view.command(name="search_programs", description="番組検索を実行")
+    @app_commands.describe(keyword="検索キーワード (番組名の一部を入力)")
+    async def search_programs(self, interaction: discord.Interaction, keyword: str):
+        """番組検索を実行"""
+        await interaction.response.defer()
+        try:
+            # キーワードが空の場合はエラー
+            if not keyword.strip():
+                await interaction.followup.send("❌ 検索キーワードを入力してください。", ephemeral=True)
+                return
+
+            # 番組検索条件を構築
+            search_condition = schemas.ProgramSearchCondition(
+                keyword=keyword.strip(),
+                is_title_only=True,  # 番組名のみ検索
+                is_fuzzy_search_enabled=True,  # あいまい検索を有効
+            )
+
+            # EDCB バックエンドが有効かどうかを確認
+            edcb = GetCtrlCmdUtil()
+
+            # 番組検索を実行
+            search_results: schemas.Programs = await ProgramSearchAPI(search_condition, edcb)
+
+            if not search_results.programs:
+                await interaction.followup.send(f"❌ 「{keyword}」に一致する番組が見つかりませんでした。", ephemeral=True)
+                return
+
+            # 現時刻を取得（JST）
+            current_time = datetime.datetime.now(JST)
+
+            # 過去の番組（終了時刻が現時刻より前）を除外
+            future_programs = []
+            for program in search_results.programs:
+                program_end_time = program.end_time.astimezone(JST)
+                if program_end_time > current_time:
+                    future_programs.append(program)
+
+            # フィルタリング後に番組がない場合
+            if not future_programs:
+                await interaction.followup.send(f"❌ 「{keyword}」に一致する放送予定の番組が見つかりませんでした。", ephemeral=True)
+                return
+
+            # フィルタリング後の番組リストに更新
+            search_results.programs = future_programs
+            search_results.total = len(future_programs)
+
+            # 1ページあたりの番組数
+            items_per_page = 10
+            total_items = search_results.total
+            total_pages = (total_items + items_per_page - 1) // items_per_page if items_per_page > 0 else 1
+
+            # 現在のページ（1ページ目）に表示する番組を取得
+            page = 1
+            start_index = (page - 1) * items_per_page
+            end_index = start_index + items_per_page
+            current_page_programs = search_results.programs[start_index:end_index]
+
+            embed = discord.Embed(
+                title=f"📺 番組検索結果: 「{keyword}」",
+                description=f"検索結果: {len(current_page_programs)} / {search_results.total} 件",
+                color=0x0091ff
+            )
+
+            # 各番組を個別のフィールドとして追加
+            for i, program in enumerate(current_page_programs, start_index + 1):
+                start_time_jst = program.start_time.astimezone(JST)
+                end_time_jst = program.end_time.astimezone(JST)
+
+                # チャンネル情報を取得
+                channel = await Channel.get_or_none(id=program.channel_id)
+                channel_name = channel.name if channel else '不明'
+
+                # 番組情報をフィールドとして追加
+                embed.add_field(
+                    name=f"🎬 {i}: {program.title}",
+                    value=(
+                        f"チャンネル: {channel_name}\n"
+                        f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
+                        f"概要: {program.description[:100]}{'...' if len(program.description) > 100 else ''}"
+                    ),
+                    inline=False
+                )
+
+            # ページ情報とタイムスタンプを追加
+            embed.set_footer(text=f"ページ {page} / {total_pages}・全 {total_items} 件・{datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+
+            # View (ページネーションボタン) を作成
+            view = ProgramSearchResultView(search_results.programs, keyword, page, total_pages, total_items, items_per_page)
+
+            # メッセージを送信
+            await interaction.followup.send(embed=embed, view=view)
+
+        except HTTPException as e:
+            error_detail = getattr(e, 'detail', str(e))
+            logging.error(f'[DiscordBot] Error searching programs with keyword "{keyword}": {error_detail}')
+            await interaction.followup.send(f"❌ 番組検索中にHTTPエラーが発生しました。\n詳細: {error_detail}", ephemeral=True)
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error searching programs with keyword "{keyword}": {e}')
+            await interaction.followup.send(f"❌ 番組検索中に予期せぬエラーが発生しました。\nエラー詳細: {e}", ephemeral=True)
 
     @view.command(name="reservation_list", description="録画予約一覧を表示")
     @app_commands.describe(page="表示したいページ番号 (デフォルト: 1)")
@@ -793,6 +895,257 @@ class RecordedProgramsView(View):
 
         # 新しいView（ボタン）を作成
         view = RecordedProgramsView(self.recorded_programs_data, next_page, self.total_pages, self.total_items, self.items_per_page)
+
+        # メッセージを更新
+        await interaction.response.edit_message(embed=embed, view=view)
+
+class ProgramSelectMenu(Select):
+    """番組選択用のSelectMenuクラス"""
+    def __init__(self, programs: List[schemas.Program], start_index: int):
+        # 番組をオプションとして追加（最大25件まで）
+        options = []
+        for i, program in enumerate(programs[:25], start_index + 1):
+            # チャンネル情報を取得
+            start_time_jst = program.start_time.astimezone(JST)
+
+            # オプションを作成
+            option_label = f"{i}: {program.title}"
+            if len(option_label) > 100:  # Discord の制限
+                option_label = f"{i}: {program.title[:95]}..."
+
+            option_description = f"{start_time_jst.strftime('%m/%d %H:%M')}"
+            if len(option_description) > 100:  # Discord の制限
+                option_description = option_description[:97] + "..."
+
+            options.append(discord.SelectOption(
+                label=option_label,
+                value=str(i - start_index - 1),  # インデックス（0ベース）
+                description=option_description
+            ))
+
+        super().__init__(
+            placeholder="📹 録画したい番組を選択してください",
+            options=options,
+            custom_id="program_select"
+        )
+        self.programs = programs
+        self.start_index = start_index
+
+    async def callback(self, interaction: discord.Interaction):
+        """選択された番組を録画予約に追加"""
+        await interaction.response.defer(ephemeral=True)
+        try:
+            # 選択された番組のインデックスを取得
+            selected_index = int(self.values[0])
+            selected_program = self.programs[selected_index]
+
+            # EDCB バックエンドが有効かどうかを確認
+            edcb = GetCtrlCmdUtil()
+
+            # デフォルトの録画設定を作成
+            record_settings = schemas.RecordSettings(
+                is_enabled=True,
+                priority=3,
+                recording_folders=[],  # デフォルトフォルダを使用
+                recording_start_margin=None,  # デフォルト設定に従う
+                recording_end_margin=None,  # デフォルト設定に従う
+                recording_mode='SpecifiedService',
+                caption_recording_mode='Default',
+                data_broadcasting_recording_mode='Default',
+                post_recording_mode='Default',
+                post_recording_bat_file_path=None,
+                is_event_relay_follow_enabled=True,
+                is_exact_recording_enabled=False,
+                is_oneseg_separate_output_enabled=False,
+                is_sequential_recording_in_single_file_enabled=False,
+                forced_tuner_id=None,
+            )
+
+            # 録画予約リクエストを作成
+            reservation_request = schemas.ReservationAddRequest(
+                program_id=selected_program.id,
+                record_settings=record_settings,
+            )
+
+            # 録画予約を追加
+            await AddReservationAPI(reservation_request, edcb)
+
+            # 成功メッセージを送信
+            start_time_jst = selected_program.start_time.astimezone(JST)
+            end_time_jst = selected_program.end_time.astimezone(JST)
+
+            # チャンネル情報を取得
+            channel = await Channel.get_or_none(id=selected_program.channel_id)
+            channel_name = channel.name if channel else '不明'
+
+            success_embed = discord.Embed(
+                title="✅ 録画予約が追加されました",
+                color=0x00ff00
+            )
+            success_embed.add_field(
+                name="番組名",
+                value=selected_program.title,
+                inline=False
+            )
+            success_embed.add_field(
+                name="チャンネル",
+                value=channel_name,
+                inline=True
+            )
+            success_embed.add_field(
+                name="放送時間",
+                value=f"{start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}",
+                inline=True
+            )
+            success_embed.set_footer(text=f"予約追加時間: {datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+
+            await interaction.followup.send(embed=success_embed, ephemeral=True)
+            logging.info(f'[DiscordBot] Successfully added recording reservation for program: {selected_program.title} (ID: {selected_program.id})')
+
+        except HTTPException as e:
+            error_detail = getattr(e, 'detail', str(e))
+            logging.error(f'[DiscordBot] Error adding recording reservation for program {selected_program.id}: {error_detail}')
+
+            # エラーの種類によってメッセージを変更
+            if 'already reserved' in error_detail:
+                await interaction.followup.send("❌ この番組は既に録画予約済みです。", ephemeral=True)
+            elif 'not found' in error_detail:
+                await interaction.followup.send("❌ 指定された番組またはチャンネルが見つかりません。", ephemeral=True)
+            else:
+                await interaction.followup.send(f"❌ 録画予約の追加中にエラーが発生しました。\n詳細: {error_detail}", ephemeral=True)
+        except Exception as e:
+            logging.error(f'[DiscordBot] Error adding recording reservation for program {selected_program.id}: {e}')
+            await interaction.followup.send(f"❌ 録画予約の追加中に予期せぬエラーが発生しました。\nエラー詳細: {e}", ephemeral=True)
+
+class ProgramSearchResultView(View):
+    """番組検索結果表示用のViewクラス"""
+    def __init__(self, programs: List[schemas.Program], search_keyword: str, page: int, total_pages: int, total_items: int, items_per_page: int):
+        super().__init__(timeout=60)  # 60秒でタイムアウト
+        self.programs = programs
+        self.search_keyword = search_keyword
+        self.page = page
+        self.total_pages = total_pages
+        self.total_items = total_items
+        self.items_per_page = items_per_page
+
+        # 現在のページに表示する番組を取得
+        start_index = (page - 1) * items_per_page
+        end_index = start_index + items_per_page
+        current_page_programs = programs[start_index:end_index]
+
+        # 番組選択用のSelectMenuを追加（番組がある場合のみ）
+        if current_page_programs:
+            select_menu = ProgramSelectMenu(current_page_programs, start_index)
+            self.add_item(select_menu)
+
+        # 前のページボタンを追加（1ページ目でない場合）
+        if page > 1:
+            previous_button = Button(label="前のページ", style=discord.ButtonStyle.secondary, custom_id="previous_page")
+            previous_button.callback = self.previous_page
+            self.add_item(previous_button)
+
+        # 次のページボタンを追加（最後のページでない場合）
+        if page < total_pages:
+            next_button = Button(label="次のページ", style=discord.ButtonStyle.primary, custom_id="next_page")
+            next_button.callback = self.next_page
+            self.add_item(next_button)
+
+    async def previous_page(self, interaction: discord.Interaction):
+        """前のページを表示する"""
+        # 前のページ番号を計算
+        previous_page = self.page - 1
+
+        # ページ番号が1未満にならないようにする
+        if previous_page < 1:
+            await interaction.response.send_message("❌ ページ番号が不正です。", ephemeral=True)
+            return
+
+        # 現在のページに表示する番組を取得
+        start_index = (previous_page - 1) * self.items_per_page
+        end_index = start_index + self.items_per_page
+        current_page_programs = self.programs[start_index:end_index]
+
+        embed = discord.Embed(
+            title=f"📺 番組検索結果: 「{self.search_keyword}」",
+            description=f"検索結果: {len(current_page_programs)} / {self.total_items} 件",
+            color=0x0091ff
+        )
+
+        # 各番組を個別のフィールドとして追加
+        for i, program in enumerate(current_page_programs, start_index + 1):
+            start_time_jst = program.start_time.astimezone(JST)
+            end_time_jst = program.end_time.astimezone(JST)
+
+            # チャンネル情報を取得
+            channel = await Channel.get_or_none(id=program.channel_id)
+            channel_name = channel.name if channel else '不明'
+
+            # 番組情報をフィールドとして追加
+            embed.add_field(
+                name=f"🎬 {i}: {program.title}",
+                value=(
+                    f"チャンネル: {channel_name}\n"
+                    f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
+                    f"概要: {program.description[:100]}{'...' if len(program.description) > 100 else ''}"
+                ),
+                inline=False
+            )
+
+        # ページ情報とタイムスタンプを追加
+        embed.set_footer(text=f"ページ {previous_page} / {self.total_pages}・全 {self.total_items} 件・{datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+
+        # 新しいView（ボタン）を作成
+        view = ProgramSearchResultView(self.programs, self.search_keyword, previous_page, self.total_pages, self.total_items, self.items_per_page)
+
+        # メッセージを更新
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    async def next_page(self, interaction: discord.Interaction):
+        """次のページを表示する"""
+        # 次のページ番号を計算
+        next_page = self.page + 1
+
+        # 現在のページが総ページ数を超えている場合
+        if next_page > self.total_pages and self.total_items > 0:
+            await interaction.response.send_message("❌ 指定されたページ番号は総ページ数を超えています。", ephemeral=True)
+            return
+
+        # 現在のページに表示する番組を取得
+        start_index = (next_page - 1) * self.items_per_page
+        end_index = start_index + self.items_per_page
+        current_page_programs = self.programs[start_index:end_index]
+
+        embed = discord.Embed(
+            title=f"📺 番組検索結果: 「{self.search_keyword}」",
+            description=f"検索結果: {len(current_page_programs)} / {self.total_items} 件",
+            color=0x0091ff
+        )
+
+        # 各番組を個別のフィールドとして追加
+        for i, program in enumerate(current_page_programs, start_index + 1):
+            start_time_jst = program.start_time.astimezone(JST)
+            end_time_jst = program.end_time.astimezone(JST)
+
+            # チャンネル情報を取得
+            channel = await Channel.get_or_none(id=program.channel_id)
+            channel_name = channel.name if channel else '不明'
+
+            # 番組情報をフィールドとして追加
+            embed.add_field(
+                name=f"🎬 {i}: {program.title}",
+                value=(
+                    f"チャンネル: {channel_name}\n"
+                    f"放送時間: {start_time_jst.strftime('%m/%d %H:%M')} - {end_time_jst.strftime('%H:%M')}\n"
+                    f"概要: {program.description[:100]}{'...' if len(program.description) > 100 else ''}"
+                ),
+                inline=False
+            )
+
+        # ページ情報とタイムスタンプを追加
+        embed.set_footer(text=f"ページ {next_page} / {self.total_pages}・全 {self.total_items} 件・{datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+
+        # 新しいView（ボタン）を作成
+        view = ProgramSearchResultView(self.programs, self.search_keyword, next_page, self.total_pages, self.total_items, self.items_per_page)
 
         # メッセージを更新
         await interaction.response.edit_message(embed=embed, view=view)
