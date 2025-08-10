@@ -25,8 +25,6 @@
                         :emptyIcon="'fluent:timer-20-regular'"
                         :emptyMessage="'まだ録画予約がありません。'"
                         :emptySubMessage="'番組表から録画予約を追加できます。'"
-                        :showRefreshButton="true"
-                        @refresh="updateAllSections"
                         @more="$router.push('/reservations/all')"
                         @delete="handleReservationDeleted" />
                 </div>

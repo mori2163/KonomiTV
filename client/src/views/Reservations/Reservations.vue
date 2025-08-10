@@ -20,7 +20,6 @@
                         :is-loading="is_loading"
                         :show-back-button="true"
                         :show-empty-message="!is_loading"
-                        :showRefreshButton="true"
                         @update:page="updatePage"
                         @update:sort-order="updateSortOrder"
                         @refresh="updateAllSections"
