@@ -41,6 +41,7 @@ from app.routers import (
     VersionRouter,
     VideosRouter,
     VideoStreamsRouter,
+    TimetableRouter,
 )
 from app.streams.LiveStream import LiveStream
 from app.utils.edcb.EDCBTuner import EDCBTuner
@@ -83,6 +84,7 @@ app.include_router(UsersRouter.router)
 app.include_router(SettingsRouter.router)
 app.include_router(MaintenanceRouter.router)
 app.include_router(VersionRouter.router)
+app.include_router(TimetableRouter.router)
 
 # CORS の設定
 ## 開発環境では全てのオリジンからのリクエストを許可
@@ -260,7 +262,7 @@ async def check_and_notify_reservations():
                     if (ended_reservation_id not in discord_notified_end and
                         ended_reservation_id in previous_reservations):
                         previous_reservation = previous_reservations[ended_reservation_id]
-                        
+
                         await discord_main.send_reservation_notification(previous_reservation, "end")
                         # 通知済みIDに追加
                         discord_notified_end.add(ended_reservation_id)

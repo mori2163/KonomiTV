@@ -586,3 +586,15 @@ class Capture(BaseModel):
     time: datetime | None
     program_title: str | None
     channel_name: str | None
+
+
+# ***** 番組表 *****
+
+class TimetableChannel(BaseModel):
+    """ 番組表のチャンネル情報を表す Pydantic モデル """
+    channel: Channel
+    programs: list[Program]
+
+    class Config:
+        orm_mode = True
+

@@ -1,0 +1,95 @@
+import { defineStore } from 'pinia';
+
+import Timetable from '@/services/Timetable';
+import { ITimetableChannel } from '@/services/Timetable';
+import { ChannelType } from '@/services/Channels';
+
+export const useTimetableStore = defineStore('timetable', {
+    state: () => ({
+        // 番組表のデータ
+        _timetable_channels: null as ITimetableChannel[] | null,
+        // 現在表示している日付
+        current_date: new Date(),
+        // 現在選択中のチャンネルタイプ
+        selected_channel_type: 'ALL' as 'ALL' | ChannelType,
+        // ロード中フラグ
+        is_loading: false,
+    }),
+    getters: {
+        /**
+         * 表示用にフィルタリングされた番組表のデータ
+         */
+        timetable_channels(state): ITimetableChannel[] | null {
+            if (!state._timetable_channels) {
+                return null;
+            }
+            if (state.selected_channel_type === 'ALL') {
+                return state._timetable_channels;
+            }
+            return state._timetable_channels.filter(channel => channel.channel.type === state.selected_channel_type);
+        }
+    },
+    actions: {
+        /**
+         * 番組表のデータを取得・更新する
+         */
+        async fetchTimetable() {
+            if (this.is_loading) return;
+            this.is_loading = true;
+
+            // 表示する期間を計算 (今日の 04:00:00 から 24時間)
+            const start_time = new Date(this.current_date);
+            start_time.setHours(4, 0, 0, 0);
+            const end_time = new Date(start_time);
+            end_time.setDate(end_time.getDate() + 1);
+
+            try {
+                const timetable_channels = await Timetable.fetchTimetable(start_time, end_time);
+                this._timetable_channels = timetable_channels;
+            } catch (error) {
+                console.error(error);
+                this._timetable_channels = null;
+            } finally {
+                this.is_loading = false;
+            }
+        },
+
+        /**
+         * 表示する日付を前日にする
+         */
+        setPreviousDate() {
+            const newDate = new Date(this.current_date);
+            newDate.setDate(newDate.getDate() - 1);
+            this.current_date = newDate;
+            this.fetchTimetable();
+        },
+
+        /**
+         * 表示する日付を翌日にする
+         */
+        setNextDate() {
+            const newDate = new Date(this.current_date);
+            newDate.setDate(newDate.getDate() + 1);
+            this.current_date = newDate;
+            this.fetchTimetable();
+        },
+
+        /**
+         * 表示する日付を今日にする
+         */
+        setCurrentDate() {
+            this.current_date = new Date();
+            this.fetchTimetable();
+        },
+
+        /**
+         * 表示するチャンネルタイプを設定する
+         * @param type 設定するチャンネルタイプ
+         */
+        setChannelType(type: 'ALL' | ChannelType) {
+            this.selected_channel_type = type;
+        }
+    }
+});
+
+export default useTimetableStore;
