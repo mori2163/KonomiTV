@@ -77,8 +77,37 @@
                         <p>指定された期間・チャンネルに放送される番組がありません。</p>
                     </div>
                 </div>
+
             </div>
         </main>
+
+        <!-- EPG操作ボタン（浮動表示） -->
+        <div class="epg-controls-floating">
+            <v-btn
+                @click="updateEPG"
+                :loading="timetableStore.is_loading"
+                :disabled="timetableStore.is_loading"
+                color="primary"
+                variant="tonal"
+                size="large"
+                class="epg-btn"
+            >
+                <v-icon icon="mdi-download" class="mr-1" size="large" />
+                <span>EPG取得</span>
+            </v-btn>
+            <v-btn
+                @click="reloadEPG"
+                :loading="timetableStore.is_loading"
+                :disabled="timetableStore.is_loading"
+                color="secondary"
+                variant="tonal"
+                size="large"
+                class="epg-btn"
+            >
+                <v-icon icon="mdi-refresh" class="mr-1" size="large" />
+                <span>EPG再読み込み</span>
+            </v-btn>
+        </div>
 
         <!-- 番組詳細サイドパネル -->
         <v-navigation-drawer v-model="is_panel_shown" location="right" temporary width="600">
@@ -269,6 +298,27 @@ const reserveProgram = async (program_id: string) => {
         snackbarsStore.show('error', '録画予約の追加に失敗しました。');
     }
     is_reserving.value = false;
+};
+
+// EPG操作メソッド
+const updateEPG = async () => {
+    try {
+        await timetableStore.updateEPG();
+        snackbarsStore.show('success', 'EPG 取得を開始しました。');
+    } catch (error) {
+        snackbarsStore.show('error', 'EPG 取得に失敗しました。EDCBが起動していることを確認してください。');
+        console.error('EPG 取得エラー:', error);
+    }
+};
+
+const reloadEPG = async () => {
+    try {
+        await timetableStore.reloadEPG();
+        snackbarsStore.show('success', 'EPG を再読み込みしました。');
+    } catch (error) {
+        snackbarsStore.show('error', 'EPG の再読み込みに失敗しました。EDCBが起動していることを確認してください。');
+        console.error('EPG再読み込みエラー:', error);
+    }
 };
 
 onMounted(() => {
@@ -639,6 +689,41 @@ onMounted(() => {
     padding: 16px;
     border-radius: 4px;
     margin-top: 16px;
+}
+
+.epg-controls-floating {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 100;
+    display: flex;
+    flex-direction: row;
+    gap: 12px;
+
+    @include smartphone-vertical {
+        bottom: 16px;
+        right: 16px;
+        gap: 8px;
+        flex-direction: column;
+    }
+
+    .epg-btn {
+        min-width: 140px;
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+        background-color: rgb(var(--v-theme-surface)) !important;
+        border: 1px solid rgb(var(--v-theme-outline-variant)) !important;
+
+        &:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
+            background-color: rgb(var(--v-theme-surface-variant)) !important;
+        }
+
+        @include smartphone-vertical {
+            min-width: 120px;
+            font-size: 0.9em;
+        }
+    }
 }
 
 </style>

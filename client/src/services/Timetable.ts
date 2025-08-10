@@ -35,6 +35,38 @@ class Timetable {
 
         return response.data;
     }
+
+    /**
+     * EPG（番組情報）を取得する
+     * @returns 更新が成功したかどうか
+     */
+    static async updateEPG(): Promise<boolean> {
+        const response = await APIClient.post('/timetable/update-epg');
+
+        // エラー処理
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, 'EPG の取得に失敗しました。');
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * EPG（番組情報）を再読み込みする
+     * @returns 再読み込みが成功したかどうか
+     */
+    static async reloadEPG(): Promise<boolean> {
+        const response = await APIClient.post('/timetable/reload-epg');
+
+        // エラー処理
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, 'EPG の再読み込みに失敗しました。');
+            return false;
+        }
+
+        return true;
+    }
 }
 
 export default Timetable;

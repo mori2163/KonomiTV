@@ -3,10 +3,12 @@ from datetime import datetime
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import Query
+from fastapi import status
 
 from app import schemas
 from app.models.Channel import Channel
 from app.models.Program import Program
+from app.routers.UsersRouter import GetCurrentAdminUser
 
 router = APIRouter(
     prefix='/api/timetable',
@@ -47,3 +49,51 @@ async def Timetable(
         ))
 
     return timetable
+
+
+@router.post(
+    '/update-epg',
+    summary='EPG（番組情報）取得 API',
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def UpdateEPGAPI():
+    """
+    EPG（電子番組ガイド）の番組情報を最新状態に取得する。
+    """
+
+    # EDCB の CtrlCmdUtil を取得
+    from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
+    edcb = CtrlCmdUtil()
+
+    # EPG 獲得を開始
+    result = await edcb.sendEpgCapNow()
+
+    if result is None:
+        raise ValueError('EPGの取得に失敗しました。EDCBが起動していることを確認してください。')
+    await Channel.update()
+    await Program.update(multiprocess=True)
+
+
+@router.post(
+    '/reload-epg',
+    summary='EPG（番組情報）再読み込み API',
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def ReloadEPGAPI():
+    """
+    EPG（電子番組ガイド）の番組情報を再読み込みする。
+    """
+
+    # EDCB の CtrlCmdUtil を取得
+    from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
+    edcb = CtrlCmdUtil()
+
+    # EPG 再読み込みを開始
+    result = await edcb.sendReloadEpg()
+
+    if not result:
+        raise ValueError('EPGの再読み込みに失敗しました。EDCBが起動していることを確認してください。')
+
+    # チャンネル情報とともに番組情報も更新する
+    await Channel.update()
+    await Program.update(multiprocess=True)

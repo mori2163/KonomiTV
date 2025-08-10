@@ -88,6 +88,52 @@ export const useTimetableStore = defineStore('timetable', {
          */
         setChannelType(type: 'ALL' | ChannelType) {
             this.selected_channel_type = type;
+        },
+
+        /**
+         * EPG（番組情報）を取得する
+         */
+        async updateEPG() {
+            if (this.is_loading) return;
+            this.is_loading = true;
+
+            try {
+                const success = await Timetable.updateEPG();
+                if (!success) {
+                    throw new Error('EPGの取得に失敗しました。');
+                }
+                // EPG取得後に番組表を再取得
+                await this.fetchTimetable();
+            } catch (error) {
+                console.error('EPG 取得エラー:', error);
+                // エラーを上位に投げ直す
+                throw error;
+            } finally {
+                this.is_loading = false;
+            }
+        },
+
+        /**
+         * EPG（番組情報）を再読み込みする
+         */
+        async reloadEPG() {
+            if (this.is_loading) return;
+            this.is_loading = true;
+
+            try {
+                const success = await Timetable.reloadEPG();
+                if (!success) {
+                    throw new Error('EPGの再読み込みに失敗しました。');
+                }
+                // EPG再読み込み後に番組表を再取得
+                await this.fetchTimetable();
+            } catch (error) {
+                console.error('EPG再読み込みエラー:', error);
+                // エラーを上位に投げ直す
+                throw error;
+            } finally {
+                this.is_loading = false;
+            }
         }
     }
 });
