@@ -46,6 +46,7 @@
                             </div>
                         </div>
                         <div class="programs-grid" :style="gridStyle">
+                            <div v-if="isToday" class="current-time-line" :style="currentTimeLineStyle"></div>
                             <div v-for="ch_index in timetableStore.timetable_channels.length" :key="ch_index" class="channel-border" :style="{gridColumn: ch_index}"></div>
                             <div v-for="hour_index in 24" :key="hour_index" class="hour-border" :style="{gridRow: (hour_index * 60) + 1}"></div>
                             <template v-for="(channel, ch_index) in timetableStore.timetable_channels">
@@ -166,7 +167,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch ,nextTick} from 'vue';
 import { useTimetableStore } from '@/stores/TimetableStore';
 import { useSnackbarsStore } from '@/stores/SnackbarsStore';
 import { IProgram } from '@/services/Programs';
@@ -211,6 +212,15 @@ const genre_colors: { [key: string]: { background: string; text: string } } = {
 };
 const default_genre_color = { background: 'rgb(var(--v-theme-background-lighten-3))', text: 'rgb(var(--v-theme-text))' };
 
+// 現在時刻 (1分ごとに更新)
+const now = ref(new Date());
+const now_timer = setInterval(() => {
+    now.value = new Date();
+}, 60 * 1000);
+onUnmounted(() => {
+    clearInterval(now_timer);
+});
+
 const formattedDate = computed(() => {
     const date = timetableStore.current_date;
     const year = date.getFullYear();
@@ -249,7 +259,7 @@ const getProgramStyle = (program: IProgram, ch_index: number) => {
     const duration_minutes = program.duration / 60;
     const genre = program.genres[0]?.major || 'その他';
     const color = genre_colors[genre] || default_genre_color;
-    return {
+    const style: { [key: string]: any } = {
         'grid-column': ch_index + 1,
         'grid-row-start': start_minutes + 1,
         'grid-row-end': start_minutes + duration_minutes + 1,
@@ -257,7 +267,30 @@ const getProgramStyle = (program: IProgram, ch_index: number) => {
         'color': color.text,
         'border-color': color.background,
     };
+
+    // 過去の番組か判定
+    if (new Date(program.end_time) < now.value) {
+        style.opacity = 0.6;
+        style['pointer-events'] = 'none';
+    }
+
+    return style;
 };
+
+const isToday = computed(() => {
+    const today = new Date();
+    const current = timetableStore.current_date;
+    return today.getFullYear() === current.getFullYear() &&
+           today.getMonth() === current.getMonth() &&
+           today.getDate() === current.getDate();
+});
+
+const currentTimeLineStyle = computed(() => {
+    const minutes_from_4am = ((now.value.getHours() - 4 + 24) % 24) * 60 + now.value.getMinutes();
+    return {
+        top: `${minutes_from_4am * 2}px`,
+    };
+});
 
 const isTooltipDisabled = (program: IProgram) => {
     return program.duration / 60 > 15; // 15分より長い番組ではツールチップを無効化
@@ -323,6 +356,36 @@ const reloadEPG = async () => {
 
 onMounted(() => {
     timetableStore.fetchTimetable();
+});
+
+const is_initial_load = ref(true);
+watch(() => timetableStore.timetable_channels, (new_channels) => {
+    // 初回読み込み時かつ、チャンネル情報が読み込まれた後
+    if (is_initial_load.value && new_channels && new_channels.length > 0) {
+        nextTick(() => {
+
+            const container = document.querySelector('.timetable-grid-container');
+            if (!container) return;
+
+            // 現在時刻 (now.value) を使ってスクロール位置を計算
+            const current_hours = now.value.getHours();
+            const current_minutes = now.value.getMinutes();
+
+            //経過分数を計算(ただし、現在時刻の一時間前にして余裕をもたせる)
+            const minutes_from_4am = ((current_hours - 4 + 24 - 1) % 24) * 60 + current_minutes;
+
+            // 1分あたり2pxでスクロール量を計算
+            const scroll_top = (minutes_from_4am * 2) - 50;
+
+            // スクロールさせる
+            container.scrollTo({
+                top: scroll_top > 0 ? scroll_top : 0, // マイナスにはならないように
+                behavior: 'smooth',
+            });
+
+            is_initial_load.value = false;
+        });
+    }
 });
 
 </script>
@@ -490,6 +553,14 @@ onMounted(() => {
     .hour-border {
         grid-column: 1 / -1;
         border-top: 1px dotted rgb(var(--v-theme-background-lighten-2));
+    }
+
+    .current-time-line {
+        position: absolute;
+        width: 100%;
+        height: 3px;
+        background: #E53935;
+        z-index: 3;
     }
 }
 
@@ -698,13 +769,16 @@ onMounted(() => {
     z-index: 100;
     display: flex;
     flex-direction: row;
-    gap: 12px;
+
+    .epg-btn:not(:last-child) {
+        margin-right: 12px;
+    }
 
     @include smartphone-vertical {
-        bottom: 16px;
+        bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 16px);
         right: 16px;
-        gap: 8px;
         flex-direction: column;
+        gap: 8px;
     }
 
     .epg-btn {
@@ -720,8 +794,8 @@ onMounted(() => {
         }
 
         @include smartphone-vertical {
-            min-width: 120px;
-            font-size: 0.9em;
+            width: 140px;
+            font-size: 0.95em;
         }
     }
 }

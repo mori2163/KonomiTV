@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia';
 
+import { ChannelType } from '@/services/Channels';
 import Timetable from '@/services/Timetable';
 import { ITimetableChannel } from '@/services/Timetable';
-import { ChannelType } from '@/services/Channels';
 
 export const useTimetableStore = defineStore('timetable', {
     state: () => ({

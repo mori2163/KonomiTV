@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import Query
 from fastapi import status
+from zoneinfo import ZoneInfo
 
 from app import schemas
 from app.models.Channel import Channel
@@ -29,10 +30,15 @@ async def Timetable(
     指定された時間範囲の番組表データを取得する。
     """
 
+    # クライアントから渡された datetime (UTC) を JST に変換する
+    # JST に変換しないと、DB に格納されている datetime (JST) と比較する際に時刻がずれる
+    start_time_jst = start_time.astimezone(ZoneInfo('Asia/Tokyo'))
+    end_time_jst = end_time.astimezone(ZoneInfo('Asia/Tokyo'))
+
     # この時間範囲内に存在するチャンネル情報を取得
     channels = await Channel.filter(
-        programs__start_time__lt=end_time,
-        programs__end_time__gt=start_time,
+        programs__start_time__lt=end_time_jst,
+        programs__end_time__gt=start_time_jst,
     ).distinct().order_by('channel_number')
 
     # 各チャンネルに紐づく番組情報を取得
@@ -40,8 +46,8 @@ async def Timetable(
     for channel in channels:
         programs = await Program.filter(
             channel_id=channel.id,
-            start_time__lt=end_time,
-            end_time__gt=start_time,
+            start_time__lt=end_time_jst,
+            end_time__gt=start_time_jst,
         ).order_by('start_time')
         timetable.append(schemas.TimetableChannel(
             channel=schemas.Channel.from_orm(channel),
