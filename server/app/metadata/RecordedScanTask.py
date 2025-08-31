@@ -25,6 +25,7 @@ from app.models.Channel import Channel
 from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
 from app.utils.DriveIOLimiter import DriveIOLimiter
+from app.utils.EncodingFileTracker import EncodingFileTracker
 from app.utils.ProcessLimiter import ProcessLimiter
 
 
@@ -120,6 +121,13 @@ class RecordedScanTask:
         # _file_locks 辞書自体へのアクセスを保護するためのロック
         self._file_locks_dict_lock = asyncio.Lock()
 
+        # エンコーディング中ファイルのログ出力頻度制限用
+        self._encoding_log_timestamps: dict[str, float] = {}
+        self._encoding_log_interval = 60  # 60秒間隔でログ出力
+
+        # エンコーディングトラッカーのクリーンアップタスク
+        self._encoding_cleanup_task: asyncio.Task[None] | None = None
+
         # 初期化済みフラグをセット
         self._initialized = True
 
@@ -137,6 +145,9 @@ class RecordedScanTask:
 
         # バックグラウンドタスクとして実行
         self._task = asyncio.create_task(self.run())
+
+        # エンコーディングトラッカーのクリーンアップタスクを開始
+        self._encoding_cleanup_task = asyncio.create_task(self._runEncodingCleanup())
 
 
     async def stop(self) -> None:
@@ -158,6 +169,15 @@ class RecordedScanTask:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+        # エンコーディングクリーンアップタスクを停止
+        if self._encoding_cleanup_task is not None:
+            self._encoding_cleanup_task.cancel()
+            try:
+                await self._encoding_cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._encoding_cleanup_task = None
 
 
     async def run(self) -> None:
@@ -364,6 +384,34 @@ class RecordedScanTask:
                 if file_size == 0:
                     logging.warning(f'{file_path}: File size is 0. ignored.')
                     return
+
+                # エンコード中のファイルをスキップ
+                encoding_tracker = await EncodingFileTracker.getInstance()
+                is_encoding = await encoding_tracker.isEncodingFile(file_path)
+                if is_encoding:
+                    # ファイルが実際に存在し、最近変更されているかチェック
+                    import time
+                    current_time = time.time()
+                    file_mtime = stat.st_mtime
+
+                    # ファイルが5分以上変更されていない場合は、エンコードが完了している可能性が高い
+                    if current_time - file_mtime > 300:  # 5分 = 300秒
+                        logging.warning(f'{file_path}: File has not been modified for over 5 minutes, removing from encoding tracker.')
+                        await encoding_tracker.forceRemoveEncodingFile(file_path)
+                        # 削除後、処理を続行
+                    else:
+                        # ログ出力頻度を制限
+                        file_path_str = str(file_path)
+                        should_log = self._should_log_encoding_message(file_path_str)
+
+                        if should_log:
+                            logging.debug(f'{file_path}: File is currently being encoded. ignored.')
+                            # 定期的にスタイルエントリのクリーンアップを実行
+                            stale_count = await encoding_tracker.cleanupStaleEntries()
+                            if stale_count > 0:
+                                logging.info(f'Cleaned up {stale_count} stale encoding entries')
+
+                        return
 
                 # 同じファイルパスの既存レコードがあれば取り出す
                 if existing_db_recorded_videos is not None:
@@ -865,3 +913,67 @@ class RecordedScanTask:
 
             # 5秒待機
             await asyncio.sleep(5)
+
+
+    def _should_log_encoding_message(self, file_path: str) -> bool:
+        """
+        エンコーディング中ファイルのログメッセージを出力すべきかを判定する
+
+        Args:
+            file_path (str): ファイルパス
+
+        Returns:
+            bool: ログを出力すべき場合True
+        """
+        import time
+        current_time = time.time()
+
+        # 前回のログ出力時刻を確認
+        last_log_time = self._encoding_log_timestamps.get(file_path, 0)
+
+        # 指定された間隔以上経過している場合のみログ出力
+        if current_time - last_log_time >= self._encoding_log_interval:
+            self._encoding_log_timestamps[file_path] = current_time
+            return True
+
+        return False
+
+
+    async def _runEncodingCleanup(self) -> None:
+        """
+        エンコーディングトラッカーの定期クリーンアップを実行する
+        """
+        while self._is_running:
+            try:
+                # 10分間隔でクリーンアップを実行
+                await asyncio.sleep(600)
+
+                if not self._is_running:
+                    break
+
+                # エンコーディングトラッカーのstaleエントリをクリーンアップ
+                from app.utils.EncodingFileTracker import EncodingFileTracker
+                encoding_tracker = await EncodingFileTracker.getInstance()
+                stale_count = await encoding_tracker.cleanupStaleEntries()
+
+                if stale_count > 0:
+                    logging.info(f'Encoding cleanup task: Cleaned up {stale_count} stale encoding entries')
+
+                # ログ出力タイムスタンプの古いエントリもクリーンアップ
+                import time
+                current_time = time.time()
+                old_entries = [
+                    file_path for file_path, timestamp in self._encoding_log_timestamps.items()
+                    if current_time - timestamp > 3600  # 1時間以上古いエントリ
+                ]
+
+                for file_path in old_entries:
+                    self._encoding_log_timestamps.pop(file_path, None)
+
+                if old_entries:
+                    logging.debug(f'Cleaned up {len(old_entries)} old encoding log timestamps')
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logging.error(f'Error in encoding cleanup task: {e}', exc_info=True)

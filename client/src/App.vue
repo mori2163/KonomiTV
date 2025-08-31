@@ -4,10 +4,12 @@
             <component :is="Component" />
         </router-view>
         <Snackbars />
+        <GlobalTSReplaceEncodingProgress />
     </v-app>
 </template>
 <script lang="ts" setup>
 
+import GlobalTSReplaceEncodingProgress from '@/components/Videos/GlobalTSReplaceEncodingProgress.vue';
 import Snackbars from '@/components/Snackbars.vue';
 
 </script>

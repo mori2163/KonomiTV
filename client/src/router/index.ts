@@ -139,6 +139,11 @@ const router = createRouter({
             component: () => import('@/views/Settings/Discord.vue'),
         },
         {
+            path: '/settings/tsreplace-encoding',
+            name: 'Settings TSReplace Encoding',
+            component: () => import('@/views/Settings/TSReplaceEncoding.vue'),
+        },
+        {
             path: '/settings/server',
             name: 'Settings Server',
             component: () => import('@/views/Settings/Server.vue'),

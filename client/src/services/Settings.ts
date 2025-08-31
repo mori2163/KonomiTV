@@ -85,6 +85,15 @@ export interface IClientSettings {
     twitter_active_tab: 'Search' | 'Timeline' | 'Capture';
     tweet_hashtag_position: 'Prepend' | 'Append' | 'PrependWithLineBreak' | 'AppendWithLineBreak';
     tweet_capture_watermark_position: 'None' | 'TopLeft' | 'TopRight' | 'BottomLeft' | 'BottomRight';
+    tsreplace_auto_encoding_enabled: boolean;
+    tsreplace_auto_encoding_codec: 'h264' | 'hevc';
+    tsreplace_auto_encoding_encoder: 'software' | 'hardware';
+    tsreplace_delete_original_after_encoding: boolean;
+    tsreplace_encoding_quality_preset: string;
+    tsreplace_max_concurrent_encodings: number;
+    // tsreplace_hardware_encoder_available: 同期無効
+    tsreplace_continue_on_missing_record: boolean;
+    tsreplace_max_retry_count: number;
 }
 
 /**
@@ -124,6 +133,15 @@ export interface IServerSettings {
         notify_server: boolean;
         notify_recording: boolean;
     };
+    tsreplace_encoding: {
+        auto_encoding_enabled: boolean;
+        auto_encoding_codec: 'h264' | 'hevc';
+        auto_encoding_encoder: 'software' | 'hardware';
+        delete_original_after_encoding: boolean;
+        encoding_quality_preset: string;
+        max_concurrent_encodings: number;
+        hardware_encoder_available: boolean;
+    };
 }
 
 /* サーバー設定を表すインターフェースのデフォルト値 */
@@ -159,6 +177,15 @@ export const IServerSettingsDefault: IServerSettings = {
         channel_id: null,
         notify_server: false,
         notify_recording: false,
+    },
+    tsreplace_encoding: {
+        auto_encoding_enabled: false,
+        auto_encoding_codec: 'h264',
+        auto_encoding_encoder: 'software',
+        delete_original_after_encoding: false,
+        encoding_quality_preset: 'medium',
+        max_concurrent_encodings: 1,
+        hardware_encoder_available: false,
     },
 };
 

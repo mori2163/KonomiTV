@@ -99,6 +99,15 @@ class ClientSettings(BaseModel):
     twitter_active_tab: Literal['Search', 'Timeline', 'Capture'] = 'Capture'
     tweet_hashtag_position: Literal['Prepend', 'Append', 'PrependWithLineBreak', 'AppendWithLineBreak'] = 'Append'
     tweet_capture_watermark_position: Literal['None', 'TopLeft', 'TopRight', 'BottomLeft', 'BottomRight'] = 'None'
+    tsreplace_auto_encoding_enabled: bool = False
+    tsreplace_auto_encoding_codec: Literal['h264', 'hevc'] = 'h264'
+    tsreplace_auto_encoding_encoder: Literal['software', 'hardware'] = 'software'
+    tsreplace_delete_original_after_encoding: bool = False
+    tsreplace_encoding_quality_preset: str = 'medium'
+    tsreplace_max_concurrent_encodings: Annotated[int, PositiveInt] = 1
+    # tsreplace_hardware_encoder_available: 同期無効
+    tsreplace_continue_on_missing_record: bool = True
+    tsreplace_max_retry_count: Annotated[int, PositiveInt] = 3
 
 
 # サーバー設定を表す Pydantic モデル
@@ -345,6 +354,86 @@ class _ServerSettingsDiscord(BaseModel):
         return str(value)
 
 
+class _ServerSettingsTSReplaceEncoding(BaseModel):
+    """tsreplaceエンコード設定"""
+    auto_encoding_enabled: bool = False
+    auto_encoding_codec: Literal['h264', 'hevc'] = 'h264'
+    auto_encoding_encoder: Literal['software', 'hardware'] = 'software'
+    delete_original_after_encoding: bool = False
+    encoding_quality_preset: str = 'medium'
+    max_concurrent_encodings: PositiveInt = 1
+    hardware_encoder_available: bool = False
+
+    @field_validator('hardware_encoder_available', mode='after')
+    def validate_hardware_encoder_available(cls, hardware_encoder_available: bool, info: ValidationInfo) -> bool:
+        # バリデーションをスキップする場合はそのまま返す
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return hardware_encoder_available
+
+        # ハードウェアエンコーダーの利用可否を自動検出
+        try:
+            # 循環参照を避けるために遅延インポート
+            from app.utils.TSReplaceEncodingUtil import TSReplaceEncodingUtil
+            detected_availability = TSReplaceEncodingUtil.detectHardwareEncoderAvailability()
+
+            # 検出結果をログに出力
+            from app import logging
+            if detected_availability:
+                logging.info('TSReplace Hardware Encoder: Available')
+            else:
+                logging.info('TSReplace Hardware Encoder: Not Available (Software encoding only)')
+
+            return detected_availability
+        except Exception as e:
+            # エラーが発生した場合は利用不可とみなす
+            from app import logging
+            logging.warning(f'TSReplace Hardware Encoder detection failed: {e}')
+            return False
+
+    @field_validator('auto_encoding_codec')
+    def validate_auto_encoding_codec(cls, codec: str, info: ValidationInfo) -> str:
+        # バリデーションをスキップする場合はそのまま返す
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return codec
+
+        # 利用可能なコーデックかチェック
+        try:
+            from app.utils.TSReplaceEncodingUtil import TSReplaceEncodingUtil
+            available_codecs = TSReplaceEncodingUtil.getAvailableCodecs()
+            if codec not in available_codecs:
+                raise ValueError(
+                    f'コーデック {codec.upper()} は利用できません。\n'
+                    f'利用可能なコーデック: {", ".join([c.upper() for c in available_codecs])}'
+                )
+        except ImportError:
+            # TSReplaceEncodingUtilが利用できない場合はスキップ
+            pass
+
+        return codec
+
+    @field_validator('auto_encoding_encoder')
+    def validate_auto_encoding_encoder(cls, encoder_type: str, info: ValidationInfo) -> str:
+        # バリデーションをスキップする場合はそのまま返す
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return encoder_type
+
+        # ハードウェアエンコーダーが指定されているが利用できない場合の警告
+        if encoder_type == 'hardware':
+            try:
+                from app.utils.TSReplaceEncodingUtil import TSReplaceEncodingUtil
+                if not TSReplaceEncodingUtil.detectHardwareEncoderAvailability():
+                    from app import logging
+                    logging.warning(
+                        'TSReplace: ハードウェアエンコーダーが指定されていますが利用できません。'
+                        'ソフトウェアエンコードにフォールバックします。'
+                    )
+            except ImportError:
+                # TSReplaceEncodingUtilが利用できない場合はスキップ
+                pass
+
+        return encoder_type
+
+
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()
     server: _ServerSettingsServer = _ServerSettingsServer()
@@ -352,6 +441,7 @@ class ServerSettings(BaseModel):
     video: _ServerSettingsVideo = _ServerSettingsVideo()
     capture: _ServerSettingsCapture = _ServerSettingsCapture()
     discord: _ServerSettingsDiscord = _ServerSettingsDiscord()
+    tsreplace_encoding: _ServerSettingsTSReplaceEncoding = _ServerSettingsTSReplaceEncoding()
 
 
 # サーバー設定データと読み込み・保存用の関数

@@ -157,5 +157,11 @@ server/static/interlaced_*
 # thirdparty
 server/thirdparty/*
 
+# tests
+server/tests/*
+
+#kiro
+.kiro/*
+
 # ignore .gitkeep
 !.gitkeep

@@ -1,9 +1,10 @@
 <template>
     <router-link v-ripple class="recorded-program"
-        :to="program.recorded_video.status === 'Recording' || !program.recorded_video.has_key_frames ? { path: '' } : `/videos/watch/${program.id}`"
+        :to="program.recorded_video.status === 'Recording' || !program.recorded_video.has_key_frames || isEncoding ? { path: '' } : `/videos/watch/${program.id}`"
         :class="{
             'recorded-program--recording': program.recorded_video.status === 'Recording',
             'recorded-program--analyzing': !program.recorded_video.has_key_frames,
+            'recorded-program--encoding': isEncoding,
         }">
         <div class="recorded-program__container">
             <div class="recorded-program__thumbnail">
@@ -21,9 +22,18 @@
                 <div v-else-if="program.is_partially_recorded" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--partial">
                     ⚠️ 一部のみ録画
                 </div>
-                <div v-if="watchHistory" class="recorded-program__thumbnail-progress">
+                <div v-else-if="isEncoding && encodingProgress" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--encoding">
+                    <Icon icon="fluent:arrow-sync-12-regular" width="15px" height="15px" class="recorded-program__thumbnail-status-icon--spin" />
+                    エンコード中 ({{ Math.round(encodingProgress.progress) }}%)
+                </div>
+                <div v-if="watchHistory && !isEncoding" class="recorded-program__thumbnail-progress">
                     <div class="recorded-program__thumbnail-progress-bar"
                         :style="`width: ${(watchHistory.last_playback_position / program.recorded_video.duration) * 100}%`">
+                    </div>
+                </div>
+                <div v-else-if="isEncoding && encodingProgress" class="recorded-program__thumbnail-progress recorded-program__thumbnail-progress--encoding">
+                    <div class="recorded-program__thumbnail-progress-bar recorded-program__thumbnail-progress-bar--encoding"
+                        :style="`width: ${encodingProgress.progress}%`">
                     </div>
                 </div>
             </div>
@@ -92,7 +102,7 @@
                             </template>
                             <v-list-item-title class="ml-3">録画ファイル情報を表示</v-list-item-title>
                         </v-list-item>
-                        <v-list-item @click="downloadVideo" :disabled="program.recorded_video.status === 'Recording'">
+                        <v-list-item @click="downloadVideo" :disabled="program.recorded_video.status === 'Recording' || isEncoding">
                             <template v-slot:prepend>
                                 <Icon icon="fluent:arrow-download-24-regular" width="20px" height="20px" />
                             </template>
@@ -117,7 +127,14 @@
                             <v-list-item-title class="ml-3">サムネイルを再作成</v-list-item-title>
                         </v-list-item>
                         <v-divider></v-divider>
-                        <v-list-item @click="showDeleteConfirmation" :disabled="program.recorded_video.status === 'Recording'" class="recorded-program__menu-list-item--danger">
+                        <v-list-item @click="showEncodingDialog" :disabled="program.recorded_video.status === 'Recording' || isEncoding" v-ftooltip="'録画ファイルをH.264またはHEVCに再エンコードします'">
+                            <template v-slot:prepend>
+                                <Icon icon="fluent:arrow-sync-20-regular" width="20px" height="20px" />
+                            </template>
+                            <v-list-item-title class="ml-3">録画ファイルを再エンコード</v-list-item-title>
+                        </v-list-item>
+                        <v-divider></v-divider>
+                        <v-list-item @click="showDeleteConfirmation" :disabled="program.recorded_video.status === 'Recording' || isEncoding" class="recorded-program__menu-list-item--danger">
                             <template v-slot:prepend>
                                 <Icon icon="fluent:delete-24-regular" width="20px" height="20px" />
                             </template>
@@ -154,15 +171,23 @@
             </v-card-actions>
         </v-card>
     </v-dialog>
+
+    <!-- TSReplaceエンコードダイアログ -->
+    <TSReplaceEncodingDialog
+        v-model:show="show_encoding_dialog"
+        :program="program"
+        @encoding-started="handleEncodingStarted" />
 </template>
 <script lang="ts" setup>
 
 import { ref, computed } from 'vue';
 
 import RecordedFileInfoDialog from '@/components/Videos/Dialogs/RecordedFileInfoDialog.vue';
+import TSReplaceEncodingDialog from '@/components/Videos/Dialogs/TSReplaceEncodingDialog.vue';
 import Message from '@/message';
 import Videos, { IRecordedProgram } from '@/services/Videos';
 import useSettingsStore from '@/stores/SettingsStore';
+import useTSReplaceEncodingStore from '@/stores/TSReplaceEncodingStore';
 import useUserStore from '@/stores/UserStore';
 import Utils, { ProgramUtils } from '@/utils';
 
@@ -179,12 +204,42 @@ const props = withDefaults(defineProps<{
 // Emits
 const emit = defineEmits<{
     (e: 'deleted', id: number): void;
+    (e: 'encoding-started', taskId: string): void;
 }>();
 
 // ファイル情報ダイアログの表示状態
 const show_video_info = ref(false);
 // 削除確認ダイアログの表示状態
 const show_delete_confirmation = ref(false);
+// エンコードダイアログの表示状態
+const show_encoding_dialog = ref(false);
+
+// エンコードストア
+const encodingStore = useTSReplaceEncodingStore();
+
+// この録画番組がエンコード中かどうか
+const isEncoding = computed(() => {
+    const tasks = encodingStore.getAllTasks();
+    return tasks.some(task =>
+        task.programTitle === props.program.title &&
+        ['queued', 'processing'].includes(task.status)
+    );
+});
+
+// エンコード進捗情報
+const encodingProgress = computed(() => {
+    const tasks = encodingStore.getAllTasks();
+    const task = tasks.find(task =>
+        task.programTitle === props.program.title &&
+        ['queued', 'processing'].includes(task.status)
+    );
+    return task ? {
+        progress: task.progress,
+        status: task.status,
+        codec: task.codec,
+        encoderType: task.encoderType,
+    } : null;
+});
 
 // 録画ファイルのダウンロード (location.href を変更し、ダウンロード自体はブラウザに任せる)
 const downloadVideo = () => {
@@ -273,6 +328,28 @@ const deleteVideo = async () => {
         // 親コンポーネントに削除イベントを発行
         emit('deleted', props.program.id);
     }
+};
+
+// エンコードダイアログを表示
+const showEncodingDialog = () => {
+    show_encoding_dialog.value = true;
+};
+
+// エンコード開始時の処理
+const handleEncodingStarted = (taskId: string, codec: 'h264' | 'hevc', encoderType: 'software' | 'hardware') => {
+    // エンコードストアにタスクを追加
+    const encodingStore = useTSReplaceEncodingStore();
+    encodingStore.addTask(
+        taskId,
+        props.program.title,
+        codec,
+        encoderType
+    );
+
+    // 親コンポーネントに通知
+    emit('encoding-started', taskId);
+
+    console.log('Encoding started with task ID:', taskId);
 };
 
 </script>
@@ -383,12 +460,22 @@ const deleteVideo = async () => {
                 }
             }
 
+            &--encoding {
+                gap: 3px;
+                background: rgba(var(--v-theme-primary), 0.9);
+                color: rgba(255, 255, 255, 0.95);
+            }
+
             &-dot {
                 width: 7px;
                 height: 7px;
                 border-radius: 50%;
                 background: #ff4444;
                 animation: blink 1.5s infinite;
+            }
+
+            &-icon--spin {
+                animation: progress-rotate 1.5s infinite;
             }
         }
 
@@ -400,10 +487,18 @@ const deleteVideo = async () => {
             height: 3px;
             background: rgba(0, 0, 0, 0.6);
 
+            &--encoding {
+                background: rgba(var(--v-theme-primary), 0.3);
+            }
+
             &-bar {
                 height: 100%;
                 background: rgb(var(--v-theme-secondary-lighten-1));
                 transition: width 0.2s ease;
+
+                &--encoding {
+                    background: rgb(var(--v-theme-primary));
+                }
             }
         }
     }
@@ -752,7 +847,7 @@ const deleteVideo = async () => {
         }
     }
 
-    &--recording, &--analyzing {
+    &--recording, &--analyzing, &--encoding {
         pointer-events: none;
         &:hover {
             background: rgb(var(--v-theme-background-lighten-1));
@@ -765,6 +860,12 @@ const deleteVideo = async () => {
         .recorded-program__mylist,
         .recorded-program__menu {
             pointer-events: auto;
+        }
+    }
+
+    &--encoding {
+        .recorded-program__content {
+            opacity: 0.8; // エンコード中は少し薄くするが、録画中ほどではない
         }
     }
 }

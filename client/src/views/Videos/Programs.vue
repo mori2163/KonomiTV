@@ -25,6 +25,13 @@
                 </div>
             </div>
         </main>
+
+        <!-- エンコード進捗表示 -->
+        <TSReplaceEncodingProgress
+            ref="encodingProgress"
+            @completed="handleEncodingCompleted"
+            @failed="handleEncodingFailed"
+            @cancelled="handleEncodingCancelled" />
     </div>
 </template>
 <script lang="ts" setup>
@@ -32,11 +39,14 @@
 import { onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
+import Message from '@/message';
+
 import Breadcrumbs from '@/components/Breadcrumbs.vue';
 import HeaderBar from '@/components/HeaderBar.vue';
 import Navigation from '@/components/Navigation.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
 import RecordedProgramList from '@/components/Videos/RecordedProgramList.vue';
+import TSReplaceEncodingProgress from '@/components/Videos/TSReplaceEncodingProgress.vue';
 import { IRecordedProgram, SortOrder } from '@/services/Videos';
 import Videos from '@/services/Videos';
 
@@ -54,6 +64,9 @@ const current_page = ref(1);
 
 // 並び順
 const sort_order = ref<'desc' | 'asc'>('desc');
+
+// エンコード進捗表示の参照
+const encodingProgress = ref<InstanceType<typeof TSReplaceEncodingProgress>>();
 
 // 録画番組を取得
 const fetchPrograms = async () => {
@@ -117,6 +130,23 @@ onMounted(async () => {
     // 録画番組を取得
     await fetchPrograms();
 });
+
+// エンコード完了時の処理
+const handleEncodingCompleted = (taskId: string) => {
+    Message.success('エンコードが完了しました。録画一覧を更新します。');
+    // 録画一覧を再取得してメタデータの変更を反映
+    fetchPrograms();
+};
+
+// エンコード失敗時の処理
+const handleEncodingFailed = (taskId: string, error: string) => {
+    Message.error(`エンコードが失敗しました: ${error}`);
+};
+
+// エンコードキャンセル時の処理
+const handleEncodingCancelled = (taskId: string) => {
+    Message.info('エンコードがキャンセルされました。');
+};
 
 </script>
 <style lang="scss" scoped>

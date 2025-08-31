@@ -44,6 +44,10 @@
                         <Icon icon="fa-brands:discord" width="26px" style="padding: 0 1px;" />
                         <span class="ml-4">Discord連携</span>
                     </v-btn>
+                    <v-btn variant="flat" class="settings-navigation__button" to="/settings/tsreplace-encoding">
+                        <Icon icon="fluent:video-clip-wand-16-filled" width="26px" />
+                        <span class="ml-4">エンコード</span>
+                    </v-btn>
                     <v-btn variant="flat" class="settings-navigation__button" to="/settings/server">
                         <Icon icon="fluent:server-surface-16-filled" width="26px" />
                         <span class="ml-4">サーバー設定</span>

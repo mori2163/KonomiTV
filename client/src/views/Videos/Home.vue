@@ -54,6 +54,13 @@
                 </div>
             </div>
         </main>
+
+        <!-- エンコード進捗表示 -->
+        <TSReplaceEncodingProgress
+            ref="encodingProgress"
+            @completed="handleEncodingCompleted"
+            @failed="handleEncodingFailed"
+            @cancelled="handleEncodingCancelled" />
     </div>
 </template>
 <script lang="ts" setup>
@@ -65,9 +72,12 @@ import HeaderBar from '@/components/HeaderBar.vue';
 import Navigation from '@/components/Navigation.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
 import RecordedProgramList from '@/components/Videos/RecordedProgramList.vue';
+import TSReplaceEncodingProgress from '@/components/Videos/TSReplaceEncodingProgress.vue';
 import { IRecordedProgram } from '@/services/Videos';
 import Videos from '@/services/Videos';
 import useSettingsStore from '@/stores/SettingsStore';
+
+import Message from '@/message';
 
 // 最近録画された番組のリスト
 const recent_programs = ref<IRecordedProgram[]>([]);
@@ -88,6 +98,9 @@ const autoRefreshInterval = ref<number | null>(null);
 
 // 自動更新の間隔 (ミリ秒)
 const AUTO_REFRESH_INTERVAL = 30 * 1000;  // 30秒
+
+// エンコード進捗表示の参照
+const encodingProgress = ref<InstanceType<typeof TSReplaceEncodingProgress>>();
 
 // マイリストの変更を監視して即座に再取得
 const settingsStore = useSettingsStore();
@@ -200,6 +213,23 @@ onMounted(() => {
 onUnmounted(() => {
     stopAutoRefresh();
 });
+
+// エンコード完了時の処理
+const handleEncodingCompleted = (taskId: string) => {
+    Message.success('エンコードが完了しました。録画一覧を更新します。');
+    // 録画一覧を再取得してメタデータの変更を反映
+    updateAllSections();
+};
+
+// エンコード失敗時の処理
+const handleEncodingFailed = (taskId: string, error: string) => {
+    Message.error(`エンコードが失敗しました: ${error}`);
+};
+
+// エンコードキャンセル時の処理
+const handleEncodingCancelled = (taskId: string) => {
+    Message.info('エンコードがキャンセルされました。');
+};
 
 </script>
 <style lang="scss" scoped>

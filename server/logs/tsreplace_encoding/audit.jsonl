@@ -1,0 +1,35 @@
+{"timestamp": "2025-08-16T22:30:22.782992", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-16T22:37:03.700368", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-16T22:38:19.737080", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-16T22:44:38.504438", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-16T22:48:24.040727", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-16T22:58:58.574041", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-16T22:59:14.198359", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-16T23:12:03.060222", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-16T23:12:18.036832", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-16T23:16:21.331790", "event_type": "manual_encoding_queued", "user_id": null, "details": {"task_id": "ec252fd4-c7be-44ae-8a80-d81b6f946b3d", "input_file": "C:\\Users\\mori\\dev\\KonomiTV\\TV-Record\\202508041507010102-ニュース・気象情報（東北） - コピー (10).ts", "codec": "h264", "encoder_type": "software", "quality_preset": "medium"}}
+{"timestamp": "2025-08-16T23:24:03.216222", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-16T23:29:45.095524", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-16T23:33:24.880489", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-16T23:33:49.155608", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-16T23:34:15.473743", "event_type": "manual_encoding_queued", "user_id": null, "details": {"task_id": "6e901bc6-52cf-4b5e-9f3b-70060a2cb04e", "input_file": "C:\\Users\\mori\\dev\\KonomiTV\\TV-Record\\202508041507010102-ニュース・気象情報（東北） - コピー (10).ts", "codec": "h264", "encoder_type": "software", "quality_preset": "medium"}}
+{"timestamp": "2025-08-16T23:36:43.390809", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-16T23:39:41.243634", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-16T23:40:43.016950", "event_type": "manual_encoding_queued", "user_id": null, "details": {"task_id": "8831642f-4dc0-4a22-8755-d8a80a642421", "input_file": "C:\\Users\\mori\\dev\\KonomiTV\\TV-Record\\202508041507010102-ニュース・気象情報（東北） - コピー (10).ts", "codec": "h264", "encoder_type": "software", "quality_preset": "medium"}}
+{"timestamp": "2025-08-16T23:41:05.038173", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-16T23:41:28.793484", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-16T23:42:10.685730", "event_type": "manual_encoding_queued", "user_id": null, "details": {"task_id": "a6a0aa57-fa29-491b-9b0e-ee099d6286e5", "input_file": "C:\\Users\\mori\\dev\\KonomiTV\\TV-Record\\202508041507010102-ニュース・気象情報（東北） - コピー (10).ts", "codec": "h264", "encoder_type": "software", "quality_preset": "medium"}}
+{"timestamp": "2025-08-16T23:42:15.767687", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-16T23:53:14.923335", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-16T23:53:44.543053", "event_type": "manual_encoding_queued", "user_id": null, "details": {"task_id": "5a22f957-cd20-45b4-b528-005778285696", "input_file": "C:\\Users\\mori\\dev\\KonomiTV\\TV-Record\\202508041507010102-ニュース・気象情報（東北） - コピー (10).ts", "codec": "h264", "encoder_type": "software", "quality_preset": "medium"}}
+{"timestamp": "2025-08-16T23:54:17.062156", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-17T00:01:52.674396", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-17T00:02:16.024856", "event_type": "manual_encoding_queued", "user_id": null, "details": {"task_id": "13dff9fd-4aeb-4cdd-8b59-288f625c0298", "input_file": "C:\\Users\\mori\\dev\\KonomiTV\\TV-Record\\202508041507010102-ニュース・気象情報（東北） - コピー (10).ts", "codec": "h264", "encoder_type": "software", "quality_preset": "medium"}}
+{"timestamp": "2025-08-17T00:02:27.881837", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-17T00:11:07.312036", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-17T00:11:29.634768", "event_type": "manual_encoding_queued", "user_id": null, "details": {"task_id": "cf73d7fa-4268-4f0d-81b2-b5641b14f781", "input_file": "C:\\Users\\mori\\dev\\KonomiTV\\TV-Record\\202508041507010102-ニュース・気象情報（東北） - コピー (10).ts", "codec": "h264", "encoder_type": "software", "quality_preset": "medium"}}
+{"timestamp": "2025-08-17T09:24:03.815393", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-17T09:24:17.770896", "event_type": "manager_shutdown", "user_id": null, "details": {}}
+{"timestamp": "2025-08-17T09:24:37.624024", "event_type": "manager_initialized", "user_id": null, "details": {"auto_encoding_enabled": false, "max_concurrent_encodings": 1}}
+{"timestamp": "2025-08-17T09:30:25.046137", "event_type": "manual_encoding_queued", "user_id": null, "details": {"task_id": "53978bd9-2712-4b6d-afeb-c4aff7d70da0", "input_file": "C:\\Users\\mori\\dev\\KonomiTV\\TV-Record\\202508041507010102-ニュース・気象情報（東北） - コピー (10).ts", "codec": "h264", "encoder_type": "hardware", "quality_preset": "medium"}}
+{"timestamp": "2025-08-17T09:30:36.166238", "event_type": "manager_shutdown", "user_id": null, "details": {}}

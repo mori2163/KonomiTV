@@ -36,6 +36,7 @@ from app.routers import (
     ReservationsRouter,
     SeriesRouter,
     SettingsRouter,
+    TSReplaceRouter,
     TwitterRouter,
     UsersRouter,
     VersionRouter,
@@ -79,6 +80,7 @@ app.include_router(CapturesRouter.router)
 app.include_router(DataBroadcastingRouter.router)
 app.include_router(DiscordRouter.router)
 app.include_router(NiconicoRouter.router)
+app.include_router(TSReplaceRouter.router)
 app.include_router(TwitterRouter.router)
 app.include_router(UsersRouter.router)
 app.include_router(SettingsRouter.router)
@@ -332,6 +334,8 @@ async def Startup():
     recorded_scan_task = RecordedScanTask()
     await recorded_scan_task.start()
 
+    
+
     # Discord Bot をバックグラウンドタスクとして起動する
     logging.info('Discord Bot starting...')
     asyncio.create_task(start_discord_bot())
@@ -390,6 +394,8 @@ async def Shutdown():
     if recorded_scan_task is not None:
         await recorded_scan_task.stop()
         recorded_scan_task = None
+
+    
 
     # Discord Bot を停止する
     ## Discord 連携が有効な場合のみ停止処理を行う
