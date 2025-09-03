@@ -10,6 +10,7 @@ dev = "python KonomiTV.py --reload"
 lint = "ruff check --fix . ; pyright"
 typecheck = "pyright"
 update-thirdparty = "python -m misc.UpdateThirdparty latest"
+build-and-serve = "cd ../client && yarn build && cd ../server && python KonomiTV.py"
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.12"
