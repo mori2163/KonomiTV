@@ -25,24 +25,38 @@
                 </div>
             </div>
         </main>
+
+        <!-- エンコード進捗表示 -->
+        <TSReplaceEncodingProgress
+            ref="encodingProgress"
+            @completed="handleEncodingCompleted"
+            @failed="handleEncodingFailed"
+            @cancelled="handleEncodingCancelled" />
     </div>
 </template>
 <script lang="ts" setup>
 
-import { onMounted, ref, watch } from 'vue';
+import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+
 
 import Breadcrumbs from '@/components/Breadcrumbs.vue';
 import HeaderBar from '@/components/HeaderBar.vue';
 import Navigation from '@/components/Navigation.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
 import RecordedProgramList from '@/components/Videos/RecordedProgramList.vue';
+import TSReplaceEncodingProgress from '@/components/Videos/TSReplaceEncodingProgress.vue';
+import Message from '@/message';
 import { IRecordedProgram, SortOrder } from '@/services/Videos';
 import Videos from '@/services/Videos';
+import useSettingsStore from '@/stores/SettingsStore';
 
 // ルーター
 const route = useRoute();
 const router = useRouter();
+
+// 設定ストア
+const settingsStore = useSettingsStore();
 
 // 録画番組のリスト
 const programs = ref<IRecordedProgram[]>([]);
@@ -54,6 +68,9 @@ const current_page = ref(1);
 
 // 並び順
 const sort_order = ref<'desc' | 'asc'>('desc');
+
+// エンコード進捗表示の参照
+const encodingProgress = ref<InstanceType<typeof TSReplaceEncodingProgress>>();
 
 // 録画番組を取得
 const fetchPrograms = async () => {
@@ -104,6 +121,12 @@ watch(() => route.query, async (newQuery) => {
     await fetchPrograms();
 }, { deep: true });
 
+// TSReplaceエンコード完了イベントを監視
+const handleTSReplaceEncodingCompleted = () => {
+    // 録画番組リストを再取得してメタデータの変更を反映
+    fetchPrograms();
+};
+
 // 開始時に実行
 onMounted(async () => {
     // クエリパラメータから初期値を設定
@@ -116,7 +139,33 @@ onMounted(async () => {
 
     // 録画番組を取得
     await fetchPrograms();
+
+    // TSReplaceエンコード完了イベントのリスナーを追加
+    window.addEventListener('tsreplace-encoding-completed', handleTSReplaceEncodingCompleted);
 });
+
+// コンポーネントのクリーンアップ
+onUnmounted(() => {
+    // イベントリスナーを削除
+    window.removeEventListener('tsreplace-encoding-completed', handleTSReplaceEncodingCompleted);
+});
+
+// エンコード完了時の処理
+const handleEncodingCompleted = (taskId: string) => {
+    Message.success('エンコードが完了しました。録画一覧を更新します。');
+    // 録画一覧を再取得してメタデータの変更を反映
+    fetchPrograms();
+};
+
+// エンコード失敗時の処理
+const handleEncodingFailed = (taskId: string, error: string) => {
+    Message.error(`エンコードが失敗しました: ${error}`);
+};
+
+// エンコードキャンセル時の処理
+const handleEncodingCancelled = (taskId: string) => {
+    Message.info('エンコードがキャンセルされました。');
+};
 
 </script>
 <style lang="scss" scoped>

@@ -9,7 +9,7 @@ import anyio
 import typer
 
 from app import logging, schemas
-from app.config import LoadConfig
+from app.config import Config, LoadConfig
 from app.models.RecordedVideo import RecordedVideo
 
 
@@ -32,6 +32,43 @@ class CMSectionsDetector:
         self.file_path = file_path
         self.duration_sec = duration_sec
 
+    def _is_encoded_file(self) -> bool:
+        """
+        ファイルがエンコード済みファイルかどうかを判定する
+
+        Returns:
+            bool: エンコード済みファイルの場合True
+        """
+        try:
+            # まず、ファイル名にエンコード識別子が含まれているかチェック（最も確実）
+            filename = self.file_path.name
+            if '_h264' in filename or '_h265' in filename or '_av1' in filename:
+                return True
+
+            # 設定が利用可能な場合のみエンコード済みフォルダをチェック
+            try:
+                config = Config()
+                if config.general.tsreplace and config.general.tsreplace.encoded_folders:
+                    # ファイルパスがエンコード済みフォルダ内にあるかチェック
+                    for encoded_folder in config.general.tsreplace.encoded_folders:
+                        encoded_path = pathlib.Path(encoded_folder)
+                        try:
+                            # ファイルがエンコード済みフォルダ内にあるかチェック
+                            self.file_path.relative_to(encoded_path)
+                            return True
+                        except ValueError:
+                            # relative_to で ValueError が発生した場合、パスが含まれていない
+                            continue
+            except Exception:
+                # 設定が利用できない場合は、ファイル名のみで判定
+                pass
+
+            return False
+
+        except Exception:
+            # エラーが発生した場合はエンコード済みファイルではないと仮定
+            return False
+
 
     async def detectAndSave(self) -> None:
         """
@@ -40,6 +77,13 @@ class CMSectionsDetector:
 
         start_time = time.time()
         logging.info(f'{self.file_path}: Detecting CM sections...')
+
+        # エンコード済みファイルの場合は、CM区間検出をスキップする
+        # エンコード済みファイルのCM区間情報は元ファイルから継承されるべき
+        if self._is_encoded_file():
+            logging.info(f'{self.file_path}: Skipping CM detection for encoded file (should inherit from original)')
+            return
+
         try:
             # 録画ファイルに対応するチャプターファイル (.chapter.txt) がもしあれば解析し、CM 区間情報を取得する
             ## 自前で解析すると計算コストが高いので、もしチャプターファイルがあればそれを優先的に使う

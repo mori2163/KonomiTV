@@ -395,7 +395,13 @@ class VideoEncodingTask:
         # それ以外の場合は一旦 None とする
         file = None
         if self.video_stream.recorded_program.recorded_video.container_format == 'MPEG-TS':
-            file = open(self.video_stream.recorded_program.recorded_video.file_path, 'rb')
+            # エンコード済みファイルがある場合はそちらを優先、なければ元のファイルを使用
+            recorded_video = self.video_stream.recorded_program.recorded_video
+            if recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path:
+                file_path = recorded_video.encoded_file_path
+            else:
+                file_path = recorded_video.file_path
+            file = open(file_path, 'rb')
 
         # 切り出した HLS セグメント用 MPEG-TS パケットを一時的に保持するバッファ
         encoded_segment = bytearray()
@@ -424,6 +430,13 @@ class VideoEncodingTask:
                 if self.video_stream.recorded_program.recorded_video.container_format == 'MPEG-4':
                     assert file is None
 
+                    # エンコード済みファイルがある場合はそちらを優先、なければ元のファイルを使用
+                    recorded_video = self.video_stream.recorded_program.recorded_video
+                    if recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path:
+                        input_file_path = recorded_video.encoded_file_path
+                    else:
+                        input_file_path = recorded_video.file_path
+
                     # psisimux のオプション
                     ## MPEG-4 コンテナに字幕や PSI/SI を結合して MPEG-TS にするツール
                     ## オプション内容は https://github.com/xtne6f/psisimux を参照
@@ -440,7 +453,7 @@ class VideoEncodingTask:
                         # 字幕ファイルの拡張子
                         '-x', '.vtt',
                         # 入力ファイル名
-                        self.video_stream.recorded_program.recorded_video.file_path,
+                        input_file_path,
                         # 標準出力
                         '-',
                     ]

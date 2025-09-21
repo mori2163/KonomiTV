@@ -54,6 +54,11 @@ class RecordedVideo(TortoiseModel):
     cm_sections = cast(TortoiseField[list[CMSection] | None],
         # None は未解析状態を表す ([] は解析したが CM 区間がなかった/検出に失敗したことを表す)
         fields.JSONField(default=None, encoder=lambda x: json.dumps(x, ensure_ascii=False), null=True))  # type: ignore
+    is_tsreplace_encoded = fields.BooleanField(default=False)  # TSReplace でエンコード済みかどうか
+    tsreplace_encoded_at = cast(TortoiseField[datetime | None], fields.DatetimeField(null=True))  # エンコード完了日時
+    original_video_codec = cast(TortoiseField[Literal['MPEG-2', 'H.264', 'H.265'] | None], fields.CharField(255, null=True))  # 元の映像コーデック
+    encoded_file_path = cast(TortoiseField[str | None], fields.TextField(null=True))  # エンコード済みファイルのパス
+    is_original_file_deleted = fields.BooleanField(default=False)  # 元ファイルが削除されたかどうか
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
 

@@ -85,6 +85,15 @@ export interface IClientSettings {
     twitter_active_tab: 'Search' | 'Timeline' | 'Capture';
     tweet_hashtag_position: 'Prepend' | 'Append' | 'PrependWithLineBreak' | 'AppendWithLineBreak';
     tweet_capture_watermark_position: 'None' | 'TopLeft' | 'TopRight' | 'BottomLeft' | 'BottomRight';
+    tsreplace_auto_encoding_enabled: boolean;
+    tsreplace_auto_encoding_codec: 'h264' | 'hevc';
+    tsreplace_auto_encoding_encoder: 'software' | 'hardware';
+    tsreplace_delete_original_after_encoding: boolean;
+    tsreplace_encoding_quality_preset: string;
+    tsreplace_max_concurrent_encodings: number;
+    tsreplace_hardware_encoder_available: boolean;
+    tsreplace_continue_on_missing_record: boolean;
+    tsreplace_max_retry_count: number;
 }
 
 /**
@@ -124,6 +133,24 @@ export interface IServerSettings {
         notify_server: boolean;
         notify_recording: boolean;
     };
+    tsreplace_encoding: {
+        auto_encoding_enabled: boolean;
+        auto_encoding_codec: 'h264' | 'hevc';
+        auto_encoding_encoder: 'software' | 'hardware';
+        hardware_encoder_type: 'nvidia' | 'amd' | 'intel';
+        delete_original_after_encoding: boolean;
+        encoding_quality_preset: string;
+        max_concurrent_encodings: number;
+        hardware_encoder_available: boolean;
+        ffmpeg_h264_options: string;
+        ffmpeg_hevc_options: string;
+        nvidia_h264_options: string;
+        nvidia_hevc_options: string;
+        amd_h264_options: string;
+        amd_hevc_options: string;
+        intel_h264_options: string;
+        intel_hevc_options: string;
+    };
 }
 
 /* サーバー設定を表すインターフェースのデフォルト値 */
@@ -159,6 +186,24 @@ export const IServerSettingsDefault: IServerSettings = {
         channel_id: null,
         notify_server: false,
         notify_recording: false,
+    },
+    tsreplace_encoding: {
+        auto_encoding_enabled: false,
+        auto_encoding_codec: 'h264',
+        auto_encoding_encoder: 'software',
+        hardware_encoder_type: 'nvidia',
+        delete_original_after_encoding: false,
+        encoding_quality_preset: 'medium',
+        max_concurrent_encodings: 1,
+        hardware_encoder_available: false,
+        ffmpeg_h264_options: '--crf 23 --preset medium',
+        ffmpeg_hevc_options: '--crf 23 --preset medium',
+        nvidia_h264_options: '--codec h264 --cqp 23 --preset quality',
+        nvidia_hevc_options: '--codec hevc --cqp 23 --preset quality',
+        amd_h264_options: '--codec h264 --cqp 23 --quality quality',
+        amd_hevc_options: '--codec hevc --cqp 23 --quality quality',
+        intel_h264_options: '--codec h264 --cqp 23 --quality balanced',
+        intel_hevc_options: '--codec hevc --cqp 23 --quality balanced',
     },
 };
 
@@ -275,6 +320,24 @@ class Settings {
         } catch (error) {
             console.error('Discord status check failed:', error);
             return { connected: false };
+        }
+    }
+
+    /**
+     * ハードウェアエンコーダーの利用可否を取得する
+     * @returns ハードウェアエンコーダーの利用可否情報
+     */
+    static async fetchHardwareEncoderStatus(): Promise<{hardware_encoder_available: boolean, encoder_name: string, available_codecs: string[]}> {
+        try {
+            const response = await APIClient.get<{hardware_encoder_available: boolean, encoder_name: string, available_codecs: string[]}>('/settings/tsreplace-encoding/hardware-encoder-status');
+            if (response.type === 'success') {
+                return response.data;
+            }
+            console.error('Hardware encoder status check failed:', response.data.detail);
+            return { hardware_encoder_available: false, encoder_name: '', available_codecs: [] };
+        } catch (error) {
+            console.error('Hardware encoder status check failed:', error);
+            return { hardware_encoder_available: false, encoder_name: '', available_codecs: [] };
         }
     }
 }

@@ -245,6 +245,7 @@ version = "8.2.2.1"
 description = "Composable command line interface toolkit, async fork"
 optional = false
 python-versions = ">=3.11"
+groups = ["main"]
 files = [
     {file = "asyncclick-8.2.2.1-py3-none-any.whl", hash = "sha256:1b1ed69c2d3ab7142da6ab8a0dface791f8effa0ac88a3fad95cf73f3c01c70e"},
     {file = "asyncclick-8.2.2.1.tar.gz", hash = "sha256:6eccb64f0b6422eec911c363709fd50a84e3166eb8b3841184a4d457fdc57911"},
@@ -742,6 +743,7 @@ version = "8.1.8"
 description = "Composable command line interface toolkit"
 optional = false
 python-versions = ">=3.7"
+groups = ["main"]
 files = [
     {file = "click-8.1.8-py3-none-any.whl", hash = "sha256:63c132bbbed01578a06712a2d1f497bb62d9c1c0d329b7903a866228027263b2"},
     {file = "click-8.1.8.tar.gz", hash = "sha256:ed53c9d8990d83c2a27deae68e4ee337473f6330c040a31d4225c9574d16096a"},
@@ -1335,6 +1337,7 @@ version = "4.0.0"
 description = "Python port of markdown-it. Markdown parsing, done right!"
 optional = false
 python-versions = ">=3.10"
+groups = ["main"]
 files = [
     {file = "markdown_it_py-4.0.0-py3-none-any.whl", hash = "sha256:87327c59b172c5011896038353a81343b6754500a08cd7a4973bb48c6d578147"},
     {file = "markdown_it_py-4.0.0.tar.gz", hash = "sha256:cb0a2b4aa34f932c007117b194e945bd74e0ec24133ceb5bac59009cda1cb9f3"},
@@ -3602,4 +3605,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.12"
-content-hash = "a9bbb56aecc3b28f55179c5d52bdf5e0ea982195c91066df31ec3122e009cbfa"
+content-hash = "a60be04e060c1095eeaf771237f426d07d2d08e2804f1b36c9220b2e59efd696"

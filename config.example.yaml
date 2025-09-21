@@ -113,7 +113,7 @@ discord:
 
     # 通知を送信する Discord チャンネルの ID
     # 通知を送信したいチャンネルで右クリックし、「IDをコピー」で取得した ID を入力してください。
-    channel_id: 'YOUR_DISCORD_CHANNEL_ID'
+    channel_id: ''
 
     # サーバーの起動/終了時に通知を送信するか
     notify_server: true
@@ -123,5 +123,54 @@ discord:
 
     # メンテナンスコマンドを許可するユーザーのID
     maintenance_user_ids: [
-        'YOUR_USER_ID'
+        ''
     ]
+
+# =============================== TSReplace エンコードの設定 ===============================
+tsreplace_encoding:
+    # 自動エンコード機能を有効にするか
+    auto_encoding_enabled: false
+
+    # エンコード済みファイルの保存先フォルダ
+    # nullの場合は元ファイルと同じフォルダに保存される
+    encoded_folder: 'E:\TV-Record\Encoded'
+
+    # エンコード完了後に元ファイルを削除するかのデフォルト設定
+    delete_original_default: false
+
+    # 同時実行可能なエンコードタスク数
+    max_concurrent_tasks: 1
+
+    # エンコードタスクのタイムアウト時間（分）
+    task_timeout_minutes: 180
+
+    # 自動エンコードのコーデック (h264 または hevc)
+    auto_encoding_codec: 'h264'
+
+    # 自動エンコードのエンコーダー (software または hardware)
+    auto_encoding_encoder: 'hardware'
+
+    # 自動エンコード後に元ファイルを削除するか
+    delete_original_after_encoding: false
+
+    # エンコード品質プリセット
+    encoding_quality_preset: 'medium'
+
+    # 同時実行可能なエンコード数（自動エンコード用）
+    max_concurrent_encodings: 1
+
+    # ハードウェアエンコーダーの利用可否（自動検出される）
+    hardware_encoder_available: true
+
+    # 利用するハードウェアエンコーダーの種類(Nvidia (NVEncC), Intel (QSVEncC), AMD (VCEEncC))
+    hardware_encoder_type: 'amd'
+
+    # 各エンコーダーのオプション(高度な設定のため、よくわからないそのままにしておくことを推奨)
+    ffmpeg_h264_options: '-y -f mpegts -i - -copyts -start_at_zero -vf yadif -an -c:v libx264 -preset slow -crf 23 -g 90 -f mpegts -'
+    ffmpeg_hevc_options: '-y -f mpegts -i - -copyts -start_at_zero -vf yadif -an -c:v libx265 -preset slow -crf 23 -g 90 -f mpegts -'
+    nvidia_h264_options: '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    nvidia_hevc_options: '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    amd_h264_options: '-i - --input-format mpegts --interlace tff --vpp-afs -c h264 --cqp 23 --gop-len 90 --output-format mpegts -o -'
+    amd_hevc_options: '-i - --input-format mpegts --interlace tff --vpp-afs -c hevc --cqp 23 --gop-len 90 --output-format mpegts -o -'
+    intel_h264_options: '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --icq 23 --gop-len 90 --output-format mpegts -o -'
+    intel_hevc_options: '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --icq 23 --gop-len 90 --output-format mpegts -o -'

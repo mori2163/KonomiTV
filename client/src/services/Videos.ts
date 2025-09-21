@@ -36,6 +36,9 @@ export interface IRecordedVideo {
     secondary_audio_sampling_rate: number | null;
     has_key_frames: boolean;
     cm_sections: { start_time: number; end_time: number; }[] | null;
+    is_tsreplace_encoded: boolean;
+    tsreplace_encoded_at: string | null;
+    original_video_codec: 'MPEG-2' | 'H.264' | 'H.265' | null;
     created_at: string;
     updated_at: string;
 }
@@ -67,6 +70,9 @@ export const IRecordedVideoDefault: IRecordedVideo = {
     secondary_audio_sampling_rate: null,
     has_key_frames: false,
     cm_sections: null,
+    is_tsreplace_encoded: false,
+    tsreplace_encoded_at: null,
+    original_video_codec: null,
     created_at: '2000-01-01T00:00:00+09:00',
     updated_at: '2000-01-01T00:00:00+09:00',
 };

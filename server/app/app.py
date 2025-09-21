@@ -36,6 +36,7 @@ from app.routers import (
     ReservationsRouter,
     SeriesRouter,
     SettingsRouter,
+    TSReplaceRouter,
     TwitterRouter,
     UsersRouter,
     VersionRouter,
@@ -80,6 +81,7 @@ app.include_router(DataBroadcastingRouter.router)
 app.include_router(DiscordRouter.router)
 app.include_router(NiconicoRouter.router)
 app.include_router(TwitterRouter.router)
+app.include_router(TSReplaceRouter.router)
 app.include_router(UsersRouter.router)
 app.include_router(SettingsRouter.router)
 app.include_router(MaintenanceRouter.router)

@@ -4,6 +4,7 @@
 # ref: https://stackoverflow.com/a/33533514/17124142
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime
 from typing import Annotated, Literal
 
@@ -114,6 +115,12 @@ class RecordedVideo(PydanticModel):
     # key_frames はデータ量が多いため、キーフレーム情報を取得できているかを表す has_key_frames のみ返す
     has_key_frames: bool = False
     cm_sections: list[CMSection] | None = None
+    # TSReplace エンコード関連フィールド
+    is_tsreplace_encoded: bool = False
+    tsreplace_encoded_at: datetime | None = None
+    original_video_codec: Literal['MPEG-2', 'H.264', 'H.265'] | None = None
+    encoded_file_path: str | None = None
+    is_original_file_deleted: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -596,5 +603,181 @@ class TimetableChannel(BaseModel):
     programs: list[Program]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
+# ***** TSReplace エンコード *****
+
+class TSReplaceManualEncodingRequest(BaseModel):
+    # エンコード対象の録画番組 ID
+    video_id: int
+    # エンコードコーデック: H.264 または HEVC
+    codec: Literal['h264', 'hevc']
+    # エンコーダータイプ: ソフトウェア または ハードウェア
+    encoder_type: Literal['software', 'hardware']
+    # エンコード品質プリセット
+    quality_preset: str = 'medium'
+    # エンコード完了後に元ファイルを削除するか
+    delete_original: bool = False
+
+class TSReplaceEncodingResponse(BaseModel):
+    success: bool
+    task_id: str | None = None
+    detail: str
+
+class TSReplaceEncodingStatusResponse(BaseModel):
+    success: bool
+    task_id: str
+    status: Literal['queued', 'processing', 'completed', 'failed', 'cancelled']
+    progress: float
+    detail: str
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
+
+class TSReplaceEncodingTaskInfo(BaseModel):
+    task_id: str
+    video_id: int
+    video_title: str
+    codec: Literal['h264', 'hevc']
+    encoder_type: Literal['software', 'hardware']
+    status: Literal['queued', 'processing', 'completed', 'failed', 'cancelled']
+    progress: float
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
+
+class TSReplaceEncodingQueueResponse(BaseModel):
+    success: bool
+    processing_tasks: list[TSReplaceEncodingTaskInfo]
+    queued_tasks: list[TSReplaceEncodingTaskInfo]
+    completed_tasks: list[TSReplaceEncodingTaskInfo]
+    failed_tasks: list[TSReplaceEncodingTaskInfo]
+
+class TSReplaceNotificationSubscriptionRequest(BaseModel):
+    # 通知送信先のエンドポイント URL
+    endpoint_url: str
+    # 通知タイプのリスト: 完了通知、エラー通知など
+    notification_types: list[Literal['completed', 'failed', 'cancelled']] = ['completed', 'failed']
+
+class TSReplaceNotificationSubscriptionResponse(BaseModel):
+    success: bool
+    subscription_id: str | None = None
+    detail: str
+
+
+# ***** TSReplace エンコードタスク管理 *****
+
+class EncodingTask(BaseModel):
+    """
+    エンコードタスク情報を管理するモデル
+    """
+
+    # タスクID（UUID形式）
+    task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+
+    # 録画ファイルID
+    rec_file_id: int
+
+    # 入力ファイルパス
+    input_file_path: str
+
+    # 出力ファイルパス
+    output_file_path: str
+
+    # 使用するコーデック
+    codec: Literal['h264', 'hevc']
+
+    # エンコーダーの種類
+    encoder_type: Literal['software', 'hardware']
+
+    # エンコード品質プリセット
+    quality_preset: str = 'medium'
+
+    # タスクの状態
+    status: Literal['queued', 'processing', 'completed', 'failed', 'cancelled'] = 'queued'
+
+    # 進捗率（0.0-1.0）
+    progress: float = 0.0
+
+    # タスク作成日時
+    created_at: datetime = Field(default_factory=datetime.now)
+
+    # エンコード開始日時
+    started_at: datetime | None = None
+
+    # エンコード完了日時
+    completed_at: datetime | None = None
+
+    # エラーメッセージ
+    error_message: str | None = None
+
+    # リトライ回数
+    retry_count: int = 0
+
+    # 最大リトライ回数
+    max_retry_count: int = 3
+
+    # 元ファイルサイズ（バイト）
+    original_file_size: int | None = None
+
+    # エンコード後ファイルサイズ（バイト）
+    encoded_file_size: int | None = None
+
+    # エンコード処理時間（秒）
+    encoding_duration: float | None = None
+
+
+class EncodingResult(BaseModel):
+    """
+    エンコード結果を表すモデル
+    """
+
+    # エンコード成功フラグ
+    success: bool
+
+    # 出力ファイルパス
+    output_file_path: str | None = None
+
+    # 元ファイルサイズ（バイト）
+    original_file_size: int = 0
+
+    # エンコード後ファイルサイズ（バイト）
+    encoded_file_size: int = 0
+
+    # エンコード処理時間（秒）
+    encoding_duration: float = 0.0
+
+    # 圧縮率
+    compression_ratio: float = 0.0
+
+    # エラーメッセージ
+    error_message: str | None = None
+
+
+class EncodingQueueStatus(BaseModel):
+    """
+    エンコードキューの状況を表すモデル
+    """
+
+    # キュー内のタスク数
+    queued_tasks: int = 0
+
+    # 処理中のタスク数
+    processing_tasks: int = 0
+
+    # 完了したタスク数
+    completed_tasks: int = 0
+
+    # 失敗したタスク数
+    failed_tasks: int = 0
+
+    # キャンセルされたタスク数
+    cancelled_tasks: int = 0
+
+    # 最大同時実行数
+    max_concurrent_tasks: int = 1
+
+    # 現在の同時実行数
+    current_concurrent_tasks: int = 0

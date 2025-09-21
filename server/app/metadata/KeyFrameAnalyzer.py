@@ -8,9 +8,10 @@ from typing import Literal
 import anyio
 import typer
 from tortoise import Tortoise
+from tortoise.exceptions import MultipleObjectsReturned
 
 from app import logging, schemas
-from app.config import LoadConfig
+from app.config import Config, LoadConfig
 from app.constants import DATABASE_CONFIG, LIBRARY_PATH
 from app.models.RecordedVideo import RecordedVideo
 
@@ -34,6 +35,44 @@ class KeyFrameAnalyzer:
         self.file_path = file_path
         self.container_format = container_format
 
+    def _is_encoded_file(self) -> bool:
+        """
+        ファイルがエンコード済みファイルかどうかを判定する
+
+        Returns:
+            bool: エンコード済みファイルの場合True
+        """
+        try:
+            # まず、ファイル名にエンコード識別子が含まれているかチェック（最も確実）
+            import pathlib
+            filename = pathlib.Path(self.file_path).name
+            if '_h264' in filename or '_h265' in filename or '_av1' in filename:
+                return True
+
+            # 設定が利用可能な場合のみエンコード済みフォルダをチェック
+            try:
+                config = Config()
+                if config.general.tsreplace and config.general.tsreplace.encoded_folders:
+                    # ファイルパスがエンコード済みフォルダ内にあるかチェック
+                    for encoded_folder in config.general.tsreplace.encoded_folders:
+                        encoded_path = pathlib.Path(encoded_folder)
+                        try:
+                            # ファイルがエンコード済みフォルダ内にあるかチェック
+                            pathlib.Path(self.file_path).relative_to(encoded_path)
+                            return True
+                        except ValueError:
+                            # relative_to で ValueError が発生した場合、パスが含まれていない
+                            continue
+            except Exception:
+                # 設定が利用できない場合は、ファイル名のみで判定
+                pass
+
+            return False
+
+        except Exception:
+            # エラーが発生した場合はエンコード済みファイルではないと仮定
+            return False
+
 
     async def analyzeAndSave(self) -> None:
         """
@@ -45,6 +84,13 @@ class KeyFrameAnalyzer:
 
         start_time = time.time()
         logging.info(f'{self.file_path}: Analyzing keyframes...')
+
+        # エンコード済みファイルの場合は、キーフレーム解析をスキップする
+        # エンコード済みファイルのキーフレーム情報は元ファイルから継承されるべき
+        if self._is_encoded_file():
+            logging.info(f'{self.file_path}: Skipping keyframe analysis for encoded file (should inherit from original)')
+            return
+
         try:
             if self.container_format != 'MPEG-TS':
                 # エンコードタスクで psisimux を使用するので、予めオープンできない形式ならばキーフレームの取得を中断する
@@ -186,7 +232,13 @@ class KeyFrameAnalyzer:
 
             # DB に保存
             ## ファイルパスから対応する RecordedVideo レコードを取得
-            db_recorded_video = await RecordedVideo.get_or_none(file_path=str(self.file_path))
+            try:
+                db_recorded_video = await RecordedVideo.get_or_none(file_path=str(self.file_path))
+            except MultipleObjectsReturned:
+                # 複数のレコードが存在する場合、最新のものを取得
+                db_recorded_video = await RecordedVideo.filter(file_path=str(self.file_path)).order_by('-id').first()
+                logging.warning(f'{self.file_path}: Multiple RecordedVideo records found, using latest (ID: {db_recorded_video.id if db_recorded_video else "None"})')
+
             if db_recorded_video is not None:
                 # キーフレーム情報を更新
                 db_recorded_video.key_frames = key_frames

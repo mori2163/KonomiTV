@@ -20,6 +20,7 @@ import useSettingsStore, {
     hashClientSettings,
     setLocalStorageSettings,
 } from '@/stores/SettingsStore';
+import useTSReplaceEncodingStore from '@/stores/TSReplaceEncodingStore';
 import Utils from '@/utils';
 
 
@@ -58,6 +59,10 @@ app.use(FloatingVue);
 
 // マウントを実行
 app.mount('#app');
+
+// TSReplaceエンコーディング進捗のWebSocketを初期化
+const tsReplaceEncodingStore = useTSReplaceEncodingStore();
+tsReplaceEncodingStore.initializeWebSocket();
 
 // ***** Service Worker のイベントを登録 *****
 

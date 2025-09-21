@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import anyio
 from fastapi import HTTPException, status
 from tortoise import transactions
+from tortoise.exceptions import MultipleObjectsReturned
 from typing_extensions import TypedDict
 from watchfiles import Change, awatch
 
@@ -24,7 +25,10 @@ from app.metadata.ThumbnailGenerator import ThumbnailGenerator
 from app.models.Channel import Channel
 from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
+from app.streams.TSReplaceEncodingTask import TSReplaceEncodingTask
+from app.schemas import EncodingTask
 from app.utils.DriveIOLimiter import DriveIOLimiter
+from app.utils.EncodingFileTracker import EncodingFileTracker
 from app.utils.ProcessLimiter import ProcessLimiter
 
 
@@ -98,9 +102,38 @@ class RecordedScanTask:
         if hasattr(self, '_initialized') and self._initialized:
             return
 
+        logging.info('Initializing RecordedScanTask...')
+
         # 設定を読み込む
         self.config = Config()
-        self.recorded_folders = [anyio.Path(folder) for folder in self.config.video.recorded_folders]
+        logging.info(f'Loading config for recorded folders: {self.config.video.recorded_folders}')
+
+        # 録画フォルダのリストを取得し、存在するフォルダのみを追加
+        self.recorded_folders: list[anyio.Path] = []
+        for folder_str in self.config.video.recorded_folders:
+            folder_path = pathlib.Path(folder_str)
+            if folder_path.exists():
+                self.recorded_folders.append(anyio.Path(folder_str))
+                logging.info(f'Added recorded folder: {folder_path}')
+            else:
+                logging.warning(f'Recorded folder does not exist: {folder_path}')
+
+        # Encodedフォルダも監視対象に追加（存在する場合のみ）
+        if self.config.tsreplace_encoding.encoded_folder:
+            encoded_folder = pathlib.Path(self.config.tsreplace_encoding.encoded_folder)
+            logging.info(f'TSReplace encoded folder configured: {encoded_folder}')
+            # Encodedフォルダが存在し、かつ既に録画フォルダに含まれていない場合のみ追加
+            if encoded_folder.exists() and encoded_folder.is_dir():
+                anyio_encoded_folder = anyio.Path(self.config.tsreplace_encoding.encoded_folder)
+                if anyio_encoded_folder not in self.recorded_folders:
+                    self.recorded_folders.append(anyio_encoded_folder)
+                    logging.info(f'Added encoded folder to watch: {encoded_folder}')
+            elif not encoded_folder.exists():
+                logging.info(f'Encoded folder does not exist yet, skipping: {encoded_folder}')
+        else:
+            logging.info('No TSReplace encoded folder configured')
+
+        logging.info(f'Final recorded folders list: {[str(f) for f in self.recorded_folders]}')
 
         # 録画中ファイルの状態管理
         self._recording_files: dict[anyio.Path, FileRecordingInfo] = {}
@@ -120,6 +153,13 @@ class RecordedScanTask:
         # _file_locks 辞書自体へのアクセスを保護するためのロック
         self._file_locks_dict_lock = asyncio.Lock()
 
+        # エンコーディング中ファイルのログ出力頻度制限用
+        self._encoding_log_timestamps: dict[str, float] = {}
+        self._encoding_log_interval = 60  # 60秒間隔でログ出力
+
+        # エンコーディングトラッカーのクリーンアップタスク
+        self._encoding_cleanup_task: asyncio.Task[None] | None = None
+
         # 初期化済みフラグをセット
         self._initialized = True
 
@@ -137,6 +177,9 @@ class RecordedScanTask:
 
         # バックグラウンドタスクとして実行
         self._task = asyncio.create_task(self.run())
+
+        # エンコーディングトラッカーのクリーンアップタスクを開始
+        self._encoding_cleanup_task = asyncio.create_task(self._runEncodingCleanup())
 
 
     async def stop(self) -> None:
@@ -158,6 +201,15 @@ class RecordedScanTask:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+        # エンコーディングクリーンアップタスクを停止
+        if self._encoding_cleanup_task is not None:
+            self._encoding_cleanup_task.cancel()
+            try:
+                await self._encoding_cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._encoding_cleanup_task = None
 
 
     async def run(self) -> None:
@@ -362,7 +414,35 @@ class RecordedScanTask:
                 file_created_at = datetime.fromtimestamp(stat.st_ctime, tz=ZoneInfo('Asia/Tokyo'))
                 file_modified_at = datetime.fromtimestamp(stat.st_mtime, tz=ZoneInfo('Asia/Tokyo'))
 
-                # 全く録画できていない0バイトのファイルをスキップ
+                # エンコード中のファイルを先にチェック（サイズ0の場合でもエンコード中なら正常）
+                encoding_tracker = await EncodingFileTracker.getInstance()
+                is_encoding = await encoding_tracker.isEncodingFile(file_path)
+                if is_encoding:
+                    # ファイルが実際に存在し、最近変更されているかチェック
+                    import time
+                    current_time = time.time()
+                    file_mtime = stat.st_mtime
+
+                    # ファイルが5分以上変更されていない場合は、エンコードが完了している可能性が高い
+                    if current_time - file_mtime > 300:  # 5分 = 300秒
+                        logging.warning(f'{file_path}: File has not been modified for over 5 minutes, removing from encoding tracker.')
+                        await encoding_tracker.forceRemoveEncodingFile(file_path)
+                        # 削除後、処理を続行
+                    else:
+                        # ログ出力頻度を制限
+                        file_path_str = str(file_path)
+                        should_log = self._should_log_encoding_message(file_path_str)
+
+                        if should_log:
+                            logging.debug(f'{file_path}: File is currently being encoded. ignored.')
+                            # 定期的にスタイルエントリのクリーンアップを実行
+                            stale_count = await encoding_tracker.cleanupStaleEntries()
+                            if stale_count > 0:
+                                logging.info(f'Cleaned up {stale_count} stale encoding entries')
+
+                        return
+
+                # エンコード中でない場合のみ、全く録画できていない0バイトのファイルをスキップ
                 if file_size == 0:
                     logging.warning(f'{file_path}: File size is 0. ignored.')
                     return
@@ -377,9 +457,16 @@ class RecordedScanTask:
                 ## ファイル変更イベントから呼ばれた場合は existing_db_recorded_videos が None になるが、
                 ## DB には同一ファイルパスのレコードが存在する可能性がある
                 if existing_db_recorded_video is None:
-                    existing_db_recorded_video = await RecordedVideo.get_or_none(
-                        file_path=str(file_path)
-                    ).select_related('recorded_program', 'recorded_program__channel')
+                    try:
+                        existing_db_recorded_video = await RecordedVideo.get_or_none(
+                            file_path=str(file_path)
+                        ).select_related('recorded_program', 'recorded_program__channel')
+                    except MultipleObjectsReturned:
+                        # 複数のレコードが存在する場合、最新のものを取得
+                        existing_db_recorded_video = await RecordedVideo.filter(
+                            file_path=str(file_path)
+                        ).select_related('recorded_program', 'recorded_program__channel').order_by('-id').first()
+                        logging.warning(f'{file_path}: Multiple RecordedVideo records found, using latest (ID: {existing_db_recorded_video.id if existing_db_recorded_video else "None"})')
 
                 # 同じファイルパスの既存レコードがあり、ファイルの基本情報（作成日時、更新日時、サイズ）が前回と一致した場合、
                 # ファイル内容は変更されておらず、レコード内容は更新不要と判断してスキップ
@@ -421,6 +508,24 @@ class RecordedScanTask:
                         # 後続の処理でメタデータを解析し、解析に成功次第 DB に録画中として登録する
                         # 録画開始前にファイルアロケーションを行う録画予約ソフトでは、録画中も表面上ファイルサイズが変化しない問題への対処
                         pass
+
+                # エンコード済みファイルかどうかをチェック
+                if self._is_encoded_file(file_path):
+                    logging.info(f'{file_path}: Detected encoded file, attempting to inherit metadata from original file.')
+
+                    # 既にTSReplaceEncodingTaskで処理済みかチェック
+                    if existing_db_recorded_video and existing_db_recorded_video.is_tsreplace_encoded:
+                        logging.info(f'{file_path}: File already processed by TSReplaceEncodingTask with metadata inheritance (ID: {existing_db_recorded_video.id}, is_encoded: {existing_db_recorded_video.is_tsreplace_encoded}).')
+                        return
+
+                    logging.info(f'{file_path}: Existing record found: ID={existing_db_recorded_video.id if existing_db_recorded_video else "None"}, is_encoded={existing_db_recorded_video.is_tsreplace_encoded if existing_db_recorded_video else "None"}')
+
+                    inherited = await self._inherit_metadata_if_encoded_file(file_path)
+                    if inherited:
+                        logging.info(f'{file_path}: Successfully inherited metadata from original file.')
+                        return
+                    else:
+                        logging.warning(f'{file_path}: Failed to inherit metadata from original file, proceeding with normal analysis.')
 
                 # ProcessPoolExecutor を使い、別プロセス上でメタデータを解析
                 ## メタデータ解析処理は実装上同期 I/O で実装されており、また CPU-bound な処理のため、別プロセスで実行している
@@ -570,8 +675,13 @@ class RecordedScanTask:
             # RecordedVideo の保存または更新
             if existing_db_recorded_video is not None:
                 db_recorded_video = existing_db_recorded_video
+                # TSReplaceエンコード情報を保持するかどうかの判定
+                preserve_tsreplace_info = db_recorded_video.is_tsreplace_encoded
+                logging.info(f'Updating existing RecordedVideo ID {db_recorded_video.id}, preserve_tsreplace_info={preserve_tsreplace_info}')
             else:
                 db_recorded_video = RecordedVideo()
+                preserve_tsreplace_info = False
+                logging.info(f'Creating new RecordedVideo for {recorded_program.recorded_video.file_path}')
 
             # RecordedVideo の属性を設定 (id, created_at, updated_at は自動生成のため指定しない)
             db_recorded_video.recorded_program = db_recorded_program
@@ -585,7 +695,13 @@ class RecordedScanTask:
             db_recorded_video.recording_end_time = recorded_program.recorded_video.recording_end_time
             db_recorded_video.duration = recorded_program.recorded_video.duration
             db_recorded_video.container_format = recorded_program.recorded_video.container_format
-            db_recorded_video.video_codec = recorded_program.recorded_video.video_codec
+
+            # TSReplaceエンコード情報を保持する場合は、コーデック情報を上書きしない
+            if not preserve_tsreplace_info:
+                db_recorded_video.video_codec = recorded_program.recorded_video.video_codec
+            else:
+                logging.info(f'Preserving TSReplace codec info: {db_recorded_video.video_codec} (original: {db_recorded_video.original_video_codec})')
+
             db_recorded_video.video_codec_profile = recorded_program.recorded_video.video_codec_profile
             db_recorded_video.video_scan_type = recorded_program.recorded_video.video_scan_type
             db_recorded_video.video_frame_rate = recorded_program.recorded_video.video_frame_rate
@@ -599,8 +715,16 @@ class RecordedScanTask:
             db_recorded_video.secondary_audio_sampling_rate = recorded_program.recorded_video.secondary_audio_sampling_rate
             # この時点では CM 区間情報は未解析なので、明示的に未解析を表す None を設定する (デフォルトで None だが念のため)
             # 「解析したが CM 区間がなかった/検出に失敗した」場合、CMSectionsDetector 側で [] が設定される
-            db_recorded_video.cm_sections = None
+            # ただし、TSReplaceエンコード済みファイルの場合は、既存のCM区間情報を保持
+            if not preserve_tsreplace_info:
+                db_recorded_video.cm_sections = None
+            else:
+                logging.info(f'Preserving existing CM sections: {len(db_recorded_video.cm_sections) if db_recorded_video.cm_sections else "None"}')
+
             await db_recorded_video.save()
+
+            if preserve_tsreplace_info:
+                logging.info(f'Successfully preserved TSReplace info for RecordedVideo ID {db_recorded_video.id}: is_encoded={db_recorded_video.is_tsreplace_encoded}, codec={db_recorded_video.video_codec}')
 
 
     async def __runBackgroundAnalysis(self, recorded_program: schemas.RecordedProgram) -> None:
@@ -609,6 +733,7 @@ class RecordedScanTask:
         - キーフレーム解析
         - サムネイル生成
         - CM区間検出
+        - 自動エンコード開始（設定が有効な場合）
         など、時間のかかる処理を非同期に同時実行する
 
         Args:
@@ -633,6 +758,10 @@ class RecordedScanTask:
                         ## 既に生成されている時間のかかるシークバー用サムネイルを使い回し、処理時間短縮を図る
                         ThumbnailGenerator.fromRecordedProgram(recorded_program).generateAndSave(skip_tile_if_exists=True),
                     )
+
+            # バックグラウンド解析完了後、自動エンコードが有効な場合は開始
+            await self.__startAutoEncodingIfEnabled(recorded_program)
+
             logging.info(f'{file_path}: Background analysis completed.')
 
         except Exception as ex:
@@ -642,6 +771,113 @@ class RecordedScanTask:
             self._background_tasks.pop(file_path, None)
 
 
+    async def __startAutoEncodingIfEnabled(self, recorded_program: schemas.RecordedProgram) -> None:
+        """
+        自動エンコード設定が有効な場合、エンコードを開始する
+
+        Args:
+            recorded_program (schemas.RecordedProgram): エンコード対象の録画番組情報
+        """
+        try:
+            # 設定を取得
+            config = Config()
+
+            # 自動エンコードが無効の場合は何もしない
+            if not config.tsreplace_encoding.auto_encoding_enabled:
+                logging.debug(f'{recorded_program.recorded_video.file_path}: Auto encoding is disabled, skipping.')
+                return
+
+            # ファイルパスから既存のRecordedVideoを取得
+            recorded_video = await RecordedVideo.get_or_none(
+                file_path=recorded_program.recorded_video.file_path
+            )
+
+            if recorded_video is None:
+                logging.warning(f'{recorded_program.recorded_video.file_path}: RecordedVideo not found in database, skipping auto encoding.')
+                return
+
+            # エンコード済みファイル自体の場合はスキップ（ファイル名から判定）
+            input_file_path = recorded_program.recorded_video.file_path
+            if self._is_encoded_file(anyio.Path(input_file_path)):
+                logging.info(f'{input_file_path}: File appears to be already encoded (detected from filename), skipping auto encoding.')
+                return
+
+            # 既にエンコード済みファイルの場合はスキップ（データベースフラグから判定）
+            if recorded_video.is_tsreplace_encoded:
+                logging.info(f'{input_file_path}: Already encoded (database flag), skipping auto encoding.')
+                return
+
+            # エンコード設定を取得
+            auto_encoder = config.tsreplace_encoding.auto_encoding_encoder
+            auto_codec = config.tsreplace_encoding.auto_encoding_codec
+            auto_quality = config.tsreplace_encoding.encoding_quality_preset
+            delete_original = config.tsreplace_encoding.delete_original_default
+
+            logging.info(f'{recorded_program.recorded_video.file_path}: Starting auto encoding with {auto_encoder} encoder, {auto_codec} codec, {auto_quality} quality.')
+
+            # TSReplaceEncodingTaskを動的にインポート（循環インポートを避けるため）
+            from app.streams.TSReplaceEncodingTask import TSReplaceEncodingTask
+
+            # 出力ファイルパスを生成
+            input_file_path = recorded_program.recorded_video.file_path
+            output_file_path = self.__generateOutputFilePath(input_file_path, auto_codec)
+
+            # TSReplaceEncodingTaskを作成してバックグラウンドで実行
+            tsreplace_task = TSReplaceEncodingTask(
+                input_file_path=input_file_path,
+                output_file_path=output_file_path,
+                codec=auto_codec,
+                encoder_type=auto_encoder,
+                quality_preset=auto_quality,
+                delete_original=delete_original
+            )
+
+            # エンコードタスクのrec_file_idを設定
+            tsreplace_task.encoding_task.rec_file_id = recorded_video.id
+
+            # WebSocket通知のためにタスクを登録
+            from app.routers.TSReplaceRouter import register_auto_encoding_task, cleanup_auto_encoding_task
+            import asyncio
+
+            # タスクを管理辞書に追加
+            register_auto_encoding_task(tsreplace_task)
+
+            # バックグラウンドでエンコード実行とクリーンアップ
+            async def execute_and_cleanup():
+                try:
+                    await tsreplace_task.execute()
+                finally:
+                    # 完了後も一定時間タスクリストに残し、最終状態をクライアントが取得できるようにする
+                    await asyncio.sleep(60 * 5)  # 5分間保持
+                    cleanup_auto_encoding_task(tsreplace_task.encoding_task.task_id)
+
+            asyncio.create_task(execute_and_cleanup())
+
+            logging.info(f'{recorded_program.recorded_video.file_path}: Auto encoding task started successfully.')
+
+        except Exception as ex:
+            logging.error(f'{recorded_program.recorded_video.file_path}: Failed to start auto encoding:', exc_info=ex)
+
+
+    def __generateOutputFilePath(self, input_file_path: str, codec: str) -> str:
+        """
+        入力ファイルパスから出力ファイルパスを生成する
+
+        Args:
+            input_file_path (str): 入力ファイルパス
+            codec (str): コーデック（h264 or hevc）
+
+        Returns:
+            str: 出力ファイルパス
+        """
+        from pathlib import Path
+
+        input_path = Path(input_file_path)
+        stem = input_path.stem.replace(' （', '（')  # スペースを削除
+        output_filename = f"{stem}_{codec}{input_path.suffix}"
+        return str(input_path.parent / output_filename)
+
+
     async def watchRecordedFolders(self) -> None:
         """
         録画フォルダ以下のファイルシステム変更の監視を開始し、変更があれば随時メタデータを解析後、DB に永続化する
@@ -649,40 +885,63 @@ class RecordedScanTask:
 
         logging.info('Starting file system watch of recording folders.')
 
-        # 監視対象のディレクトリを設定
-        watch_paths = [str(path) for path in self.recorded_folders]
+        # 監視対象のディレクトリを設定（存在するパスのみを監視対象に含める）
+        watch_paths = []
+        for path in self.recorded_folders:
+            path_obj = pathlib.Path(path)
+            if path_obj.exists() and path_obj.is_dir():
+                watch_paths.append(str(path))
+                logging.info(f'Adding recording folder to watch: {path}')
+            else:
+                logging.warning(f'Recording folder does not exist or is not a directory, skipping: {path}')
+
+        if not watch_paths:
+            logging.warning('No valid recording folders found for file system watching. File system watch will not start.')
+            return
 
         # 録画完了チェック用のタスク
         completion_check_task = asyncio.create_task(self.__checkRecordingCompletion())
 
         try:
             # watchfiles によるファイル監視
-            async for changes in awatch(*watch_paths, recursive=True):
-                if not self._is_running:
-                    break
-
-                # 変更があったファイルごとに処理
-                for change_type, file_path_str in changes:
+            try:
+                async for changes in awatch(*watch_paths, recursive=True):
                     if not self._is_running:
                         break
 
-                    file_path = anyio.Path(file_path_str)
-                    # Mac の metadata ファイルをスキップ
-                    if file_path.name.startswith('._'):
-                        continue
-                    # 対象拡張子のファイル以外は無視
-                    if file_path.suffix.lower() not in self.SCAN_TARGET_EXTENSIONS:
-                        continue
+                    # 変更があったファイルごとに処理
+                    for change_type, file_path_str in changes:
+                        if not self._is_running:
+                            break
 
-                    try:
-                        # 追加 or 変更イベント
-                        if change_type == Change.added or change_type == Change.modified:
-                            await self.__handleFileChange(file_path)
-                        # 削除イベント
-                        elif change_type == Change.deleted:
-                            await self.__handleFileDeletion(file_path)
-                    except Exception as ex:
-                        logging.error(f'{file_path}: Error handling file change:', exc_info=ex)
+                        file_path = anyio.Path(file_path_str)
+                        # Mac の metadata ファイルをスキップ
+                        if file_path.name.startswith('._'):
+                            continue
+                        # 対象拡張子のファイル以外は無視
+                        if file_path.suffix.lower() not in self.SCAN_TARGET_EXTENSIONS:
+                            continue
+
+                        try:
+                            # 追加 or 変更イベント
+                            if change_type == Change.added or change_type == Change.modified:
+                                await self.__handleFileChange(file_path)
+                            # 削除イベント
+                            elif change_type == Change.deleted:
+                                await self.__handleFileDeletion(file_path)
+                        except Exception as ex:
+                            logging.error(f'{file_path}: Error handling file change:', exc_info=ex)
+            except FileNotFoundError as ex:
+                logging.error(f'File system watch failed - watch path not found: {ex}')
+                logging.error(f'Watch paths were: {watch_paths}')
+                # 監視対象パスの再確認
+                for path in watch_paths:
+                    if not pathlib.Path(path).exists():
+                        logging.error(f'Watch path no longer exists: {path}')
+            except PermissionError as ex:
+                logging.error(f'File system watch failed - permission denied: {ex}')
+            except OSError as ex:
+                logging.error(f'File system watch failed - OS error: {ex}')
 
         except asyncio.CancelledError:
             raise
@@ -867,3 +1126,260 @@ class RecordedScanTask:
 
             # 5秒待機
             await asyncio.sleep(5)
+
+    def _should_log_encoding_message(self, file_path: str) -> bool:
+        """
+        エンコーディング中ファイルのログメッセージを出力すべきかを判定する
+
+        Args:
+            file_path (str): ファイルパス
+
+        Returns:
+            bool: ログを出力すべき場合True
+        """
+        import time
+        current_time = time.time()
+
+        # 前回のログ出力時刻を確認
+        last_log_time = self._encoding_log_timestamps.get(file_path, 0)
+
+        # 指定された間隔以上経過している場合のみログ出力
+        if current_time - last_log_time >= self._encoding_log_interval:
+            self._encoding_log_timestamps[file_path] = current_time
+            return True
+
+        return False
+
+
+    async def _runEncodingCleanup(self) -> None:
+        """
+        エンコーディングトラッカーの定期クリーンアップを実行する
+        """
+        while self._is_running:
+            try:
+                # 10分間隔でクリーンアップを実行
+                await asyncio.sleep(600)
+
+                if not self._is_running:
+                    break
+
+                # エンコーディングトラッカーのstaleエントリをクリーンアップ
+                from app.utils.EncodingFileTracker import EncodingFileTracker
+                encoding_tracker = await EncodingFileTracker.getInstance()
+                stale_count = await encoding_tracker.cleanupStaleEntries()
+
+                if stale_count > 0:
+                    logging.info(f'Encoding cleanup task: Cleaned up {stale_count} stale encoding entries')
+
+                # ログ出力タイムスタンプの古いエントリもクリーンアップ
+                import time
+                current_time = time.time()
+                old_entries = [
+                    file_path for file_path, timestamp in self._encoding_log_timestamps.items()
+                    if current_time - timestamp > 3600  # 1時間以上古いエントリ
+                ]
+
+                for file_path in old_entries:
+                    self._encoding_log_timestamps.pop(file_path, None)
+
+                if old_entries:
+                    logging.debug(f'Cleaned up {len(old_entries)} old encoding log timestamps')
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logging.error(f'Error in encoding cleanup task: {e}', exc_info=True)
+
+    @staticmethod
+    def _is_encoded_file(file_path: anyio.Path) -> bool:
+        """
+        指定されたファイルがエンコード済みファイル（encodedフォルダ内）かどうかを判定する
+
+        Args:
+            file_path (anyio.Path): 判定対象のファイルパス
+
+        Returns:
+            bool: エンコード済みファイルの場合True
+        """
+        try:
+            # まず、ファイル名にエンコード識別子が含まれているかチェック（最も確実）
+            filename = file_path.name
+            if '_h264' in filename or '_h265' in filename or '_av1' in filename:
+                return True
+
+            # 設定が利用可能な場合のみエンコード済みフォルダをチェック
+            try:
+                config = Config()
+                file_path_str = str(file_path)
+
+                # メイン設定のencodedフォルダにあるかチェック
+                if config.tsreplace_encoding.encoded_folder:
+                    encoded_folder = str(config.tsreplace_encoding.encoded_folder)
+                    if file_path_str.startswith(encoded_folder.replace('\\', '/')) or file_path_str.startswith(encoded_folder.replace('/', '\\')):
+                        return True
+
+                # 各録画フォルダ内のEncodedサブフォルダにあるかチェック
+                for recorded_folder in config.video.recorded_folders:
+                    encoded_subfolder = f"{recorded_folder}/Encoded"
+                    encoded_subfolder_win = f"{recorded_folder}\\Encoded"
+                    if (file_path_str.startswith(encoded_subfolder.replace('\\', '/')) or
+                        file_path_str.startswith(encoded_subfolder_win.replace('/', '\\'))):
+                        return True
+            except Exception:
+                # 設定が利用できない場合は、ファイル名のみで判定
+                pass
+
+            return False
+
+        except Exception as e:
+            logging.error(f'Error checking if file is encoded: {e}', exc_info=True)
+            return False
+
+    @staticmethod
+    async def _find_original_file_for_encoded(encoded_file_path: anyio.Path) -> RecordedVideo | None:
+        """
+        エンコード済みファイルに対応する元ファイルのレコードを検索する
+
+        Args:
+            encoded_file_path (anyio.Path): エンコード済みファイルのパス
+
+        Returns:
+            RecordedVideo | None: 対応する元ファイルのレコード、見つからない場合はNone
+        """
+        try:
+            encoded_filename = encoded_file_path.name
+            # ファイル名から拡張子を除いた部分を取得
+            base_name = pathlib.Path(encoded_filename).stem
+
+            # エンコード済みファイル名からエンコード用サフィックスを除去
+            # 例: "202509041945010102-2びじゅチューン！...._h264_1" -> "202509041945010102-2びじゅチューン！...."
+            import re
+            # _h264, _h265, _av1のサフィックス（番号付きも含む）を除去
+            codec_pattern = r'_(h264|h265|av1)(?:_\d+)?$'
+            match = re.search(codec_pattern, base_name)
+            if match:
+                base_name_without_codec = base_name[:match.start()]
+            else:
+                base_name_without_codec = base_name
+
+            # 番号部分を除去して基本パターンを作成
+            # 例: "202509041945010102-2びじゅチューン！...." -> "202509041945010102-びじゅチューン！...."
+            import re
+            # タイムスタンプの後の"-数字"パターンを"-"に置換
+            base_pattern = re.sub(r'^(\d{15})-\d+(.*)$', r'\1\2', base_name_without_codec)
+            if base_pattern != base_name_without_codec:
+                logging.debug(f'Created base pattern: {base_pattern} from {base_name_without_codec}')
+
+            # 複数の検索パターンを試行
+            search_patterns = [
+                base_name_without_codec,  # 完全一致（数字付き）
+                base_pattern,             # 数字なしパターン
+            ]
+
+            for pattern in search_patterns:
+                logging.debug(f'Searching for original file with pattern: {pattern}')
+
+                # 同じファイル名（拡張子除く）でTSReplaceエンコード済みでないファイルを検索
+                original_candidates = await RecordedVideo.filter(
+                    file_path__contains=pattern
+                ).select_related('recorded_program')
+
+                for candidate in original_candidates:
+                    candidate_filename = pathlib.Path(candidate.file_path).name
+                    candidate_base_name = pathlib.Path(candidate_filename).stem
+
+                    # エンコード済みファイルのパスと異なることを確認
+                    if str(encoded_file_path) == candidate.file_path:
+                        continue
+
+                    # ファイル名パターンが一致するかチェック
+                    if (candidate_base_name == pattern or
+                        candidate_base_name.startswith(pattern + '-') or
+                        pattern.startswith(candidate_base_name) or
+                        candidate_base_name.startswith(pattern.split('-')[0] if '-' in pattern else pattern)):
+
+                        logging.info(f'Found potential original file for {encoded_file_path}: {candidate.file_path}')
+                        return candidate
+
+            logging.warning(f'No original file found for encoded file: {encoded_file_path}')
+            return None
+
+        except Exception as e:
+            logging.error(f'Error finding original file for encoded file: {e}', exc_info=True)
+            return None
+
+    @staticmethod
+    async def _inherit_metadata_if_encoded_file(file_path: anyio.Path) -> bool:
+        """
+        エンコード済みファイルの場合、元ファイルのメタデータを継承する
+
+        Args:
+            file_path (anyio.Path): エンコード済みファイルのパス
+
+        Returns:
+            bool: メタデータの継承が成功した場合True、失敗した場合False
+        """
+        try:
+            # エンコード済みファイルかどうかを判定
+            if not RecordedScanTask._is_encoded_file(file_path):
+                return False  # エンコード済みファイルでない場合は何もしない
+
+            logging.info(f'Detected encoded file, looking for original metadata: {file_path}')
+
+            # 元ファイルのレコードを検索
+            original_video = await RecordedScanTask._find_original_file_for_encoded(file_path)
+            if original_video is None:
+                logging.warning(f'Cannot inherit metadata - original file not found for: {file_path}')
+                return False
+
+            logging.info(f'Inheriting metadata from original file: {original_video.file_path}')
+
+            # エンコード済みファイルのDBレコードを取得
+            try:
+                encoded_video = await RecordedVideo.get_or_none(file_path=str(file_path))
+                logging.info(f'{file_path}: Found encoded file record: ID={encoded_video.id if encoded_video else "None"}, is_encoded={encoded_video.is_tsreplace_encoded if encoded_video else "None"}')
+            except MultipleObjectsReturned:
+                # 複数のレコードが存在する場合、最新のものを取得
+                encoded_video = await RecordedVideo.filter(file_path=str(file_path)).order_by('-id').first()
+                logging.warning(f'{file_path}: Multiple RecordedVideo records found, using latest (ID: {encoded_video.id if encoded_video else "None"})')
+                logging.warning(f'{file_path}: Latest record is_encoded={encoded_video.is_tsreplace_encoded if encoded_video else "None"}')
+
+            if encoded_video is None:
+                logging.warning(f'Cannot inherit metadata - encoded file record not found for: {file_path}')
+                return False
+
+            # 元ファイルのメタデータを継承
+            updated = False
+
+            # CM区間情報を継承
+            if original_video.cm_sections is not None:
+                encoded_video.cm_sections = original_video.cm_sections
+                logging.info(f'Inherited CM sections: {len(original_video.cm_sections)} sections')
+                updated = True
+
+            # キーフレーム情報を継承
+            if original_video.key_frames:
+                encoded_video.key_frames = original_video.key_frames
+                logging.info(f'Inherited key frames: {len(original_video.key_frames)} frames')
+                updated = True
+
+            # TSReplace情報を継承
+            if original_video.is_tsreplace_encoded:
+                encoded_video.is_tsreplace_encoded = True
+                encoded_video.tsreplace_encoded_at = original_video.tsreplace_encoded_at
+                encoded_video.original_video_codec = original_video.original_video_codec
+                logging.info(f'Inherited TSReplace encoding information')
+                updated = True
+
+            # 変更があった場合のみDBを更新
+            if updated:
+                await encoded_video.save()
+                logging.info(f'Successfully inherited metadata from original file for: {file_path}')
+                return True
+            else:
+                logging.info(f'No metadata to inherit for: {file_path}')
+                return False
+
+        except Exception as e:
+            logging.error(f'Error inheriting metadata for encoded file: {e}', exc_info=True)
+            return False

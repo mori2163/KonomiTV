@@ -262,11 +262,18 @@ class ThumbnailGenerator:
         # ジャンル情報から顔検出の要否・アニメ or 実写人物が重要なジャンルを判断
         face_detection_mode = DetermineFaceDetectionMode(recorded_program.genres)
 
+        # エンコード済みファイルがある場合はそちらを優先、なければ元のファイルを使用
+        recorded_video = recorded_program.recorded_video
+        if recorded_video.is_tsreplace_encoded and recorded_video.encoded_file_path:
+            file_path = anyio.Path(recorded_video.encoded_file_path)
+        else:
+            file_path = anyio.Path(recorded_video.file_path)
+
         # コンストラクタに渡す
         return cls(
-            file_path = anyio.Path(recorded_program.recorded_video.file_path),
-            container_format = recorded_program.recorded_video.container_format,
-            file_hash = recorded_program.recorded_video.file_hash,
+            file_path = file_path,
+            container_format = recorded_video.container_format,
+            file_hash = recorded_video.file_hash,
             duration_sec = duration_sec,
             candidate_time_ranges = candidate_time_ranges,
             face_detection_mode = face_detection_mode,

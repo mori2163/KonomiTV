@@ -344,6 +344,107 @@ class _ServerSettingsDiscord(BaseModel):
             return None
         return str(value)
 
+class _ServerSettingsTSReplaceEncoding(BaseModel):
+    """tsreplaceエンコード設定"""
+    auto_encoding_enabled: bool = False
+    auto_encoding_codec: Literal['h264', 'hevc'] = 'h264'
+    auto_encoding_encoder: Literal['software', 'hardware'] = 'software'
+    # ハードウェアエンコーダーの種類（NVIDIA、AMD、Intel）
+    hardware_encoder_type: Literal['nvidia', 'amd', 'intel'] = 'nvidia'
+    delete_original_after_encoding: bool = False
+    encoding_quality_preset: str = 'medium'
+    max_concurrent_encodings: PositiveInt = 1
+    hardware_encoder_available: bool = False
+    # 新しい設定フィールド
+    enabled: bool = True
+    # エンコード済みファイルの保存先フォルダ（未設定の場合は録画フォルダ内にEncodedフォルダを自動作成）
+    encoded_folder: str | None = None
+    # エンコード後に元ファイルを削除するかのデフォルト設定（False=元ファイルを維持）
+    delete_original_default: bool = False
+    max_concurrent_tasks: PositiveInt = 1
+    task_timeout_minutes: PositiveInt = 180
+    # TSReplace用エンコーダーオプション設定
+    # ソフトウェアエンコード (FFmpeg)
+    ffmpeg_h264_options: str = '-y -f mpegts -i - -copyts -start_at_zero -vf yadif -an -c:v libx264 -preset medium -crf 23 -g 90 -f mpegts -'
+    ffmpeg_hevc_options: str = '-y -f mpegts -i - -copyts -start_at_zero -vf yadif -an -c:v libx265 -preset medium -crf 23 -g 90 -f mpegts -'
+    # NVIDIA GPU用オプション (NVEncC)
+    nvidia_h264_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    nvidia_hevc_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    # AMD GPU用オプション (VCEEncC)
+    amd_h264_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    amd_hevc_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --qvbr 23 --gop-len 90 --output-format mpegts -o -'
+    # Intel GPU用オプション (QSVEncC)
+    intel_h264_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c h264 --icq 23 --gop-len 90 --output-format mpegts -o -'
+    intel_hevc_options: str = '-i - --input-format mpegts --tff --vpp-deinterlace normal -c hevc --icq 23 --gop-len 90 --output-format mpegts -o -'
+
+    @field_validator('hardware_encoder_available', mode='after')
+    def validate_hardware_encoder_available(cls, hardware_encoder_available: bool, info: ValidationInfo) -> bool:
+        # バリデーションをスキップする場合はそのまま返す
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return hardware_encoder_available
+
+        # ハードウェアエンコーダーの利用可否を自動検出
+        try:
+            # 循環参照を避けるために遅延インポート
+            from app.utils.TSReplaceEncodingUtil import TSReplaceEncodingUtil
+            detected_availability = TSReplaceEncodingUtil.detectHardwareEncoderAvailability()
+
+            # 検出結果をログに出力
+            from app import logging
+            if detected_availability:
+                logging.info('TSReplace Hardware Encoder: Available')
+            else:
+                logging.info('TSReplace Hardware Encoder: Not Available (Software encoding only)')
+
+            return detected_availability
+        except Exception as e:
+            # エラーが発生した場合は設定値をそのまま返す
+            from app import logging
+            logging.warning(f'TSReplace Hardware Encoder detection failed: {e}')
+            return hardware_encoder_available
+
+    @field_validator('auto_encoding_codec')
+    def validate_auto_encoding_codec(cls, codec: str, info: ValidationInfo) -> str:
+        # バリデーションをスキップする場合はそのまま返す
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return codec
+
+        # 利用可能なコーデックかチェック
+        try:
+            from app.utils.TSReplaceEncodingUtil import TSReplaceEncodingUtil
+            available_codecs = TSReplaceEncodingUtil.getAvailableCodecs()
+            if codec not in available_codecs:
+                raise ValueError(
+                    f'コーデック {codec.upper()} は利用できません。\n'
+                    f'利用可能なコーデック: {", ".join([c.upper() for c in available_codecs])}'
+                )
+        except (ImportError, Exception):
+            # TSReplaceEncodingUtilが利用できない場合や初期化エラーの場合はスキップ
+            pass
+
+        return codec
+
+    @field_validator('auto_encoding_encoder')
+    def validate_auto_encoding_encoder(cls, encoder_type: str, info: ValidationInfo) -> str:
+        # バリデーションをスキップする場合はそのまま返す
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return encoder_type
+
+        # ハードウェアエンコーダーが指定されているが利用できない場合の警告
+        if encoder_type == 'hardware':
+            try:
+                from app.utils.TSReplaceEncodingUtil import TSReplaceEncodingUtil
+                if not TSReplaceEncodingUtil.detectHardwareEncoderAvailability():
+                    from app import logging
+                    logging.warning(
+                        'TSReplace: ハードウェアエンコーダーが指定されていますが利用できません。'
+                        'ソフトウェアエンコードにフォールバックします。'
+                    )
+            except (ImportError, Exception):
+                # TSReplaceEncodingUtilが利用できない場合や初期化エラーの場合はスキップ
+                pass
+
+        return encoder_type
 
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()
@@ -352,6 +453,7 @@ class ServerSettings(BaseModel):
     video: _ServerSettingsVideo = _ServerSettingsVideo()
     capture: _ServerSettingsCapture = _ServerSettingsCapture()
     discord: _ServerSettingsDiscord = _ServerSettingsDiscord()
+    tsreplace_encoding: _ServerSettingsTSReplaceEncoding = _ServerSettingsTSReplaceEncoding()
 
 
 # サーバー設定データと読み込み・保存用の関数

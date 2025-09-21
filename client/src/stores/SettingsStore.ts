@@ -93,6 +93,15 @@ export interface ILocalClientSettings extends IClientSettings {
     twitter_active_tab: 'Search' | 'Timeline' | 'Capture';
     tweet_hashtag_position: 'Prepend' | 'Append' | 'PrependWithLineBreak' | 'AppendWithLineBreak';
     tweet_capture_watermark_position: 'None' | 'TopLeft' | 'TopRight' | 'BottomLeft' | 'BottomRight';
+    tsreplace_auto_encoding_enabled: boolean;
+    tsreplace_auto_encoding_codec: 'h264' | 'hevc';
+    tsreplace_auto_encoding_encoder: 'software' | 'hardware';
+    tsreplace_delete_original_after_encoding: boolean;
+    tsreplace_encoding_quality_preset: string;
+    tsreplace_max_concurrent_encodings: number;
+    tsreplace_hardware_encoder_available: boolean;
+    tsreplace_continue_on_missing_record: boolean;
+    tsreplace_max_retry_count: number;
 }
 
 /**
@@ -268,6 +277,27 @@ export const ILocalClientSettingsDefault: ILocalClientSettings = {
     tweet_hashtag_position: 'Append',
     // ツイートするキャプチャに番組名の透かしを描画する (Default: 透かしを描画しない)
     tweet_capture_watermark_position: 'None',
+
+    // ***** 設定 → TSReplaceエンコード *****
+
+    // 自動エンコードを有効にする (Default: 無効)
+    tsreplace_auto_encoding_enabled: false,
+    // 自動エンコードのコーデック (Default: H.264)
+    tsreplace_auto_encoding_codec: 'h264',
+    // 自動エンコードのエンコーダー (Default: ソフトウェア)
+    tsreplace_auto_encoding_encoder: 'software',
+    // エンコード後に元ファイルを削除する (Default: 削除しない)
+    tsreplace_delete_original_after_encoding: false,
+    // エンコード品質プリセット (Default: medium)
+    tsreplace_encoding_quality_preset: 'medium',
+    // 最大同時エンコード数 (Default: 1)
+    tsreplace_max_concurrent_encodings: 1,
+    // ハードウェアエンコーダーが利用可能かどうか (Default: 利用不可) (同期無効)
+    tsreplace_hardware_encoder_available: false,
+    // データベースレコードが見つからない場合でもエンコードを続行する (Default: 続行する)
+    tsreplace_continue_on_missing_record: true,
+    // エンコードエラー時の最大リトライ回数 (Default: 3)
+    tsreplace_max_retry_count: 3,
 };
 
 // 同期対象の設定データのキーのみを列挙した配列
@@ -333,6 +363,15 @@ export const SYNCABLE_SETTINGS_KEYS: (keyof IClientSettings)[] = [
     'twitter_active_tab',
     'tweet_hashtag_position',
     'tweet_capture_watermark_position',
+    'tsreplace_auto_encoding_enabled',
+    'tsreplace_auto_encoding_codec',
+    'tsreplace_auto_encoding_encoder',
+    'tsreplace_delete_original_after_encoding',
+    'tsreplace_encoding_quality_preset',
+    'tsreplace_max_concurrent_encodings',
+    'tsreplace_hardware_encoder_available',
+    'tsreplace_continue_on_missing_record',
+    'tsreplace_max_retry_count',
 ];
 
 

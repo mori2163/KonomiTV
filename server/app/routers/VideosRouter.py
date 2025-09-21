@@ -20,14 +20,60 @@ from starlette.datastructures import Headers
 from tortoise import connections
 
 from app import logging, schemas
+from app.config import Config
 from app.constants import STATIC_DIR, THUMBNAILS_DIR
 from app.metadata.RecordedScanTask import RecordedScanTask
 from app.metadata.ThumbnailGenerator import ThumbnailGenerator
 from app.models.RecordedProgram import RecordedProgram
 from app.models.User import User
-from app.routers.UsersRouter import GetCurrentAdminUser
+from app.routers.UsersRouter import GetCurrentAdminUser, GetCurrentUser
 from app.utils.DriveIOLimiter import DriveIOLimiter
 from app.utils.JikkyoClient import JikkyoClient
+
+
+def _build_encoded_folder_filter() -> tuple[str, list[str]]:
+    """
+    encodedフォルダ内のファイルを除外するSQLフィルタを構築する
+
+    Returns:
+        tuple[str, list[str]]: (WHERE句の文字列, パラメータのリスト)
+    """
+    config = Config()
+    encoded_folders = []
+
+    # メイン設定のencodedフォルダ
+    if config.tsreplace_encoding.encoded_folder:
+        encoded_folders.append(config.tsreplace_encoding.encoded_folder)
+
+    # 各録画フォルダ内のEncodedサブフォルダ
+    for recorded_folder in config.video.recorded_folders:
+        encoded_subfolder = f"{recorded_folder}/Encoded"
+        encoded_folders.append(encoded_subfolder)
+        # Windowsパス区切り文字にも対応
+        encoded_subfolder_win = f"{recorded_folder}\\Encoded"
+        encoded_folders.append(encoded_subfolder_win)
+
+    if not encoded_folders:
+        return "", []
+
+    # SQLのLIKE条件を構築（各encodedフォルダパターンをORで結合）
+    like_conditions = []
+    params = []
+
+    for folder in encoded_folders:
+        # パスの正規化（末尾のスラッシュを統一）
+        normalized_folder = folder.rstrip('/\\')
+
+        # Unix形式のパス
+        like_conditions.append("rv.file_path NOT LIKE ?")
+        params.append(f"{normalized_folder}/%")
+
+        # Windows形式のパス
+        like_conditions.append("rv.file_path NOT LIKE ?")
+        params.append(f"{normalized_folder}\\%")
+
+    where_clause = f"AND ({' AND '.join(like_conditions)})"
+    return where_clause, params
 
 
 # ルーター
@@ -79,8 +125,12 @@ async def ConvertRowToRecordedProgram(row: dict[str, Any]) -> schemas.RecordedPr
         'secondary_audio_sampling_rate': row['secondary_audio_sampling_rate'],
         'has_key_frames': has_key_frames,
         'cm_sections': cm_sections,
-        'created_at': row['created_at'],
-        'updated_at': row['updated_at'],
+        # TSReplace エンコード関連フィールド
+        'is_tsreplace_encoded': bool(row['is_tsreplace_encoded']),
+        'tsreplace_encoded_at': row['tsreplace_encoded_at'],
+        'original_video_codec': row['original_video_codec'],
+        'created_at': row['rv_created_at'],
+        'updated_at': row['rv_updated_at'],
     }
 
     # channel のデータを構築 (channel_id が存在する場合のみ)
@@ -275,6 +325,7 @@ async def GetThumbnailResponse(
     response_model = schemas.RecordedPrograms,
 )
 async def VideosAPI(
+    request: Request,
     order: Annotated[Literal['desc', 'asc', 'ids'], Query(description='ソート順序 (desc or asc or ids) 。ids を指定すると、ids パラメータで指定された順序を維持する。')] = 'desc',
     page: Annotated[int, Query(description='ページ番号。')] = 1,
     ids: Annotated[list[int] | None, Query(description='録画番組 ID のリスト。指定時は指定された ID の録画番組のみを返す。')] = None,
@@ -343,6 +394,12 @@ async def VideosAPI(
             -- 空かどうかの判定結果だけを取得する
             CASE WHEN rv.key_frames != '[]' THEN 1 ELSE 0 END AS has_key_frames,
             rv.cm_sections,
+            -- TSReplace エンコード関連フィールド
+            rv.is_tsreplace_encoded,
+            rv.tsreplace_encoded_at,
+            rv.original_video_codec,
+            rv.created_at AS rv_created_at,
+            rv.updated_at AS rv_updated_at,
             ch.id AS ch_id,
             ch.display_channel_id,
             ch.network_id AS ch_network_id,
@@ -365,6 +422,9 @@ async def VideosAPI(
         LIMIT ? OFFSET ?
     """
 
+    # encodedフォルダフィルターを構築
+    encoded_filter, encoded_params = _build_encoded_folder_filter()
+
     # ids が指定されている場合は、指定された ID の録画番組のみを返す
     target_ids: list[int] | None = None
     if ids is not None:
@@ -381,42 +441,53 @@ async def VideosAPI(
             # IN 句のプレースホルダーを生成
             placeholders = ','.join(['?' for _ in target_ids])
             query = base_query.format(
-                where_clause = f'AND rp.id IN ({placeholders})',
+                where_clause = f'AND rp.id IN ({placeholders}) {encoded_filter}',
                 order = 'DESC'  # order は無視されるが、SQL の構文上必要
             )
-            params = [*target_ids, str(PAGE_SIZE), '0']  # OFFSET は 0 固定
+            params = [*target_ids, *encoded_params, str(PAGE_SIZE), '0']  # OFFSET は 0 固定
 
             # 総数を取得
-            total_query = 'SELECT COUNT(*) as count FROM recorded_programs WHERE id IN ({})'.format(
-                ','.join(['?' for _ in ids])
-            )
-            total_params = ids
+            total_query = f"""
+                SELECT COUNT(*) as count
+                FROM recorded_programs rp
+                JOIN recorded_videos rv ON rp.id = rv.recorded_program_id
+                WHERE rp.id IN ({','.join(['?' for _ in ids])}) {encoded_filter}
+            """
+            total_params = [*ids, *encoded_params]
 
         else:
             # 通常のソート順で取得
             query = base_query.format(
-                where_clause = f'AND rp.id IN ({",".join(["?" for _ in ids])})',
+                where_clause = f'AND rp.id IN ({",".join(["?" for _ in ids])}) {encoded_filter}',
                 order = 'DESC' if order == 'desc' else 'ASC'
             )
-            params = [*ids, str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
+            params = [*ids, *encoded_params, str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
 
             # 総数を取得
-            total_query = 'SELECT COUNT(*) as count FROM recorded_programs WHERE id IN ({})'.format(
-                ','.join(['?' for _ in ids])
-            )
-            total_params = ids
+            total_query = f"""
+                SELECT COUNT(*) as count
+                FROM recorded_programs rp
+                JOIN recorded_videos rv ON rp.id = rv.recorded_program_id
+                WHERE rp.id IN ({','.join(['?' for _ in ids])}) {encoded_filter}
+            """
+            total_params = [*ids, *encoded_params]
 
     else:
         # すべての録画番組を返す
         query = base_query.format(
-            where_clause = '',
+            where_clause = encoded_filter,
             order = 'DESC' if order == 'desc' else 'ASC'
         )
-        params = [str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
+        params = [*encoded_params, str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)]
 
         # 総数を取得
-        total_query = 'SELECT COUNT(*) as count FROM recorded_programs'
-        total_params = []
+        total_query = f"""
+            SELECT COUNT(*) as count
+            FROM recorded_programs rp
+            JOIN recorded_videos rv ON rp.id = rv.recorded_program_id
+            WHERE 1=1 {encoded_filter}
+        """
+        total_params = encoded_params
 
     try:
         # データベースから直接クエリを実行
@@ -457,6 +528,7 @@ async def VideosAPI(
     response_model = schemas.RecordedPrograms,
 )
 async def VideosSearchAPI(
+    request: Request,
     query: Annotated[str, Query(description='検索キーワード。title または series_title または subtitle のいずれかに部分一致する録画番組を検索する。')] = '',
     order: Annotated[Literal['desc', 'asc'], Query(description='ソート順序 (desc or asc) 。')] = 'desc',
     page: Annotated[int, Query(description='ページ番号。')] = 1,
@@ -505,12 +577,19 @@ async def VideosSearchAPI(
 
     # クエリが空の場合は全件取得と同じ挙動にする
     if not query:
-        return await VideosAPI(order=order, page=page)
+        return await VideosAPI(request=request, order=order, page=page)
 
     # 検索条件を構築
     where_clause, params, keywords = BuildSearchConditions(query)
     if not keywords:  # キーワードが空の場合は全件取得と同じ挙動にする
-        return await VideosAPI(order=order, page=page)
+        return await VideosAPI(request=request, order=order, page=page)
+
+    # encodedフォルダフィルターを構築
+    encoded_filter, encoded_params = _build_encoded_folder_filter()
+
+    # 検索条件とencodedフィルターを結合
+    combined_where_clause = f"{where_clause} {encoded_filter}"
+    combined_params = [*params, *encoded_params]
 
     # 生 SQL クエリを構築
     base_query = """
@@ -569,6 +648,12 @@ async def VideosSearchAPI(
             -- 空かどうかの判定結果だけを取得する
             CASE WHEN rv.key_frames != '[]' THEN 1 ELSE 0 END AS has_key_frames,
             rv.cm_sections,
+            -- TSReplace エンコード関連フィールド
+            rv.is_tsreplace_encoded,
+            rv.tsreplace_encoded_at,
+            rv.original_video_codec,
+            rv.created_at AS rv_created_at,
+            rv.updated_at AS rv_updated_at,
             ch.id AS ch_id,
             ch.display_channel_id,
             ch.network_id AS ch_network_id,
@@ -592,25 +677,26 @@ async def VideosSearchAPI(
 
     # クエリとパラメータを構築
     query = base_query.format(
-        where_clause = where_clause,
+        where_clause = combined_where_clause,
         order = 'DESC' if order == 'desc' else 'ASC'
     )
-    params.extend([str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)])
+    combined_params.extend([str(PAGE_SIZE), str((page - 1) * PAGE_SIZE)])
 
     # 総数を取得するクエリを構築
     total_query = f"""
         SELECT COUNT(*) as count
         FROM recorded_programs rp
+        JOIN recorded_videos rv ON rp.id = rv.recorded_program_id
         LEFT JOIN channels ch ON rp.channel_id = ch.id
         WHERE {where_clause}
     """
-    total_params = params[:-2]  # LIMIT と OFFSET を除外
+    total_params = combined_params[:-2]  # LIMIT と OFFSET を除外
 
     try:
         # データベースから直接クエリを実行
         conn = connections.get('default')
-        rows = await conn.execute_query(query, params)
-        total_result = await conn.execute_query(total_query, total_params)
+        rows = await conn.execute_query(query, combined_params)
+        total_result = await conn.execute_query(total_query.format(where_clause=combined_where_clause), total_params)
         total = total_result[1][0]['count']
 
         # 結果を Pydantic モデルに変換
@@ -655,20 +741,61 @@ async def VideoAPI(
     responses = {
         200: {'content': {'video/mp2t': {}}},
         422: {'description': 'Specified video_id was not found'},
+        404: {'description': 'File not found'},
     },
 )
 async def VideoDownloadAPI(
     recorded_program: Annotated[RecordedProgram, Depends(GetRecordedProgram)],
+    file_type: Annotated[Literal['original', 'encoded'], Query(description='ダウンロードするファイルの種類 (original: 元ファイル, encoded: エンコード済みファイル)')] = 'original',
 ):
     """
     指定された録画番組の MPEG-TS ファイルをダウンロードする。
     """
 
-    # ファイルパスとファイル名を取得
-    file_path = recorded_program.recorded_video.file_path
-    filename = pathlib.Path(file_path).name
+    # エンコード済みの場合の処理
+    if recorded_program.recorded_video.is_tsreplace_encoded:
+        if file_type == 'original':
+            # 元ファイルが削除されているか確認
+            if recorded_program.recorded_video.is_original_file_deleted:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail='Original file has been deleted',
+                )
+            # 元ファイルをダウンロード（file_pathは元ファイルのパス）
+            else:
+                file_path = recorded_program.recorded_video.file_path
+                filename = pathlib.Path(file_path).name
+        else:
+            # エンコード済みファイルをダウンロード
+            if not recorded_program.recorded_video.encoded_file_path:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail='Encoded file path not available',
+                )
+            file_path = recorded_program.recorded_video.encoded_file_path
+            filename = pathlib.Path(file_path).name
+    else:
+        # エンコードされていない場合
+        if file_type == 'encoded':
+            # エンコードされていないのにエンコード済みファイルが要求された場合
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail='Encoded file not found',
+            )
+        else:
+            # 元ファイルをダウンロード
+            file_path = recorded_program.recorded_video.file_path
+            filename = pathlib.Path(file_path).name
 
-    # MPEG-TS ファイルをダウンロードさせる
+    # ファイルが実際に存在するか確認
+    if not pathlib.Path(file_path).exists():
+        logging.error(f'[VideoDownloadAPI] File not found: {file_path}')
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='File not found',
+        )
+
+    # ファイルをダウンロードさせる
     return FileResponse(
         path = file_path,
         filename = filename,

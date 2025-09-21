@@ -144,6 +144,11 @@ const router = createRouter({
             component: () => import('@/views/Settings/Server.vue'),
         },
         {
+            path: '/settings/tsreplace-encoding',
+            name: 'Settings TSReplace Encoding',
+            component: () => import('@/views/Settings/TSReplaceEncoding.vue'),
+        },
+        {
             path: '/login/',
             name: 'Login',
             component: () => import('@/views/Login.vue'),

@@ -5,10 +5,23 @@
         </router-view>
         <Snackbars />
     </v-app>
+    <GlobalTSReplaceEncodingProgress />
 </template>
 <script lang="ts" setup>
 
+import { onMounted } from 'vue';
+
 import Snackbars from '@/components/Snackbars.vue';
+import GlobalTSReplaceEncodingProgress from '@/components/Videos/GlobalTSReplaceEncodingProgress.vue';
+import useTSReplaceEncodingStore from '@/stores/TSReplaceEncodingStore';
+
+// エンコードストアを初期化
+const encodingStore = useTSReplaceEncodingStore();
+
+// アプリケーション初期化時にWebSocket接続を開始
+onMounted(() => {
+    encodingStore.initializeWebSocket();
+});
 
 </script>
 <style lang="scss">

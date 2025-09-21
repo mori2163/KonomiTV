@@ -97,3 +97,25 @@ async def ServerSettingsUpdateAPI(
 
     # バリデーションが完了したサーバー設定を config.yaml に保存する
     SaveConfig(server_settings)
+
+@router.get(
+    '/tsreplace-encoding/hardware-encoder-status',
+    summary = 'TSReplaceエンコード ハードウェアエンコーダー状況取得 API',
+    response_description = 'ハードウェアエンコーダーの利用可否と利用可能なコーデック情報。',
+)
+async def TSReplaceEncodingHardwareEncoderStatusAPI():
+    """
+    TSReplaceエンコード機能で利用可能なハードウェアエンコーダーの状況を取得する。<br>
+    ハードウェアエンコーダーの利用可否と、利用可能なコーデックの一覧を返す。
+    """
+
+    from app.utils.TSReplaceEncodingUtil import TSReplaceEncodingUtil
+
+    hardware_available = TSReplaceEncodingUtil.detectHardwareEncoderAvailability()
+    available_codecs = TSReplaceEncodingUtil.getAvailableCodecs()
+
+    return {
+        'hardware_encoder_available': hardware_available,
+        'available_codecs': available_codecs,
+        'encoder_name': Config().general.encoder,
+    }
