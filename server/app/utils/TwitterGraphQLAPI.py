@@ -7,8 +7,8 @@ from datetime import datetime
 from typing import Any, ClassVar, Literal, cast
 from zoneinfo import ZoneInfo
 
-import httpx
 from bs4 import BeautifulSoup
+from curl_cffi import requests as curl_requests
 from typing_extensions import TypedDict
 
 from app import logging, schemas
@@ -218,10 +218,10 @@ class TwitterGraphQLAPI:
         self.html_headers_dict = self.cookie_session_user_handler.get_html_headers()  # HTML 用ヘッダー
         self.js_headers_dict = self.cookie_session_user_handler.get_js_headers(cross_origin=True)  # JavaScript 用ヘッダー
 
-        # 指定されたアカウントへの認証情報が含まれる Cookie を取得し、httpx.Cookies に変換
-        ## ここで生成した httpx.Cookies を HTTP クライアントに渡す
+        # 指定されたアカウントへの認証情報が含まれる Cookie を取得し、curl_cffi.requests.Cookies に変換
+        ## ここで生成した Cookie を HTTP クライアントに渡す
         cookies_dict = self.cookie_session_user_handler.get_cookies_as_dict()
-        cookies = httpx.Cookies()
+        cookies = curl_requests.Cookies()
         for name, value in cookies_dict.items():
             # ドメインを ".x.com" 、パスを "/" に設定しておくことが重要 (でないと Cookie 更新時にちゃんと上書きできない)
             ## ただし "lang" キーだけは ".x.com" でなく "x.com" にする必要がある
@@ -230,18 +230,20 @@ class TwitterGraphQLAPI:
             else:
                 cookies.set(name, value, domain='.x.com', path='/')
 
-        # httpx の非同期 HTTP クライアントのインスタンスを作成
+        # curl-cffi の非同期 HTTP クライアントのインスタンスを作成
         ## 可能な限り Chrome からのリクエストに偽装するため、app.constants.HTTPX_CLIENT は使わずに独自のインスタンスを作成する
-        self.httpx_client = httpx.AsyncClient(
+        self.curl_session = curl_requests.AsyncSession(
             ## Cookie を設定
             ## Cookie はこの HTTP クライアントで行う全リクエストで共有されてほしいので、ここで設定している
             ## 一方リクエストヘッダーはリクエスト先のリソース種類によって異なるためここでは設定せず、リクエスト毎に個別に設定する
             ## (HTTP クライアントレベルで設定されたヘッダーは上書きや削除が難しそうなため)
             cookies = cookies,
             ## リダイレクトを追跡する
-            follow_redirects = True,
-            ## 可能な限り Chrome からのリクエストに偽装するため、HTTP/1.1 ではなく明示的に HTTP/2 で接続する
-            http2 = True,
+            allow_redirects = True,
+            ## curl-cffi に実装されている中で一番新しい Chrome バージョンに偽装する
+            impersonate = 'chrome',
+            ## 可能な限り Chrome からのリクエストに偽装するため、明示的に HTTP/2 で接続する
+            http_version = 'v2',
         )
 
 
@@ -326,7 +328,7 @@ class TwitterGraphQLAPI:
         existing_cookies: dict[str, str] = json.loads(self.twitter_account.access_token_secret)
 
         # HTTP クライアントが現在持つ Cookie で既存の Cookie を更新
-        for name, value in self.httpx_client.cookies.items():
+        for name, value in self.curl_session.cookies.items():
             existing_cookies[name] = value
 
         # 更新された Cookie を再び JSON にして保存
@@ -361,7 +363,7 @@ class TwitterGraphQLAPI:
 
         # Twitter Web App (SPA) の HTML を取得
         ## HTML リクエスト用のヘッダーに差し替えるのが重要
-        twitter_web_app_html = await self.httpx_client.get('https://x.com/home', headers=self.html_headers_dict)
+        twitter_web_app_html = await self.curl_session.get('https://x.com/home', headers=self.html_headers_dict)
         if twitter_web_app_html.status_code != 200:
             logging.error(f'[TwitterGraphQLAPI] Failed to fetch Twitter Web App HTML: {twitter_web_app_html.status_code}')
             return schemas.TwitterAPIResult(
@@ -376,7 +378,7 @@ class TwitterGraphQLAPI:
         # HTML の meta タグに含まれる検証コードを取得
         meta_tag = soup.select_one('meta[name="twitter-site-verification"]')
         if meta_tag is None:
-            logging.error('[TwitterGraphQLAPI] Failed to fetch verification code from Twitter Web App HTML')
+            logging.error('[TwitterGraphQLAPI] Failed to fetch verification code from Twitter Web App HTML.')
             return schemas.TwitterAPIResult(
                 is_success = False,
                 detail = 'Challenge 情報の取得に失敗しました。Twitter Web App の HTML から検証コードを取得できませんでした。',
@@ -386,24 +388,34 @@ class TwitterGraphQLAPI:
         # HTML からチャレンジコードを取得
         challenge_code_match = re.search(r'"ondemand.s":"(\w+)"', twitter_web_app_html_text)
         if not challenge_code_match:
-            logging.error('[TwitterGraphQLAPI] Failed to fetch challenge code from Twitter Web App HTML')
+            logging.error('[TwitterGraphQLAPI] Failed to fetch challenge code from Twitter Web App HTML.')
             return schemas.TwitterAPIResult(
                 is_success = False,
                 detail = 'Challenge 情報の取得に失敗しました。Twitter Web App の HTML からチャレンジコードを取得できませんでした。',
             )
         challenge_code = challenge_code_match.group(1)
 
+        # HTML から vendor コードを取得
+        vendor_code_match = re.search(r'vendor\.(\w+)\.js["\']', twitter_web_app_html_text)
+        if not vendor_code_match:
+            logging.error('[TwitterGraphQLAPI] Failed to fetch vendor code from Twitter Web App HTML.')
+            return schemas.TwitterAPIResult(
+                is_success = False,
+                detail = 'Challenge 情報の取得に失敗しました。Twitter Web App の HTML から vendor コードを取得できませんでした。',
+            )
+        vendor_code = vendor_code_match.group(1)
+
         # HTML からアニメーション SVG の outerHTML を取得
         challenge_animation_svg_codes = [str(svg) for svg in soup.select('svg[id^="loading-x"]')]
 
         # Challenge 情報を取得
         ## JavaScript リクエスト用のヘッダーに差し替えるのが重要
-        challenge_js_code_response = await self.httpx_client.get(
+        challenge_js_code_response = await self.curl_session.get(
             url = f'https://abs.twimg.com/responsive-web/client-web/ondemand.s.{challenge_code}a.js',
             headers = self.js_headers_dict,
         )
         if challenge_js_code_response.status_code != 200:
-            logging.error('[TwitterGraphQLAPI] Failed to fetch challenge code from Twitter Web App HTML')
+            logging.error('[TwitterGraphQLAPI] Failed to fetch challenge code from Twitter Web App HTML.')
             return schemas.TwitterAPIResult(
                 is_success = False,
                 detail = (
@@ -413,7 +425,23 @@ class TwitterGraphQLAPI:
             )
         challenge_js_code = challenge_js_code_response.text
 
-        # この時点でリクエスト自体は成功しているはずなので、httpx のセッションが持つ Cookie を DB に反映する
+        # Challenge 解決時に必要になる vendor コードを取得
+        vendor_js_code_response = await self.curl_session.get(
+            url = f'https://abs.twimg.com/responsive-web/client-web/vendor.{vendor_code}.js',
+            headers = self.js_headers_dict,
+        )
+        if vendor_js_code_response.status_code != 200:
+            logging.error('[TwitterGraphQLAPI] Failed to fetch vendor script from Twitter Web App HTML.')
+            return schemas.TwitterAPIResult(
+                is_success = False,
+                detail = (
+                    'Challenge 情報の取得に失敗しました。Twitter Web App の HTML から vendor コードを取得できませんでした。'
+                    f'(HTTP Error {vendor_js_code_response.status_code})'
+                ),
+            )
+        vendor_js_code = vendor_js_code_response.text
+
+        # この時点でリクエスト自体は成功しているはずなので、curl-cffi のセッションが持つ Cookie を DB に反映する
         ## HTML リクエスト時に Cookie が更新される可能性があるため、ここで変更された可能性がある Cookie を永続化する
         await self.persistCookies()
 
@@ -423,6 +451,7 @@ class TwitterGraphQLAPI:
             endpoint_infos = self.ENDPOINT_INFOS,
             verification_code = verification_code,
             challenge_js_code = challenge_js_code,
+            vendor_js_code = vendor_js_code,
             challenge_animation_svg_codes = challenge_animation_svg_codes,
         )
 
@@ -496,7 +525,7 @@ class TwitterGraphQLAPI:
                         'queryId': endpoint_info.query_id,  # クエリ ID も JSON に含める必要がある
                     }
                 # GraphQL API リクエスト用のヘッダーに差し替えるのが重要
-                response = await self.httpx_client.post(
+                response = await self.curl_session.post(
                     url = 'https://x.com' + endpoint_info.path,
                     json = payload,
                     headers = headers,
@@ -514,7 +543,7 @@ class TwitterGraphQLAPI:
                         'variables': json.dumps(variables, ensure_ascii=False),
                     }
                 # GraphQL API リクエスト用のヘッダーに差し替えるのが重要
-                response = await self.httpx_client.get(
+                response = await self.curl_session.get(
                     url = 'https://x.com' + endpoint_info.path,
                     params = params,
                     headers = headers,
@@ -523,32 +552,32 @@ class TwitterGraphQLAPI:
                 raise ValueError(f'Invalid method: {endpoint_info.method}')
 
         # 接続エラー（サーバーメンテナンスやタイムアウトなど）
-        except (httpx.NetworkError, httpx.TimeoutException):
-            logging.error('[TwitterGraphQLAPI] Failed to connect to Twitter GraphQL API')
+        except (TimeoutError, curl_requests.RequestsError):
+            logging.error('[TwitterGraphQLAPI] Failed to connect to Twitter GraphQL API.')
             # return 'Failed to connect to Twitter GraphQL API'
             return error_message_prefix + 'Twitter API に接続できませんでした。'
 
-        # この時点でリクエスト自体は成功しているはずなので、httpx のセッションが持つ Cookie を DB に反映する
+        # この時点でリクエスト自体は成功しているはずなので、curl-cffi のセッションが持つ Cookie を DB に反映する
         ## 基本 API リクエストでは Cookie は更新されないはずだが、不審がられないように念のためブラウザ同様リクエストごとに永続化する
         await self.persistCookies()
 
         # HTTP ステータスコードが 200 系以外の場合
         if not (200 <= response.status_code < 300):
-            logging.error(f'[TwitterGraphQLAPI] Failed to invoke GraphQL API (HTTP Error {response.status_code})')
+            logging.error(f'[TwitterGraphQLAPI] Failed to invoke GraphQL API. (HTTP Error {response.status_code})')
             logging.error(f'[TwitterGraphQLAPI] Response: {response.text}')
             return error_message_prefix + f'Twitter API から HTTP {response.status_code} エラーが返されました。'
 
         # JSON でないレスポンスが返ってきた場合
         ## charset=utf-8 が付いている場合もあるので完全一致ではなく部分一致で判定
         if 'application/json' not in response.headers['Content-Type']:
-            logging.error('[TwitterGraphQLAPI] Response is not JSON')
+            logging.error('[TwitterGraphQLAPI] Response is not JSON.')
             return error_message_prefix + 'Twitter API から不正なレスポンスが返されました。'
 
         # レスポンスを JSON としてパース
         try:
             response_json = response.json()
-        except Exception:
-            logging.error('[TwitterGraphQLAPI] Failed to parse response as JSON')
+        except Exception as ex:
+            logging.error('[TwitterGraphQLAPI] Failed to parse response as JSON:', exc_info=ex)
             return error_message_prefix + 'Twitter API のレスポンスを JSON としてパースできませんでした。'
 
         # API レスポンスにエラーが含まれていて、かつ data キーが存在しない場合
@@ -572,7 +601,7 @@ class TwitterGraphQLAPI:
         ## 実装時点の GraphQL API は必ず成功時は 'data' キーの下にレスポンスが格納されるはず
         ## もし 'data' キーが存在しない場合は、API 仕様が変更されている可能性がある
         elif 'data' not in response_json:
-            logging.error('[TwitterGraphQLAPI] Response does not have "data" key')
+            logging.error('[TwitterGraphQLAPI] Response does not have "data" key.')
             return error_message_prefix + 'Twitter API のレスポンスに "data" キーが存在しません。開発者に修正を依頼してください。'
 
         # ここまで来たら (中身のデータ構造はともかく) API レスポンスの取得には成功しているはず
@@ -651,9 +680,15 @@ class TwitterGraphQLAPI:
             tweet_id: str
             try:
                 tweet_id = str(response['create_tweet']['tweet_results']['result']['rest_id'])
-            except Exception:
+            except Exception as ex:
                 # API レスポンスが変わっているなどでツイート ID を取得できなかった
-                tweet_id = '__error__'
+                logging.error('[TwitterGraphQLAPI] Failed to get tweet ID:', exc_info=ex)
+                logging.error(f'[TwitterGraphQLAPI] Response: {response}')
+                return schemas.PostTweetResult(
+                    is_success = False,
+                    detail = 'ツイートを送信しましたが、ツイート ID を取得できませんでした。開発者に修正を依頼してください。',
+                    tweet_url = 'https://twitter.com/i/status/__error__',
+                )
 
             return schemas.PostTweetResult(
                 is_success = True,
@@ -1069,8 +1104,9 @@ class TwitterGraphQLAPI:
         variables['count'] = count
         if cursor_id is not None:
             variables['cursor'] = cursor_id
-        variables['querySource'] = ''  # Twitter Web App 自体が空文字を送っているので合わせる
+        variables['querySource'] = 'typed_query'  # Twitter Web App で検索すると typed_query になることが多いのでそれに合わせる
         variables['product'] = search_type  # 検索タイプに Top か Latest を指定する
+        variables['withGrokTranslatedBio'] = False  # Twitter Web App の挙動に合わせて設定
 
         # Twitter GraphQL API にリクエスト
         response = await self.invokeGraphQLAPI(

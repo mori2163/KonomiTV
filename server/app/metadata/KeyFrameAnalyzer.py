@@ -227,7 +227,7 @@ class KeyFrameAnalyzer:
 
             # キーフレームが1つも見つからなかった場合
             if not key_frames:
-                logging.error(f'{self.file_path}: No keyframes found in the video')
+                logging.error(f'{self.file_path}: No keyframes found in the video.')
                 return
 
             # DB に保存

@@ -17,9 +17,11 @@ from typing import Any, cast
 
 import httpx
 import psutil
+import pywintypes
 import servicemanager
 import typer
 import win32api
+import win32con
 import win32security
 import win32service
 import win32serviceutil
@@ -43,6 +45,20 @@ class KonomiTVServiceFramework(win32serviceutil.ServiceFramework):
     ## ref: https://stackoverflow.com/a/72134400/17124142
     _exe_name_ = f'{BASE_DIR / ".venv/Scripts/python.exe"}'  # 実行ファイルのパス (venv の仮想環境下の python.exe への絶対パス)
     _exe_args_ = f'-u -E "{BASE_DIR / "KonomiTV-Service.py"}"'  # サービス起動時の引数 (この KonomiTV-Service.py への絶対パス)
+
+
+    def __init__(self, args: Any) -> None:
+        super().__init__(args)
+        self.is_running = False
+        self.server_process: subprocess.Popen[bytes] | None = None
+        self.ctrl_c_handler_installed = False  # CTRL+C を無視するハンドラが登録されているか
+
+
+    @staticmethod
+    def _IgnoreCtrlCHandler(ctrl_type: int) -> bool:
+        """CTRL+C シグナルだけを捕捉して無視する"""
+
+        return ctrl_type == win32con.CTRL_C_EVENT
 
 
     @staticmethod
@@ -139,25 +155,47 @@ class KonomiTVServiceFramework(win32serviceutil.ServiceFramework):
         # 稼働中フラグが降ろされるか、プロセスが終了し再起動が不要になるまでループ
         from app.constants import RESTART_REQUIRED_LOCK_PATH
         self.is_running = True
-        while self.is_running is True:
+        self.server_process = None
+        try:
+            # サービスプロセス側では CTRL+C を一時的に無視し、子プロセスのみがシグナルを受け取れるようにする
+            try:
+                win32api.SetConsoleCtrlHandler(self._IgnoreCtrlCHandler, True)
+                self.ctrl_c_handler_installed = True
+            except Exception as ex:
+                servicemanager.LogWarningMsg(f'[KonomiTV-Service][SvcDoRun] Failed to ignore CTRL_C_EVENT: {ex!r}')
 
-            # 仮想環境上の Python から KonomiTV のサーバープロセス (Uvicorn) を起動
-            process = subprocess.Popen(
-                [self._exe_name_, '-X', 'utf8', str(BASE_DIR / 'KonomiTV.py')],
-                cwd = BASE_DIR,  # カレントディレクトリを指定
-            )
+            while self.is_running is True:
 
-            # プロセスが終了するまで待つ
-            ## Windows サービスではメインループが終了してしまうとサービスも終了扱いになってしまう
-            process.wait()
+                # 仮想環境上の Python から KonomiTV のサーバープロセス (Uvicorn) を起動
+                self.server_process = subprocess.Popen(
+                    [self._exe_name_, '-X', 'utf8', str(BASE_DIR / 'KonomiTV.py')],
+                    cwd = BASE_DIR,  # カレントディレクトリを指定
+                )
 
-            # プロセス終了後、もしこの時点で再起動が必要であることを示すロックファイルが存在する場合、KonomiTV サーバーを再起動する
-            if RESTART_REQUIRED_LOCK_PATH.exists():
-                RESTART_REQUIRED_LOCK_PATH.unlink()
-                continue
+                # プロセスが終了するまで待つ
+                ## Windows サービスではメインループが終了してしまうとサービスも終了扱いになってしまう
+                while True:
+                    try:
+                        self.server_process.wait()
+                        break
+                    except KeyboardInterrupt:
+                        continue  # 子プロセスの再起動/停止で CTRL_C_EVENT が飛んできたケースに備える
+                self.server_process = None
 
-            # それ以外の場合は、そのまま Windows サービスを終了する
-            break
+                # プロセス終了後、もしこの時点で再起動が必要であることを示すロックファイルが存在する場合、KonomiTV サーバーを再起動する
+                if RESTART_REQUIRED_LOCK_PATH.exists():
+                    RESTART_REQUIRED_LOCK_PATH.unlink()
+                    continue
+
+                # それ以外の場合は、そのまま Windows サービスを終了する
+                break
+        finally:
+            if self.ctrl_c_handler_installed is True:
+                try:
+                    win32api.SetConsoleCtrlHandler(self._IgnoreCtrlCHandler, False)
+                except Exception:
+                    pass
+                self.ctrl_c_handler_installed = False  # 無視設定を戻して次のループに備える
 
 
     def SvcStop(self):
@@ -165,15 +203,48 @@ class KonomiTVServiceFramework(win32serviceutil.ServiceFramework):
 
         # Windows サービスのステータスを停止待機中に設定
         self.is_running = False
-        self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+        try:
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+        except pywintypes.error as ex:
+            servicemanager.LogErrorMsg(f'[KonomiTV-Service][SvcStop] SetServiceStatus failed: {ex!r}')
+        except Exception as ex:
+            servicemanager.LogErrorMsg(f'[KonomiTV-Service][SvcStop] Unexpected error while reporting stop: {ex!r}')
 
         # KonomiTV サーバーのシャットダウン API にリクエストしてサーバーを終了させる
         ## 通常管理者ユーザーでログインしていないと実行できないが、特別に 127.0.0.77:7010 に直接アクセスすると無認証で実行できる
+        shutdown_requested = False
         try:
             from app.config import GetServerPort
-            httpx.post(f'http://127.0.0.77:{GetServerPort() + 10}/api/maintenance/shutdown')
-        except Exception:
-            pass
+            response = httpx.post(
+                f'http://127.0.0.77:{GetServerPort() + 10}/api/maintenance/shutdown',
+                timeout = 5.0,
+            )
+            if 200 <= response.status_code <= 299:
+                shutdown_requested = True
+            else:
+                servicemanager.LogWarningMsg(
+                    f'[KonomiTV-Service][SvcStop] Shutdown API returned status {response.status_code}',
+                )
+        except KeyboardInterrupt:
+            shutdown_requested = True  # CTRL_C_EVENT が飛んできた場合は子プロセス側でシャットダウン処理が進行している
+        except Exception as ex:
+            servicemanager.LogWarningMsg(f'[KonomiTV-Service][SvcStop] Shutdown API request failed: {ex!r}')
+
+        # サーバーシャットダウン API へのリクエストが成功した場合は、サービスを終了する
+        if shutdown_requested is True:
+            return
+
+        # サーバーシャットダウン API へのリクエストが失敗したが、サーバープロセスが既に終了している場合は、サービスを終了する
+        if self.server_process is None or self.server_process.poll() is not None:
+            return
+
+        # サーバーシャットダウン API へのリクエストが失敗したため、サーバープロセスを終了する
+        try:
+            psutil.Process(self.server_process.pid).terminate()
+        except psutil.NoSuchProcess:
+            return
+        except Exception as ex:
+            servicemanager.LogErrorMsg(f'[KonomiTV-Service][SvcStop] Failed to terminate server process: {ex!r}')
 
 
 app = typer.Typer(help='KonomiTV Windows Service Launcher.')
