@@ -60,7 +60,11 @@ LIBRARY_PATH = {
     'VCEEncC': str(LIBRARY_DIR / 'VCEEncC/VCEEncC') + LIBRARY_EXTENSION,
     'rkmppenc': str(LIBRARY_DIR / 'rkmppenc/rkmppenc') + LIBRARY_EXTENSION,
     'tsreadex': str(LIBRARY_DIR / 'tsreadex/tsreadex') + LIBRARY_EXTENSION,
-    'tsreplace': str(LIBRARY_DIR / 'tsreplace/tsreplace') + LIBRARY_EXTENSION,
+    'tsreplace': (
+        str(LIBRARY_DIR / 'tsreplace/tsreplace') + LIBRARY_EXTENSION
+        if sys.platform == 'win32'
+        else '/usr/bin/tsreplace'
+    ),
     'psisiarc': str(LIBRARY_DIR / 'psisiarc/psisiarc') + LIBRARY_EXTENSION,
     'psisimux': str(LIBRARY_DIR / 'psisimux/psisimux') + LIBRARY_EXTENSION,
 }

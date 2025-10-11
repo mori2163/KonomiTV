@@ -54,6 +54,9 @@ RUN yarn build
 # CUDA 付きなのは NVEncC を動かせるようにするため
 FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
 
+# tsreplace のバージョン
+ENV TSREPLACE_VERSION="0.16"
+
 # タイムゾーンを東京に設定
 ENV TZ=Asia/Tokyo
 
@@ -63,7 +66,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Intel QSV と AMD VCE 関連のライブラリのインストール（実行時イメージなので RUN の最後に掃除する）
 ## amdgpu 周りのインストール方法は amdgpu-install パッケージに同梱されているファイル群を参考にした
 ## ref: https://dgpu-docs.intel.com/driver/client/overview.html
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git gpg tzdata && \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git gpg tzdata wget && \
     curl -fsSL https://repositories.intel.com/gpu/intel-graphics.key | gpg --dearmor -o /usr/share/keyrings/intel-graphics-keyring.gpg && \
     curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor -o /usr/share/keyrings/rocm-keyring.gpg && \
     echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics-keyring.gpg] https://repositories.intel.com/gpu/ubuntu jammy client' > /etc/apt/sources.list.d/intel-graphics.list && \
@@ -75,6 +78,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
         libfontconfig1 libfreetype6 libfribidi0 \
         intel-media-va-driver-non-free intel-opencl-icd libigfxcmrt7 libmfx1 libmfxgen1 libva-drm2 libva-x11-2 ocl-icd-opencl-dev \
         amf-amdgpu-pro libamdenc-amdgpu-pro libdrm2-amdgpu vulkan-amdgpu-pro rocm-opencl-runtime opencl-legacy-amdgpu-pro-icd && \
+    wget https://github.com/rigaya/tsreplace/releases/download/${TSREPLACE_VERSION}/tsreplace_${TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb && \
+    apt-get install -y ./tsreplace_${TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb && \
+    rm tsreplace_${TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb && \
     apt-get -y autoremove && \
     apt-get -y clean && \
     rm -rf /var/lib/apt/lists/* && \

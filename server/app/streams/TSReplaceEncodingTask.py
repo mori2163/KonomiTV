@@ -19,6 +19,8 @@ from app.models.RecordedVideo import RecordedVideo
 from app.schemas import EncodingTask
 
 
+TSREPLACE_VERSION = "0.16"
+
 class TSReplaceEncodingTask:
     """
     tsreplaceを使用したH.262-TSからH.264/HEVCへの映像変換を行うエンコードタスククラス
@@ -137,7 +139,19 @@ class TSReplaceEncodingTask:
             encoder_type (Literal['software', 'hardware']): エンコーダータイプ
             quality_preset (str): 品質プリセット
             delete_original (bool): 元ファイルを削除するかどうか
+
+        Raises:
+            RuntimeError: tsreplaceが利用できない場合
         """
+
+        # tsreplaceが利用可能かチェック
+        if not Path(self.TSREPLACE_PATH).is_file():
+            raise RuntimeError(
+                'tsreplace is not installed. '
+                'Please install it to use TSReplace encoding feature. '
+                f'For Ubuntu: wget https://github.com/rigaya/tsreplace/releases/download/{TSREPLACE_VERSION}/tsreplace_{TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb && '
+                f'sudo apt install ./tsreplace_{TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb'
+            )
 
         # エンコードタスク情報を作成
         self.encoding_task = EncodingTask(
