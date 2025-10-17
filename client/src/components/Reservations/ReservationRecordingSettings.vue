@@ -8,8 +8,8 @@
             </span>
         </div>
 
-        <!-- 録画予約の有効/無効 -->
-        <div class="reservation-recording-settings__section">
+        <!-- 録画予約の有効/無効 (EPGStation は無効化非対応) -->
+        <div class="reservation-recording-settings__section" :style="recorderType === 'EPGStation' ? { opacity: 0.5, pointerEvents: 'none' } : {}">
             <div class="reservation-recording-settings__header">
                 <div class="reservation-recording-settings__label">録画予約の有効/無効</div>
                 <v-switch
@@ -28,8 +28,8 @@
             </div>
         </div>
 
-        <!-- 録画予約の優先度 -->
-        <div class="reservation-recording-settings__section">
+        <!-- 録画予約の優先度 (EPGStation では非対応) -->
+        <div class="reservation-recording-settings__section" :style="recorderType === 'EPGStation' ? { opacity: 0.5, pointerEvents: 'none' } : {}">
             <div class="reservation-recording-settings__label">録画予約の優先度</div>
             <div class="reservation-recording-settings__description mb-0">
                 放送時間が重なりチューナーが足りないときは、より優先度が高い予約から優先的に録画します。
@@ -90,8 +90,8 @@
             </v-text-field>
         </div>
 
-        <!-- 録画マージン -->
-        <div class="reservation-recording-settings__section">
+        <!-- 録画マージン (EPGStation では非対応) -->
+        <div class="reservation-recording-settings__section" :style="recorderType === 'EPGStation' ? { opacity: 0.5, pointerEvents: 'none' } : {}">
             <div class="reservation-recording-settings__label">録画マージン (秒)</div>
             <div class="reservation-recording-settings__description">
                 番組開始時刻の何秒前から録画を開始し、番組終了時刻の何秒後に録画を終了するかの設定です。最低でも5秒以上をおすすめします。(0秒だと番組の冒頭/末尾が欠けてしまいます。)
@@ -141,8 +141,8 @@
             </div>
         </div>
 
-        <!-- 字幕データ録画設定 -->
-        <div class="reservation-recording-settings__section">
+        <!-- 字幕データ録画設定 (EPGStation では非対応) -->
+        <div class="reservation-recording-settings__section" :style="recorderType === 'EPGStation' ? { opacity: 0.5, pointerEvents: 'none' } : {}">
             <div class="reservation-recording-settings__label">字幕データ録画設定</div>
             <div class="reservation-recording-settings__description">
                 字幕データはほとんど録画容量を消費しません。<br>
@@ -160,8 +160,8 @@
             </v-select>
         </div>
 
-        <!-- データ放送録画設定 -->
-        <div class="reservation-recording-settings__section">
+        <!-- データ放送録画設定 (EPGStation では非対応) -->
+        <div class="reservation-recording-settings__section" :style="recorderType === 'EPGStation' ? { opacity: 0.5, pointerEvents: 'none' } : {}">
             <div class="reservation-recording-settings__label">データ放送録画設定</div>
             <div class="reservation-recording-settings__description">
                 データ放送は30分で 500MB 以上録画容量を消費する上、KonomiTV は録画再生時のデータ放送表示に非対応です。<br>
@@ -179,8 +179,8 @@
             </v-select>
         </div>
 
-        <!-- 録画後動作設定 -->
-        <div class="reservation-recording-settings__section">
+        <!-- 録画後動作設定 (EPGStation では非対応) -->
+        <div class="reservation-recording-settings__section" :style="recorderType === 'EPGStation' ? { opacity: 0.5, pointerEvents: 'none' } : {}">
             <div class="reservation-recording-settings__label">録画後動作設定</div>
             <div class="reservation-recording-settings__description">
                 通常は [何もしない] のままで大丈夫です。録画後に録画 PC をスリープさせておきたい方のみ設定してください。環境によっては復帰できず以降の録画に失敗することがあります。
@@ -197,8 +197,8 @@
             </v-select>
         </div>
 
-        <!-- 録画後実行スクリプトのパス -->
-        <div class="reservation-recording-settings__section">
+        <!-- 録画後実行スクリプトのパス (EPGStation では非対応) -->
+        <div class="reservation-recording-settings__section" :style="recorderType === 'EPGStation' ? { opacity: 0.5, pointerEvents: 'none' } : {}">
             <div class="reservation-recording-settings__label">録画後実行スクリプトのパス</div>
             <div class="reservation-recording-settings__description">
                 通常は空欄のままで大丈夫です。録画後に指定の {{ versionStore.is_linux_environment ? '.sh / .lua' : '.bat / .ps1 / .lua' }} スクリプトを実行させたい方のみ設定してください。
@@ -221,6 +221,7 @@
 import { ref, computed, watch, onMounted, toRaw } from 'vue';
 
 import { type IReservation, type IRecordSettings } from '@/services/Reservations';
+import Settings from '@/services/Settings';
 import useVersionStore from '@/stores/VersionStore';
 
 // Props
@@ -237,6 +238,16 @@ const emit = defineEmits<{
 
 // ストア
 const versionStore = useVersionStore();
+
+// レコーダータイプを保持（EPGStation の場合は一部設定を無効化）
+const recorderType = ref<'EDCB' | 'EPGStation'>('EDCB');
+
+const forceEnableForEPGStation = () => {
+    if (recorderType.value === 'EPGStation') {
+        settings.value.is_enabled = true;
+        initialSettings.value.is_enabled = true;
+    }
+};
 
 // 設定のコピーを作成（元の設定を変更しないため）
 const settings = ref<IRecordSettings>(structuredClone(toRaw(props.reservation.record_settings)));
@@ -331,6 +342,7 @@ watch(hasChangesComputed, (newValue) => {
 
 // 変更時の処理（settings.value の変更を親に通知）
 const handleChange = () => {
+    forceEnableForEPGStation();
     emit('updateSettings', settings.value);
 };
 
@@ -351,11 +363,22 @@ watch(() => props.reservation, (newReservation) => {
     settings.value = structuredClone(toRaw(newReservation.record_settings));
     initialSettings.value = structuredClone(toRaw(newReservation.record_settings));
     // フォルダパス等は computed で自動的に更新される
+    forceEnableForEPGStation();
 }, { deep: true });
 
-// コンポーネントマウント時にバージョン情報を取得
+// コンポーネントマウント時にバージョン情報とレコーダータイプを取得
 onMounted(async () => {
     await versionStore.fetchServerVersion();
+    // サーバー設定を取得してレコーダータイプを設定
+    const serverSettings = await Settings.fetchServerSettings();
+    if (serverSettings) {
+        recorderType.value = serverSettings.general.recorder;
+    }
+    forceEnableForEPGStation();
+});
+
+watch(recorderType, () => {
+    forceEnableForEPGStation();
 });
 
 </script>

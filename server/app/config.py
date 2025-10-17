@@ -21,8 +21,8 @@ from pydantic import (
     UrlConstraints,
     ValidationError,
     ValidationInfo,
-    field_serializer,
     confloat,
+    field_serializer,
     field_validator,
 )
 from pydantic_core import Url
@@ -106,13 +106,36 @@ class ClientSettings(BaseModel):
 
 class _ServerSettingsGeneral(BaseModel):
     backend: Literal['EDCB', 'Mirakurun'] = 'EDCB'
+    recorder: Literal['EDCB', 'EPGStation'] = 'EDCB'
     always_receive_tv_from_mirakurun: bool = False
     edcb_url: Annotated[Url, UrlConstraints(allowed_schemes=['tcp'])] = Url('tcp://127.0.0.1:4510/')
     mirakurun_url: Annotated[Url, UrlConstraints(allowed_schemes=['http', 'https'])] = Url('http://127.0.0.1:40772/')
+    epgstation_url: Annotated[Url, UrlConstraints(allowed_schemes=['http', 'https'])] = Url('http://127.0.0.1:8888/')
     encoder: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc'] = 'FFmpeg'
     program_update_interval: Annotated[float, confloat(ge=0.1)] = 5.0
     debug: bool = False
     debug_encoder: bool = False
+
+    @field_validator('recorder')
+    @classmethod
+    def validate_backend_recorder_combination(cls, recorder: str, info: ValidationInfo) -> str:
+        """
+        backend と recorder の組み合わせが適切かをチェックする
+        """
+        # バリデーションをスキップする場合はここで終了
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return recorder
+
+        backend = info.data.get('backend')
+        if backend == 'EDCB' and recorder == 'EPGStation':
+            raise ValueError(
+                'バックエンドが EDCB の場合、レコーダーに EPGStation は使用できません。\n'
+                'EPGStation を使用する場合は、backend を Mirakurun に変更してください。\n'
+                '（EPGStation は Mirakurun を前提としたシステムです）'
+            )
+        # backend が Mirakurun の場合、recorder は EPGStation または EDCB を選択可能
+        # （EDCB の場合は EDCB-wine による録画管理を想定）
+        return recorder
 
     @field_validator('edcb_url')
     def validate_edcb_url(cls, edcb_url: Url, info: ValidationInfo) -> Url:
@@ -121,8 +144,8 @@ class _ServerSettingsGeneral(BaseModel):
         # バリデーションをスキップする場合はここで終了
         if type(info.context) is dict and info.context.get('bypass_validation') is True:
             return edcb_url
-        # EDCB バックエンドの接続確認
-        if info.data.get('backend') == 'EDCB':
+        # EDCB バックエンドまたはレコーダーの接続確認
+        if info.data.get('backend') == 'EDCB' or info.data.get('recorder') == 'EDCB':
             # 循環参照を避けるために遅延インポート
             from app.utils.edcb.EDCBUtil import EDCBUtil
             # edcb_url を明示的に指定
@@ -192,7 +215,47 @@ class _ServerSettingsGeneral(BaseModel):
             logging.info(f'Backend: {mirakurun_or_mirakc} {response_json.get("current")} ({mirakurun_url})')
             if info.data.get('always_receive_tv_from_mirakurun') is True:
                 logging.info(f'Always receive TV from {mirakurun_or_mirakc}.')
+            # backend が Mirakurun の場合、番組表データも Mirakurun から取得される
+            # EPGStation レコーダー使用時（backend が Mirakurun のときのみ可能）もこのメッセージを出力
+            if info.data.get('backend') == 'Mirakurun':
+                if info.data.get('recorder') == 'EPGStation':
+                    logging.info(f'EPG data will be retrieved from {mirakurun_or_mirakc} (EPGStation recorder mode).')
+                else:
+                    logging.info(f'EPG data will be retrieved from {mirakurun_or_mirakc}.')
         return mirakurun_url
+
+    @field_validator('epgstation_url')
+    def validate_epgstation_url(cls, epgstation_url: Url, info: ValidationInfo) -> Url:
+        epgstation_url = Url(str(epgstation_url).rstrip('/') + '/')
+        # バリデーションをスキップする場合はここで終了
+        if type(info.context) is dict and info.context.get('bypass_validation') is True:
+            return epgstation_url
+        # EPGStation レコーダーの接続確認
+        if info.data.get('recorder') == 'EPGStation':
+            # 試しにリクエストを送り、200 (OK) が返ってきたときだけ有効な URL とみなす
+            try:
+                response = httpx.get(
+                    url = str(epgstation_url).rstrip('/') + '/api/version',
+                    headers = API_REQUEST_HEADERS,
+                    timeout = 20,
+                )
+            except (httpx.NetworkError, httpx.TimeoutException):
+                raise ValueError(
+                    f'EPGStation ({epgstation_url}) にアクセスできませんでした。\n'
+                    'EPGStation が起動していないか、URL を間違えている可能性があります。'
+                )
+            try:
+                response_json = response.json()
+                if response.status_code != 200 or response_json.get('version') is None:
+                    raise ValueError()
+            except Exception:
+                raise ValueError(
+                    f'{epgstation_url} は EPGStation の URL ではありません。\n'
+                    'EPGStation の URL を間違えている可能性があります。'
+                )
+            from app import logging
+            logging.info(f'Recorder: EPGStation {response_json.get("version")} ({epgstation_url})')
+        return epgstation_url
 
     @field_validator('encoder')
     def validate_encoder(cls, encoder: str, info: ValidationInfo) -> str:

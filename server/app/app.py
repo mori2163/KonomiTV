@@ -36,17 +36,19 @@ from app.routers import (
     ReservationsRouter,
     SeriesRouter,
     SettingsRouter,
+    TimetableRouter,
     TSReplaceRouter,
     TwitterRouter,
     UsersRouter,
     VersionRouter,
     VideosRouter,
     VideoStreamsRouter,
-    TimetableRouter,
 )
 from app.streams.LiveStream import LiveStream
 from app.utils.edcb.EDCBTuner import EDCBTuner
+from app.utils.epgstation.EPGStationUtil import EPGStationUtil
 from discord_main import start_discord_bot, stop_discord_bot
+
 
 # もし Config() の実行時に AssertionError が発生した場合は、LoadConfig() を実行してサーバー設定データをロードする
 ## 自動リロードモードでは app.py がサーバープロセスのエントリーポイントになるため、
@@ -190,10 +192,10 @@ previous_reservations: dict[int, 'schemas.Reservation'] = {}
 async def check_and_notify_reservations():
     """予約の開始時刻と終了時刻をチェックし、通知が必要な場合はDiscordに通知を送信する"""
     try:
-        # EDCB バックエンドが有効かどうかを確認
+        # 予約通知をサポートするバックエンド / レコーダー構成かを確認
         from app.config import Config
         config = Config()
-        if config.general.backend != 'EDCB':
+        if config.general.backend != 'EDCB' and config.general.recorder != 'EPGStation':
             return
 
         # 予約通知が有効かどうかを確認
@@ -201,9 +203,15 @@ async def check_and_notify_reservations():
             return
 
         # ReservationsAPI を呼び出して予約情報を取得
-        from app.routers.ReservationsRouter import ReservationsAPI, GetCtrlCmdUtil
-        edcb = GetCtrlCmdUtil()
-        reservations_data = await ReservationsAPI(edcb)
+        from app.routers.ReservationsRouter import ReservationsAPI
+        if config.general.recorder == 'EDCB':
+            from app.routers.ReservationsRouter import GetCtrlCmdUtil
+            edcb = GetCtrlCmdUtil()
+            reservations_data = await ReservationsAPI(edcb=edcb)
+        elif config.general.recorder == 'EPGStation':
+            reservations_data = await ReservationsAPI()
+        else:
+            return
 
         # 現在時刻を取得 (JST)
         import datetime
@@ -322,6 +330,13 @@ async def Startup():
 
     # 登録されている Twitter アカウントの情報を更新
     await TwitterAccount.updateAccountsInformation()
+
+    # EPGStation への接続を確認（レコーダーが EPGStation の場合のみ）
+    if CONFIG.general.recorder == 'EPGStation':
+        async with EPGStationUtil() as epgstation:
+            connection_ok = await epgstation.checkConnection()
+            if not connection_ok:
+                logging.warning('[Startup] Failed to connect to EPGStation. Recording features may not work properly.')
 
     # 全てのチャンネル&品質のライブストリームを初期化する
     for channel in await Channel.filter(is_watchable=True).order_by('channel_number'):

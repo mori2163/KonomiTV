@@ -1,4 +1,5 @@
 
+import math
 import re
 from typing import Annotated, Any, Literal, cast
 
@@ -6,6 +7,7 @@ import ariblib.constants
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, status
 
 from app import logging, schemas
+from app.config import Config
 from app.models.Channel import Channel
 from app.routers.ReservationsRouter import (
     DecodeEDCBRecSettingData,
@@ -22,6 +24,10 @@ from app.utils.edcb import (
     SearchKeyInfoRequired,
 )
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
+from app.utils.epgstation.EPGStationUtil import EPGStationUtil
+from app.utils.epgstation.types import (
+    EPGStationRule,
+)
 
 
 # ルーター
@@ -446,6 +452,267 @@ async def GetAutoAddData(
     )
 
 
+async def DecodeEPGStationRuleData(rule: EPGStationRule) -> schemas.ReservationCondition:
+    """
+    EPGStation の Rule オブジェクトを schemas.ReservationCondition オブジェクトに変換する
+
+    Args:
+        rule (EPGStationRule): EPGStation の Rule オブジェクト
+
+    Returns:
+        schemas.ReservationCondition: schemas.ReservationCondition オブジェクト
+    """
+
+    # ルール ID
+    reservation_condition_id = rule.get('id', 0)
+
+    # このルールで登録されている録画予約の数（EPGStation の API では取得できないため 0 固定）
+    reserve_count = 0
+
+    search_option = cast(dict[str, Any], rule.get('searchOption', {}))
+
+    # 番組検索条件
+    program_search_condition = DecodeEPGStationSearchOption(rule, search_option)
+
+    # 録画設定（reserveOption の内容を KonomiTV の形式へ変換）
+    from app.routers.ReservationsRouter import DecodeEPGStationRecordSettings
+    reserve_option = cast(dict[str, Any], rule.get('reserveOption', {}))
+    record_settings = DecodeEPGStationRecordSettings(reserve_option)
+
+    return schemas.ReservationCondition(
+        id = reservation_condition_id,
+        reservation_count = reserve_count,
+        program_search_condition = program_search_condition,
+        record_settings = record_settings,
+    )
+
+
+def DecodeEPGStationSearchOption(rule: EPGStationRule, search_option: dict[str, Any]) -> schemas.ProgramSearchCondition:
+    """
+    EPGStation の Rule オブジェクトから schemas.ProgramSearchCondition オブジェクトを生成する
+
+    Args:
+        rule (EPGStationRule): EPGStation の Rule オブジェクト
+
+    Returns:
+        schemas.ProgramSearchCondition: schemas.ProgramSearchCondition オブジェクト
+    """
+
+    # 番組検索条件が有効かどうか
+    is_enabled: bool = bool(search_option.get('enable', True)) and not rule.get('isDisabled', False)
+
+    # 検索キーワード
+    keyword: str = cast(str, search_option.get('keyword') or rule.get('keyword') or '')
+
+    # 除外キーワード
+    exclude_keyword: str = cast(str, search_option.get('ignoreKeyword') or '')
+
+    # メモ欄（EPGStation にはメモ欄がないため空文字列）
+    note: str = ''
+
+    # 番組名のみを検索対象とするかどうか
+    name_flag = bool(search_option.get('name', True))
+    description_flag = bool(search_option.get('description', True))
+    extended_flag = bool(search_option.get('extended', True))
+    is_title_only: bool = name_flag and not description_flag and not extended_flag
+
+    # 大文字小文字を区別するかどうか
+    is_case_sensitive: bool = bool(search_option.get('keyCS', False))
+
+    # 正規表現で検索するかどうか
+    is_regex_search_enabled: bool = bool(search_option.get('keyRegExp', False))
+
+    # あいまい検索（EPGStation では未サポートのため False 固定）
+    is_fuzzy_search_enabled: bool = False
+
+    # 対象サービス（EPGStation の stations を利用）
+    ## 現時点では EPGStation のチャンネル ID と KonomiTV のチャンネル情報を
+    ## 完全にマッピングする手段がないため None を返す
+    service_ranges: list[schemas.ProgramSearchConditionService] | None = None
+
+    # ジャンル（EPGStation は genres で ARIB ジャンル配列を指定）
+    genre_ranges: list[schemas.Genre] | None = None
+    genres_data = search_option.get('genres', []) or []
+    if genres_data:
+        genre_ranges = []
+        for genre_data in genres_data:
+            lv1 = genre_data.get('lv1', genre_data.get('genre'))
+            lv2 = genre_data.get('lv2', genre_data.get('subGenre'))
+            if lv1 is not None and lv2 is not None:
+                genre_ranges.append(schemas.Genre(
+                    major = lv1,
+                    middle = lv2,
+                ))
+
+    # ジャンルを除外するかどうか
+    is_exclude_genre_ranges: bool = False
+
+    # 番組長（EPGStation は durationMin, durationMax で分単位で指定）
+    duration_range_min: int | None = cast(int | None, search_option.get('durationMin'))
+    duration_range_max: int | None = cast(int | None, search_option.get('durationMax'))
+
+    # 検索対象期間（EPGStation は searchPeriods で時間帯を指定）
+    ## searchPeriods は [{startHour: number, startMin: number, endHour: number, endMin: number, week: number}] 形式
+    ## week は曜日のビットフラグ (0x01=日, 0x02=月, ..., 0x40=土)
+    date_ranges: list[schemas.ProgramSearchConditionDate] | None = None
+    search_periods = search_option.get('searchPeriods', []) or []
+    if search_periods:
+        date_ranges = []
+        for period in search_periods:
+            start_hour = period.get('startHour', period.get('startHourOfDay', 0))
+            start_min = period.get('startMin', period.get('startMinute', 0))
+            end_hour = period.get('endHour', period.get('endHourOfDay', 0))
+            end_min = period.get('endMin', period.get('endMinute', 0))
+            week = period.get('week', 0)
+
+            # 曜日ビットフラグから開始曜日と終了曜日を特定
+            ## EPGStation の week は複数曜日を指定できるが、KonomiTV は開始曜日と終了曜日のペアのみ対応
+            ## 簡易的に最初にセットされている曜日を開始、最後にセットされている曜日を終了とする
+            start_dow = 0
+            end_dow = 0
+            for i in range(7):
+                if week & (1 << i):
+                    if start_dow == 0 and end_dow == 0:
+                        start_dow = i
+                    end_dow = i
+
+            date_ranges.append(schemas.ProgramSearchConditionDate(
+                start_day_of_week = start_dow,
+                start_hour = start_hour,
+                start_minute = start_min,
+                end_day_of_week = end_dow,
+                end_hour = end_hour,
+                end_minute = end_min,
+            ))
+
+    # 日付範囲を除外するかどうか
+    is_exclude_date_ranges: bool = False
+
+    # 放送種別（EPGStation では指定できないため All 固定）
+    broadcast_type: Literal['All', 'FreeOnly', 'PaidOnly'] = 'All'
+    is_free_value = search_option.get('isFree')
+    if is_free_value is True:
+        broadcast_type = 'FreeOnly'
+    elif is_free_value is False:
+        broadcast_type = 'PaidOnly'
+
+    # 重複チェック（EPGStation では指定できないため None 固定）
+    duplicate_title_check_scope: Literal['None', 'SameChannelOnly', 'AllChannels'] = 'None'
+    duplicate_title_check_period_days: int = 6
+    if search_option.get('avoidDuplicate'):
+        duplicate_title_check_scope = 'AllChannels'
+        period_hours = cast(int | None, search_option.get('periodToAvoidDuplicate'))
+        if period_hours is not None and period_hours > 0:
+            duplicate_title_check_period_days = max(1, math.ceil(period_hours / 24))
+
+    return schemas.ProgramSearchCondition(
+        is_enabled = is_enabled,
+        keyword = keyword,
+        exclude_keyword = exclude_keyword,
+        note = note,
+        is_title_only = is_title_only,
+        is_case_sensitive = is_case_sensitive,
+        is_regex_search_enabled = is_regex_search_enabled,
+        is_fuzzy_search_enabled = is_fuzzy_search_enabled,
+        service_ranges = service_ranges,
+        genre_ranges = genre_ranges,
+        is_exclude_genre_ranges = is_exclude_genre_ranges,
+        date_ranges = date_ranges,
+        is_exclude_date_ranges = is_exclude_date_ranges,
+        duration_range_min = duration_range_min,
+        duration_range_max = duration_range_max,
+        broadcast_type = broadcast_type,
+        duplicate_title_check_scope = duplicate_title_check_scope,
+        duplicate_title_check_period_days = duplicate_title_check_period_days,
+    )
+
+
+def EncodeEPGStationRuleData(
+    condition_request: schemas.ReservationConditionAddRequest | schemas.ReservationConditionUpdateRequest,
+) -> dict[str, Any]:
+    """
+    schemas.ReservationConditionAddRequest/UpdateRequest を EPGStation の Rule 作成/更新用のデータに変換する
+
+    Args:
+        condition_request: 予約条件リクエスト
+
+    Returns:
+        dict[str, Any]: EPGStation の Rule データ
+    """
+
+    search_cond = condition_request.program_search_condition
+
+    search_option: dict[str, Any] = {
+        'enable': search_cond.is_enabled,
+        'keyword': search_cond.keyword,
+        'ignoreKeyword': search_cond.exclude_keyword or None,
+        'keyCS': search_cond.is_case_sensitive,
+        'keyRegExp': search_cond.is_regex_search_enabled,
+        'name': True,
+        'description': not search_cond.is_title_only,
+        'extended': not search_cond.is_title_only,
+        'stations': [],
+    }
+
+    if search_cond.genre_ranges:
+        search_option['genres'] = [
+            {'genre': genre.major, 'subGenre': genre.middle}
+            for genre in search_cond.genre_ranges
+        ]
+
+    if search_cond.duration_range_min is not None and search_cond.duration_range_min > 0:
+        search_option['durationMin'] = search_cond.duration_range_min
+    if search_cond.duration_range_max is not None and search_cond.duration_range_max > 0:
+        search_option['durationMax'] = search_cond.duration_range_max
+
+    if search_cond.broadcast_type == 'FreeOnly':
+        search_option['isFree'] = True
+    elif search_cond.broadcast_type == 'PaidOnly':
+        search_option['isFree'] = False
+
+    if search_cond.date_ranges:
+        search_periods = []
+        for date_range in search_cond.date_ranges:
+            week = 0
+            start_dow = date_range.start_day_of_week
+            end_dow = date_range.end_day_of_week
+
+            if start_dow <= end_dow:
+                for dow in range(start_dow, end_dow + 1):
+                    week |= (1 << dow)
+            else:
+                for dow in range(start_dow, 7):
+                    week |= (1 << dow)
+                for dow in range(0, end_dow + 1):
+                    week |= (1 << dow)
+
+            search_periods.append({
+                'startHour': date_range.start_hour,
+                'startMin': date_range.start_minute,
+                'endHour': date_range.end_hour,
+                'endMin': date_range.end_minute,
+                'week': week,
+            })
+
+        search_option['searchPeriods'] = search_periods
+
+    if search_cond.duplicate_title_check_scope != 'None':
+        search_option['avoidDuplicate'] = True
+        search_option['periodToAvoidDuplicate'] = max(1, search_cond.duplicate_title_check_period_days) * 24
+
+    from app.routers.ReservationsRouter import EncodeEPGStationRecordSettings
+
+    rule_data: dict[str, Any] = {
+        'keyword': search_cond.keyword,
+        'isTimeSpecification': False,
+        'isDisabled': not search_cond.is_enabled,
+        'searchOption': search_option,
+        'reserveOption': EncodeEPGStationRecordSettings(condition_request.record_settings),
+    }
+
+    return rule_data
+
+
 @router.get(
     '',
     summary = 'キーワード自動予約条件一覧 API',
@@ -459,16 +726,41 @@ async def ReservationConditionsAPI(
     すべてのキーワード自動予約条件 (EPG 予約) の情報を取得する。
     """
 
-    # EDCB から現在のすべてのキーワード自動予約条件の情報を取得
-    auto_add_data_list: list[AutoAddDataRequired] | None = await edcb.sendEnumAutoAdd()
-    if auto_add_data_list is None:
-        # None が返ってきた場合は空のリストを返す
-        return schemas.ReservationConditions(total=0, reservation_conditions=[])
+    # レコーダーが EDCB の場合
+    if Config().general.recorder == 'EDCB':
+        edcb = CtrlCmdUtil()
 
-    # EDCB の AutoAddData オブジェクトを schemas.ReservationCondition オブジェクトに変換
-    reserve_conditions = [await DecodeEDCBAutoAddData(auto_add_data) for auto_add_data in auto_add_data_list]
+        # EDCB から現在のすべてのキーワード自動予約条件の情報を取得
+        auto_add_data_list: list[AutoAddDataRequired] | None = await edcb.sendEnumAutoAdd()
+        if auto_add_data_list is None:
+            # None が返ってきた場合は空のリストを返す
+            return schemas.ReservationConditions(total=0, reservation_conditions=[])
 
-    return schemas.ReservationConditions(total=len(reserve_conditions), reservation_conditions=reserve_conditions)
+        # EDCB の AutoAddData オブジェクトを schemas.ReservationCondition オブジェクトに変換
+        reserve_conditions = [await DecodeEDCBAutoAddData(auto_add_data) for auto_add_data in auto_add_data_list]
+
+        return schemas.ReservationConditions(total=len(reserve_conditions), reservation_conditions=reserve_conditions)
+
+    # レコーダーが EPGStation の場合
+    elif Config().general.recorder == 'EPGStation':
+
+        # EPGStation からルール一覧を取得
+        async with EPGStationUtil() as epgstation:
+            rules = await epgstation.getRules()
+            if rules is None:
+                return schemas.ReservationConditions(total=0, reservation_conditions=[])
+
+            # EPGStation の Rule オブジェクトを schemas.ReservationCondition オブジェクトに変換
+            reserve_conditions = [await DecodeEPGStationRuleData(rule) for rule in rules]
+
+            return schemas.ReservationConditions(total=len(reserve_conditions), reservation_conditions=reserve_conditions)
+
+    else:
+        logging.error(f'[ReservationConditionsRouter][ReservationConditionsAPI] Unknown recorder type: {Config().general.recorder}')
+        raise HTTPException(
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail = 'Unknown recorder type',
+        )
 
 
 @router.post(
@@ -484,24 +776,51 @@ async def RegisterReservationConditionAPI(
     キーワード自動予約条件を登録する。
     """
 
-    # EDCB の AutoAddData オブジェクトを組み立てる
-    ## data_id は EDCB 側で自動で割り振られるため省略している
-    auto_add_data: AutoAddData = {
-        'search_info': cast(SearchKeyInfo, await EncodeEDCBSearchKeyInfo(reserve_condition_add_request.program_search_condition)),
-        'rec_setting': cast(RecSettingData, EncodeEDCBRecSettingData(reserve_condition_add_request.record_settings)),
-    }
+    # レコーダーが EDCB の場合
+    if Config().general.recorder == 'EDCB':
+        assert edcb is not None, 'CtrlCmdUtil instance is None'
 
-    # EDCB にキーワード自動予約条件を登録するように指示
-    result = await edcb.sendAddAutoAdd([auto_add_data])
-    if result is False:
-        # False が返ってきた場合はエラーを返す
-        logging.error('[ReservationConditionsRouter][RegisterReservationConditionAPI] Failed to register the reserve condition.')
+        # EDCB の AutoAddData オブジェクトを組み立てる
+        ## data_id は EDCB 側で自動で割り振られるため省略している
+        auto_add_data: AutoAddData = {
+            'search_info': cast(SearchKeyInfo, await EncodeEDCBSearchKeyInfo(reserve_condition_add_request.program_search_condition)),
+            'rec_setting': cast(RecSettingData, EncodeEDCBRecSettingData(reserve_condition_add_request.record_settings)),
+        }
+
+        # EDCB にキーワード自動予約条件を登録するように指示
+        result = await edcb.sendAddAutoAdd([auto_add_data])
+        if result is False:
+            # False が返ってきた場合はエラーを返す
+            logging.error('[ReservationConditionsRouter][RegisterReservationConditionAPI] Failed to register the reserve condition.')
+            raise HTTPException(
+                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail = 'Failed to register the reserve condition',
+            )
+
+        # どのキーワード自動予約条件 ID で追加されたかは sendAddAutoAdd() のレスポンスからは取れないので、201 Created を返す
+
+    # レコーダーが EPGStation の場合
+    elif Config().general.recorder == 'EPGStation':
+
+        # EPGStation にルールを追加
+        async with EPGStationUtil() as epgstation:
+            rule_data = EncodeEPGStationRuleData(reserve_condition_add_request)
+            rule_id = await epgstation.addRule(rule_data)
+            if rule_id is None:
+                logging.error('[ReservationConditionsRouter][RegisterReservationConditionAPI] Failed to register the reserve condition.')
+                raise HTTPException(
+                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail = 'Failed to register the reserve condition',
+                )
+
+        # 201 Created を返す
+
+    else:
+        logging.error(f'[ReservationConditionsRouter][RegisterReservationConditionAPI] Unknown recorder type: {Config().general.recorder}')
         raise HTTPException(
             status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail = 'Failed to register the reserve condition',
+            detail = 'Unknown recorder type',
         )
-
-    # どのキーワード自動予約条件 ID で追加されたかは sendAddAutoAdd() のレスポンスからは取れないので、201 Created を返す
 
 
 @router.get(
@@ -511,14 +830,41 @@ async def RegisterReservationConditionAPI(
     response_model = schemas.ReservationCondition,
 )
 async def ReservationConditionAPI(
-    auto_add_data: Annotated[AutoAddDataRequired, Depends(GetAutoAddData)],
+    reservation_condition_id: Annotated[int, Path(description='キーワード自動予約条件 ID 。')],
+    auto_add_data: Annotated[AutoAddDataRequired | None, Depends(GetAutoAddData)] = None,
 ):
     """
     指定されたキーワード自動予約条件の情報を取得する。
     """
 
-    # EDCB の AutoAddData オブジェクトを schemas.ReservationCondition オブジェクトに変換して返す
-    return await DecodeEDCBAutoAddData(auto_add_data)
+    # レコーダーが EDCB の場合
+    if Config().general.recorder == 'EDCB':
+        assert auto_add_data is not None, 'AutoAddData is None'
+
+        # EDCB の AutoAddData オブジェクトを schemas.ReservationCondition オブジェクトに変換して返す
+        return await DecodeEDCBAutoAddData(auto_add_data)
+
+    # レコーダーが EPGStation の場合
+    elif Config().general.recorder == 'EPGStation':
+
+        # EPGStation からルール情報を取得
+        async with EPGStationUtil() as epgstation:
+            rule = await epgstation.getRule(reservation_condition_id)
+            if rule is None:
+                logging.error(f'[ReservationConditionsRouter][ReservationConditionAPI] Failed to get the rule. [reservation_condition_id: {reservation_condition_id}]')
+                raise HTTPException(
+                    status_code = status.HTTP_404_NOT_FOUND,
+                    detail = 'Specified reservation_condition_id was not found',
+                )
+
+            return await DecodeEPGStationRuleData(rule)
+
+    else:
+        logging.error(f'[ReservationConditionsRouter][ReservationConditionAPI] Unknown recorder type: {Config().general.recorder}')
+        raise HTTPException(
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail = 'Unknown recorder type',
+        )
 
 
 @router.put(
@@ -528,31 +874,60 @@ async def ReservationConditionAPI(
     response_model = schemas.ReservationCondition,
 )
 async def UpdateReservationConditionAPI(
-    auto_add_data: Annotated[AutoAddDataRequired, Depends(GetAutoAddData)],
+    reservation_condition_id: Annotated[int, Path(description='キーワード自動予約条件 ID 。')],
     reserve_condition_update_request: Annotated[schemas.ReservationConditionUpdateRequest, Body(description='更新するキーワード自動予約条件。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    auto_add_data: Annotated[AutoAddDataRequired | None, Depends(GetAutoAddData)] = None,
 ):
     """
     指定されたキーワード自動予約条件を更新する。
     """
 
-    # 現在のキーワード自動予約条件の AutoAddData に新しい検索条件・録画設定を上書きマージする形で EDCB に送信する
-    auto_add_data['search_info'] = await EncodeEDCBSearchKeyInfo(reserve_condition_update_request.program_search_condition)
-    auto_add_data['rec_setting'] = EncodeEDCBRecSettingData(reserve_condition_update_request.record_settings)
+    # レコーダーが EDCB の場合
+    if Config().general.recorder == 'EDCB':
+        assert auto_add_data is not None, 'AutoAddData is None'
+        edcb = CtrlCmdUtil()
 
-    # EDCB に指定されたキーワード自動予約条件を更新するように指示
-    result = await edcb.sendChgAutoAdd([cast(AutoAddData, auto_add_data)])
-    if result is False:
-        # False が返ってきた場合はエラーを返す
-        logging.error('[ReservationConditionsRouter][UpdateReservationConditionAPI] Failed to update the specified reserve condition. '
-                      f'[reservation_condition_id: {auto_add_data["data_id"]}]')
+        # 現在のキーワード自動予約条件の AutoAddData に新しい検索条件・録画設定を上書きマージする形で EDCB に送信する
+        auto_add_data['search_info'] = await EncodeEDCBSearchKeyInfo(reserve_condition_update_request.program_search_condition)
+        auto_add_data['rec_setting'] = EncodeEDCBRecSettingData(reserve_condition_update_request.record_settings)
+
+        # EDCB に指定されたキーワード自動予約条件を更新するように指示
+        result = await edcb.sendChgAutoAdd([cast(AutoAddData, auto_add_data)])
+        if result is False:
+            # False が返ってきた場合はエラーを返す
+            logging.error('[ReservationConditionsRouter][UpdateReservationConditionAPI] Failed to update the specified reserve condition. '
+                          f'[reservation_condition_id: {auto_add_data["data_id"]}]')
+            raise HTTPException(
+                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail = 'Failed to update the specified reserve condition',
+            )
+
+        # 更新されたキーワード自動予約条件の情報を schemas.ReservationCondition オブジェクトに変換して返す
+        return await DecodeEDCBAutoAddData(await GetAutoAddData(auto_add_data['data_id'], edcb))
+
+    # レコーダーが EPGStation の場合
+    elif Config().general.recorder == 'EPGStation':
+
+        # EPGStation のルールを更新
+        async with EPGStationUtil() as epgstation:
+            rule_data = EncodeEPGStationRuleData(reserve_condition_update_request)
+            success = await epgstation.updateRule(reservation_condition_id, rule_data)
+            if not success:
+                logging.error(f'[ReservationConditionsRouter][UpdateReservationConditionAPI] Failed to update the rule. [reservation_condition_id: {reservation_condition_id}]')
+                raise HTTPException(
+                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail = 'Failed to update the specified reserve condition',
+                )
+
+        # 更新後のルール情報を返す
+        return await ReservationConditionAPI(reservation_condition_id)
+
+    else:
+        logging.error(f'[ReservationConditionsRouter][UpdateReservationConditionAPI] Unknown recorder type: {Config().general.recorder}')
         raise HTTPException(
             status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail = 'Failed to update the specified reserve condition',
+            detail = 'Unknown recorder type',
         )
-
-    # 更新されたキーワード自動予約条件の情報を schemas.ReservationCondition オブジェクトに変換して返す
-    return await DecodeEDCBAutoAddData(await GetAutoAddData(auto_add_data['data_id'], edcb))
 
 
 @router.delete(
@@ -561,22 +936,48 @@ async def UpdateReservationConditionAPI(
     status_code = status.HTTP_204_NO_CONTENT,
 )
 async def DeleteReservationConditionAPI(
-    auto_add_data: Annotated[AutoAddDataRequired, Depends(GetAutoAddData)],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    reservation_condition_id: Annotated[int, Path(description='キーワード自動予約条件 ID 。')],
+    auto_add_data: Annotated[AutoAddDataRequired | None, Depends(GetAutoAddData)] = None,
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetCtrlCmdUtil)] = None,
 ):
     """
     指定されたキーワード自動予約条件を削除する。
     """
 
-    # TODO: キーワード自動予約条件を削除した後に残った予約をクリーンアップする処理を追加する
+    # レコーダーが EDCB の場合
+    if Config().general.recorder == 'EDCB':
+        assert auto_add_data is not None, 'AutoAddData is None'
+        assert edcb is not None, 'CtrlCmdUtil instance is None'
 
-    # EDCB に指定されたキーワード自動予約条件を削除するように指示
-    result = await edcb.sendDelAutoAdd([auto_add_data['data_id']])
-    if result is False:
-        # False が返ってきた場合はエラーを返す
-        logging.error('[ReservationConditionsRouter][DeleteReservationConditionAPI] Failed to delete the specified reserve condition. '
-                      f'[reservation_condition_id: {auto_add_data["data_id"]}]')
+        # TODO: キーワード自動予約条件を削除した後に残った予約をクリーンアップする処理を追加する
+
+        # EDCB に指定されたキーワード自動予約条件を削除するように指示
+        result = await edcb.sendDelAutoAdd([auto_add_data['data_id']])
+        if result is False:
+            # False が返ってきた場合はエラーを返す
+            logging.error(f'[ReservationConditionsRouter][DeleteReservationConditionAPI] Failed to delete the specified reserve condition. '
+                          f'[reservation_condition_id: {auto_add_data["data_id"]}]')
+            raise HTTPException(
+                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail = 'Failed to delete the specified reserve condition',
+            )
+
+    # レコーダーが EPGStation の場合
+    elif Config().general.recorder == 'EPGStation':
+
+        # EPGStation からルールを削除
+        async with EPGStationUtil() as epgstation:
+            success = await epgstation.deleteRule(reservation_condition_id)
+            if not success:
+                logging.error(f'[ReservationConditionsRouter][DeleteReservationConditionAPI] Failed to delete the rule. [reservation_condition_id: {reservation_condition_id}]')
+                raise HTTPException(
+                    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail = 'Failed to delete the specified reserve condition',
+                )
+
+    else:
+        logging.error(f'[ReservationConditionsRouter][DeleteReservationConditionAPI] Unknown recorder type: {Config().general.recorder}')
         raise HTTPException(
             status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail = 'Failed to delete the specified reserve condition',
+            detail = 'Unknown recorder type',
         )

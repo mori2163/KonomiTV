@@ -100,6 +100,23 @@ class Channel(TortoiseModel):
 
 
     @classmethod
+    def get_data_source(cls) -> str:
+        """
+        チャンネル情報のデータソースを判定する
+
+        Returns:
+            str: 'EPGStation', 'Mirakurun', または 'EDCB'
+        """
+        if Config().general.recorder == 'EPGStation':
+            return 'EPGStation'
+        elif Config().general.backend == 'Mirakurun':
+            return 'Mirakurun'
+        elif Config().general.backend == 'EDCB':
+            return 'EDCB'
+        else:
+            raise ValueError('Unknown data source configuration.')
+
+    @classmethod
     async def update(cls) -> None:
         """ チャンネル情報を更新する """
 
@@ -107,8 +124,12 @@ class Channel(TortoiseModel):
         logging.info('Channels updating...')
 
         try:
+            # EPGStation
+            if Config().general.recorder == 'EPGStation':
+                await cls.updateFromEPGStation()
+
             # Mirakurun バックエンド
-            if Config().general.backend == 'Mirakurun':
+            elif Config().general.backend == 'Mirakurun':
                 await cls.updateFromMirakurun()
 
             # EDCB バックエンド
@@ -261,6 +282,148 @@ class Channel(TortoiseModel):
                     if await cls.isReferencedByRecordedProgram(duplicate_channel.id):
                         # 参照されている場合は削除せず、is_watchable を False に設定
                         # RecordedProgram から参照されているのに削除すると、CASCADE 制約で録画番組情報も削除されてしまう
+                        duplicate_channel.is_watchable = False
+                        await duplicate_channel.save()
+                        logging.info(f'Channel: {duplicate_channel.name} ({duplicate_channel.id}) is referenced by RecordedProgram, set is_watchable to False.')
+                    else:
+                        # 参照されていない場合は削除
+                        await duplicate_channel.delete()
+                        logging.info(f'Delete Channel: {duplicate_channel.id}')
+                # tortoise.exceptions.OperationalError: Can't delete unpersisted record を無視
+                except OperationalError as ex:
+                    if 'Can\'t delete unpersisted record' not in str(ex):
+                        raise ex
+
+
+    @classmethod
+    async def updateFromEPGStation(cls) -> None:
+        """ EPGStation レコーダーからチャンネル情報を取得し、更新する """
+
+        from app.utils.epgstation.EPGStationUtil import EPGStationUtil
+
+        # このトランザクションはパフォーマンス向上と、チャンネル情報を一時的に削除してから再生成するまでの間に API リクエストが来た場合に
+        # "Specified display_channel_id was not found" エラーでフロントエンドを誤動作させるのを防ぐためのもの
+        async with transactions.in_transaction():
+
+            # この変数から更新対象のチャンネル情報を削除していき、残った古いチャンネル情報を最後にまとめて削除する
+            duplicate_channels = {temp.id:temp for temp in await Channel.filter(is_watchable=True)}
+
+            # EPGStation から放送局（チャンネル）情報を取得する
+            try:
+                async with EPGStationUtil() as epgstation:
+                    channels_data = await epgstation.getChannels()
+                    if not channels_data:
+                        logging.error('Failed to get channels from EPGStation.')
+                        raise Exception('Failed to get channels from EPGStation.')
+            except Exception as ex:
+                logging.error('Failed to get channels from EPGStation.', exc_info=ex)
+                raise ex
+
+            # 同じネットワーク ID のサービスのカウント
+            same_network_id_counts: dict[int, int] = {}
+
+            # 同じリモコン番号のサービスのカウント
+            same_remocon_id_counts: dict[int, int] = {}
+
+            for channel_data in channels_data:
+
+                # サービスタイプが 0x01 (デジタルTVサービス) / 0x02 (デジタル音声サービス) / 0xa1 (161: 臨時映像サービス) /
+                # 0xa2 (162: 臨時音声サービス) / 0xad (173: 超高精細度4K専用TVサービス) 以外のサービスを弾く
+                service_type = channel_data.get('serviceType', 0x01)
+                if service_type not in [0x01, 0x02, 0xa1, 0xa2, 0xad]:
+                    continue
+
+                # 不明なネットワーク ID のチャンネルを弾く
+                network_id = channel_data.get('networkId', 0)
+                channel_type = TSInformation.getNetworkType(network_id)
+                if channel_type == 'OTHER':
+                    continue
+
+                # サービス ID
+                service_id = channel_data.get('serviceId', 0)
+
+                # チャンネル ID
+                channel_id = f'NID{network_id}-SID{service_id:03d}'
+
+                # 既にレコードがある場合は更新、ない場合は新規作成
+                duplicate_channel = duplicate_channels.pop(channel_id, None)
+                if duplicate_channel is None:
+                    unwatchable_channel = await Channel.filter(id=channel_id, is_watchable=False).first()
+                    if unwatchable_channel is not None:
+                        ## すでに閉局済みの BS チャンネルだった場合、既に同じチャンネルの is_watchable = False なチャンネル情報が存在することになるので、以降の処理を全てスキップ
+                        if unwatchable_channel.type == 'BS' and unwatchable_channel.service_id in ALREADY_CLOSED_BS_SERVICE_IDS:
+                            continue
+                        channel = unwatchable_channel
+                        channel.is_watchable = True
+                        logging.warning(f'Channel: {channel.name} ({channel.id}) is already registered but is_watchable = False.')
+                    else:
+                        channel = Channel()
+                else:
+                    channel = duplicate_channel
+
+                # 取得してきた値を設定
+                channel.id = channel_id
+                channel.service_id = service_id
+                channel.network_id = network_id
+                # EPGStation には TSID が含まれないので None
+                channel.transport_stream_id = None
+                channel.remocon_id = channel_data.get('remoteControlKeyId', 0)
+                channel.type = channel_type
+                channel.name = TSInformation.formatString(channel_data.get('name', ''))
+                channel.jikkyo_force = None
+                channel.is_watchable = True  # 下記条件を満たすチャンネルでない限り、ライブ視聴可能なチャンネルとして登録する
+
+                # すでに閉局済みの BS チャンネルを is_watchable = False に設定
+                if channel.type == 'BS' and channel.service_id in ALREADY_CLOSED_BS_SERVICE_IDS:
+                    channel.is_watchable = False
+
+                # 「試験チャンネル」という名前（前方一致）のチャンネルを is_watchable = False に設定
+                if channel.name.startswith('試験チャンネル'):
+                    channel.is_watchable = False
+
+                # サービスタイプが 0x02 のサービスのみ、ラジオチャンネルとして設定する
+                channel.is_radiochannel = True if (service_type == 0x02) else False
+
+                # 同じネットワーク内にあるサービスのカウントを追加
+                if channel.network_id not in same_network_id_counts:
+                    same_network_id_counts[channel.network_id] = 0
+                same_network_id_counts[channel.network_id] += 1
+
+                # リモコン番号を算出
+                ## 地デジでは既にリモコン番号が決まっているので、そのまま利用する
+                if channel.type != 'GR':
+                    channel.remocon_id = TSInformation.calculateRemoconID(channel.type, channel.service_id)
+
+                # チャンネル番号を算出
+                channel.channel_number = await TSInformation.calculateChannelNumber(
+                    channel.type,
+                    channel.network_id,
+                    channel.service_id,
+                    channel.remocon_id,
+                    same_network_id_counts,
+                    same_remocon_id_counts,
+                )
+
+                # 表示用チャンネルID = チャンネルタイプ(小文字)+チャンネル番号
+                channel.display_channel_id = channel.type.lower() + channel.channel_number
+
+                # サブチャンネルかどうかを算出
+                channel.is_subchannel = TSInformation.calculateIsSubchannel(channel.type, channel.service_id)
+
+                # レコードを保存する
+                try:
+                    await channel.save()
+                # 既に登録されているチャンネルならスキップ
+                except IntegrityError:
+                    logging.warning(f'Channel: {channel.name} ({channel.id}) is already registered.')
+                    pass
+
+            # 不要なチャンネル情報を削除する
+            for duplicate_channel in duplicate_channels.values():
+                try:
+                    # RecordedProgram から参照されているかどうかを確認
+                    if await cls.isReferencedByRecordedProgram(duplicate_channel.id):
+                        # 参照されている場合は削除せず、is_watchable を False に設定
                         duplicate_channel.is_watchable = False
                         await duplicate_channel.save()
                         logging.info(f'Channel: {duplicate_channel.name} ({duplicate_channel.id}) is referenced by RecordedProgram, set is_watchable to False.')

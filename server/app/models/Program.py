@@ -74,6 +74,10 @@ class Program(TortoiseModel):
         timestamp = time.time()
         logging.info('Programs updating...')
 
+        # 番組表データは常に backend 設定に基づいて取得する
+        # (EPGStation レコーダー使用時も、番組表は Mirakurun から取得)
+        # EPGStation は録画管理のみに使用し、番組表取得には使わない
+
         # 番組情報をマルチプロセスで更新する
         if multiprocess is True:
 
@@ -115,6 +119,223 @@ class Program(TortoiseModel):
                 logging.error('Failed to update programs:', exc_info=ex)
 
         logging.info(f'Programs update complete. ({round(time.time() - timestamp, 3)} sec)')
+
+
+    @classmethod
+    async def updateFromEPGStation(cls) -> None:
+        """
+        EPGStation レコーダーから番組情報を取得し、更新する
+        """
+        from app.models.Channel import Channel
+        from app.utils.epgstation.EPGStationUtil import EPGStationUtil
+
+        # このトランザクションはパフォーマンス向上と、取得失敗時のロールバックのためのもの
+        async with transactions.in_transaction():
+
+            # EPGStation から番組表情報を取得する
+            try:
+                async with EPGStationUtil() as epgstation:
+                    schedules_data = await epgstation.getSchedules(is_half_width=True)
+                    if not schedules_data:
+                        logging.error('Failed to get programs from EPGStation.')
+                        raise Exception('Failed to get programs from EPGStation.')
+            except Exception as ex:
+                logging.error('Failed to get programs from EPGStation.', exc_info=ex)
+                raise ex
+
+            # この変数から更新or更新不要な番組情報を削除していき、残った古い番組情報を最後にまとめて削除する
+            duplicate_programs = {temp.id:temp for temp in await Program.all()}
+
+            # チャンネル情報を取得
+            # NID32736-SID1024 形式の ID をキーにした辞書にまとめる
+            channels = {temp.id:temp for temp in await Channel.filter(is_watchable=True)}
+            logging.info(f'[Program.updateFromEPGStation] Registered channels: {len(channels)}')
+            if len(channels) > 0:
+                # 最初の3つのチャンネルIDをログ出力
+                sample_ids = list(channels.keys())[:3]
+                logging.info(f'[Program.updateFromEPGStation] Sample channel IDs: {sample_ids}')
+
+            # チャンネルごとに番組情報を処理
+            processed_channels = 0
+            processed_programs = 0
+            skipped_no_channel = 0
+
+            for schedule in schedules_data:
+                channel_info = schedule.get('channel')
+                programs_list = schedule.get('programs', [])
+
+                if not channel_info or not programs_list:
+                    continue
+
+                # チャンネル情報を取得
+                network_id = channel_info.get('networkId', 0)
+                service_id = channel_info.get('serviceId', 0)
+                # チャンネル ID はゼロパディングなしで保存されている
+                channel_id_key = f'NID{network_id}-SID{service_id}'
+
+                channel = channels.get(channel_id_key, None)
+
+                # 登録されていないチャンネルの番組を弾く（ワンセグやデータ放送など）
+                if channel is None:
+                    skipped_no_channel += 1
+                    if skipped_no_channel <= 5:  # 最初の5件のみログ出力
+                        logging.debug(f'[Program.updateFromEPGStation] Channel not found: {channel_id_key}')
+                    continue
+
+                processed_channels += 1
+
+                # 最初のチャンネルの番組処理をデバッグ
+                debug_first_channel = (processed_channels == 1)
+
+                # 番組情報ごとに処理
+                for program_info in programs_list:
+
+                    # EPGStation の番組 ID を取得（予約追加時に使用）
+                    epgstation_program_id = program_info.get('id')
+                    if epgstation_program_id is None:
+                        if debug_first_channel:
+                            logging.warning('[Program.updateFromEPGStation] Skipped: no program ID')
+                        continue
+
+                    # ARIB のイベント ID を取得
+                    event_id = program_info.get('eventId')
+                    if event_id is None:
+                        if debug_first_channel:
+                            logging.warning(f'[Program.updateFromEPGStation] Skipped: no event ID (program_id={epgstation_program_id})')
+                        continue
+
+                    # 番組タイトルがない番組を弾く
+                    title_raw = program_info.get('name', '')
+                    if not title_raw:
+                        if debug_first_channel:
+                            logging.warning(f'[Program.updateFromEPGStation] Skipped: no title (program_id={epgstation_program_id}, event_id={event_id})')
+                        continue
+
+                    if debug_first_channel:
+                        logging.info(f'[Program.updateFromEPGStation] Processing program: id={epgstation_program_id}, event_id={event_id}, title={title_raw[:30]}')
+
+                    # 番組タイトル・番組概要
+                    title = TSInformation.formatString(title_raw).strip()
+                    description = TSInformation.formatString(program_info.get('description', '')).strip()
+
+                    # 番組詳細
+                    detail: dict[str, str] = {}
+                    extended_raw = program_info.get('extended', '')
+                    if extended_raw:
+                        # EPGStation の extended は改行区切りのテキスト形式
+                        # 【見出し】のような形式で見出しを抽出
+                        lines = extended_raw.split('\n')
+                        current_heading = '番組内容'
+                        current_text = []
+                        for line in lines:
+                            line = line.strip()
+                            if line.startswith('【') and line.endswith('】'):
+                                # 前の見出しの内容を保存
+                                if current_text:
+                                    detail[current_heading] = TSInformation.formatString('\n'.join(current_text)).strip()
+                                # 新しい見出しを設定
+                                current_heading = TSInformation.formatString(line[1:-1]).strip()
+                                if not current_heading:
+                                    current_heading = '番組内容'
+                                current_text = []
+                            else:
+                                current_text.append(line)
+                        # 最後の見出しの内容を保存
+                        if current_text:
+                            detail[current_heading] = TSInformation.formatString('\n'.join(current_text)).strip()
+
+                        # 番組概要が空の場合、番組詳細の最初の本文を概要として使う
+                        if not description and detail:
+                            description = next(iter(detail.values()))
+
+                    # 番組開始時刻・番組終了時刻
+                    start_time = datetime.fromtimestamp(program_info.get('startAt', 0) / 1000, tz=ZoneInfo('Asia/Tokyo'))
+                    end_time = datetime.fromtimestamp(program_info.get('endAt', 0) / 1000, tz=ZoneInfo('Asia/Tokyo'))
+
+                    # 番組長（秒）
+                    duration = float((program_info.get('endAt', 0) - program_info.get('startAt', 0)) / 1000)
+
+                    # 番組終了時刻が現在時刻より1時間以上前な番組を弾く
+                    if datetime.now(ZoneInfo('Asia/Tokyo')) - end_time > timedelta(hours=1):
+                        continue
+
+                    # ***** ここからは 追加・更新・更新不要 のいずれか *****
+
+                    # 番組 ID
+                    program_id = f'NID{network_id}-SID{service_id:03d}-EID{event_id}'
+
+                    # 重複する番組 ID の番組情報があれば取得する
+                    duplicate_program = duplicate_programs.get(program_id)
+
+                    # 重複する番組情報があり、かつタイトル・番組概要・番組詳細・番組開始時刻・番組終了時刻が全て同じ
+                    if (duplicate_program is not None and
+                        duplicate_program.title == title and
+                        duplicate_program.description == description and
+                        len(duplicate_program.detail) == len(detail) and
+                        duplicate_program.start_time == start_time and
+                        duplicate_program.end_time == end_time):
+
+                        # 更新不要なのでスキップ
+                        del duplicate_programs[program_id]
+                        continue
+
+                    # 重複する番組情報が存在しない（追加）or 存在するが内容が異なる（更新）
+                    if duplicate_program is None:
+                        program = Program()
+                    else:
+                        program = duplicate_program
+                        del duplicate_programs[program_id]
+
+                    # 番組情報を設定
+                    program.id = program_id
+                    program.channel_id = channel.id
+                    program.network_id = network_id
+                    program.service_id = service_id
+                    program.event_id = event_id
+                    program.title = title
+                    program.description = description
+                    program.detail = detail
+                    program.start_time = start_time
+                    program.end_time = end_time
+                    program.duration = duration
+                    program.is_free = program_info.get('isFree', True)
+
+                    # ジャンル情報（簡易対応）
+                    program.genres = []
+                    if 'genre1' in program_info and program_info['genre1'] is not None:
+                        # EPGStation のジャンル情報を KonomiTV 形式に変換（簡易実装）
+                        genre_major = (program_info['genre1'] >> 8) & 0xFF
+                        genre_minor = program_info['genre1'] & 0xFF
+                        program.genres.append({'major': genre_major, 'middle': genre_minor})
+
+                    # 映像・音声情報（簡易対応）
+                    program.video_type = program_info.get('videoType', '映像1080i(1125i)、アスペクト比16:9 パンベクトルなし')
+                    program.video_codec = 'mpeg2'  # EPGStation では詳細不明なためデフォルト値
+                    program.video_resolution = program_info.get('videoResolution', '1080i')
+                    program.primary_audio_type = '2/0モード(ステレオ)'
+                    program.primary_audio_language = '日本語'
+                    program.primary_audio_sampling_rate = f"{program_info.get('audioSamplingRate', 48000)}Hz" if program_info.get('audioSamplingRate') else '48kHz'
+                    program.secondary_audio_type = None
+                    program.secondary_audio_language = None
+                    program.secondary_audio_sampling_rate = None
+
+                    # レコードを保存
+                    if debug_first_channel and processed_programs < 3:
+                        logging.info(f'[Program.updateFromEPGStation] Saving program: {program.id}')
+                    await program.save()
+                    processed_programs += 1
+
+            # 不要な番組情報を削除する
+            deleted_programs = 0
+            for duplicate_program in duplicate_programs.values():
+                await duplicate_program.delete()
+                deleted_programs += 1
+                logging.debug(f'Delete Program: {duplicate_program.id}')
+
+            # 処理結果をログ出力
+            logging.info(f'[Program.updateFromEPGStation] Processed: {processed_channels} channels, {processed_programs} programs')
+            logging.info(f'[Program.updateFromEPGStation] Skipped: {skipped_no_channel} channels (not registered)')
+            logging.info(f'[Program.updateFromEPGStation] Deleted: {deleted_programs} old programs')
 
 
     @classmethod

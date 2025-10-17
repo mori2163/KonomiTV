@@ -24,7 +24,8 @@
                 <div class="settings__item-heading">利用するバックエンド</div>
                 <div class="settings__item-label">
                     EDCB・Mirakurun のいずれかを選択してください。<br>
-                    バックエンドに Mirakurun が選択されているときは、録画予約機能は利用できません。<br>
+                    バックエンドに EDCB が選択されているときは、レコーダーも EDCB に固定されます。<br>
+                    バックエンドに Mirakurun が選択されているときは、レコーダーに EPGStation または EDCB を選択できます。<br>
                 </div>
                 <v-select class="settings__item-form" color="primary" variant="outlined" hide-details
                     :density="is_form_dense ? 'compact' : 'default'"
@@ -32,9 +33,23 @@
                 </v-select>
             </div>
             <div class="settings__item">
+                <div class="settings__item-heading">利用する録画管理ソフト (レコーダー)</div>
+                <div class="settings__item-label">
+                    バックエンドが Mirakurun の場合のみ変更できます。<br>
+                    EPGStation・EDCB のいずれかを選択してください。<br>
+                    録画予約および自動録画予約条件の管理に利用されます。<br>
+                </div>
+                <v-select class="settings__item-form" color="primary" variant="outlined" hide-details
+                    :density="is_form_dense ? 'compact' : 'default'"
+                    :items="['EPGStation', 'EDCB']"
+                    :disabled="server_settings.general.backend !== 'Mirakurun'"
+                    v-model="server_settings.general.recorder">
+                </v-select>
+            </div>
+            <div class="settings__item">
                 <div class="settings__item-heading">EDCB (EpgTimerNW) の TCP API の URL</div>
                 <div class="settings__item-label">
-                    バックエンドに EDCB が選択されているときに利用されます。<br>
+                    バックエンドまたはレコーダーに EDCB が選択されているときに利用されます。<br>
                     tcp://edcb-namedpipe/ と指定すると、TCP API の代わりに名前付きパイプを使って通信します (ローカルのみ)。<br>
                 </div>
                 <div class="settings__item-label mt-1">
@@ -58,6 +73,20 @@
                 <v-text-field class="settings__item-form" color="primary" variant="outlined" hide-details
                     :density="is_form_dense ? 'compact' : 'default'"
                     v-model="server_settings.general.mirakurun_url">
+                </v-text-field>
+            </div>
+            <div class="settings__item">
+                <div class="settings__item-heading">EPGStation の HTTP API の URL</div>
+                <div class="settings__item-label">
+                    レコーダーに EPGStation が選択されているときに利用されます。<br>
+                </div>
+                <div class="settings__item-label mt-1">
+                    一部 Windows 環境では localhost の名前解決が遅いため、リクエストの待機時間が長くなる場合があります。
+                    EPGStation と同じ PC に KonomiTV をインストールしている場合、localhost ではなく 127.0.0.1 の利用を推奨します。<br>
+                </div>
+                <v-text-field class="settings__item-form" color="primary" variant="outlined" hide-details
+                    :density="is_form_dense ? 'compact' : 'default'"
+                    v-model="server_settings.general.epgstation_url">
                 </v-text-field>
             </div>
             <div class="settings__item">
@@ -362,7 +391,7 @@
 </template>
 <script lang="ts" setup>
 
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 
 import AccountManageSettings from '@/components/Settings/AccountManageSettings.vue';
 import ServerLogDialog from '@/components/Settings/ServerLogDialog.vue';
@@ -391,6 +420,19 @@ const server_settings = ref<IServerSettings>(structuredClone(IServerSettingsDefa
 Settings.fetchServerSettings().then((settings) => {
     if (settings) {
         server_settings.value = settings;
+    }
+});
+
+// バックエンドが変更されたときに、レコーダー設定を適切に調整する
+watch(() => server_settings.value.general.backend, (newBackend) => {
+    // EDCB バックエンドの場合、レコーダーも EDCB に固定
+    if (newBackend === 'EDCB') {
+        server_settings.value.general.recorder = 'EDCB';
+    }
+    // Mirakurun バックエンドの場合、レコーダーは EPGStation または EDCB を選択可能
+    // デフォルトは EPGStation
+    else if (newBackend === 'Mirakurun' && server_settings.value.general.recorder !== 'EPGStation' && server_settings.value.general.recorder !== 'EDCB') {
+        server_settings.value.general.recorder = 'EPGStation';
     }
 });
 

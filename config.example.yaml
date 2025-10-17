@@ -4,8 +4,18 @@ general:
 
     # 利用するバックエンド
     # EDCB・Mirakurun のいずれかを選択してください。
-    # バックエンドに Mirakurun が選択されているときは、録画予約機能は利用できません。
     backend: 'EDCB'
+
+    # 利用するレコーダー（録画管理システム）
+    # EDCB・EPGStation のいずれかを選択してください。
+    # 重要: backend と recorder の組み合わせには制限があります:
+    #   - backend が EDCB の場合 → recorder も EDCB である必要があります
+    #   - backend が Mirakurun の場合 → recorder は EPGStation または EDCB を選択できます
+    # EPGStation をレコーダーとして使用する場合、backend を Mirakurun に、
+    # epgstation_url と mirakurun_url の両方を設定する必要があります。
+    # EDCB をレコーダーとして使用する場合（Mirakurun バックエンド時）、
+    # edcb_url の設定が必要です（EDCB-wine による録画管理を想定）。
+    recorder: 'EDCB'
 
     # 利用するバックエンドが EDCB のとき、常に Mirakurun / mirakc から放送波を受信するか
     # バックエンドに Mirakurun が選択されているときは効果がありません。
@@ -14,7 +24,7 @@ general:
     always_receive_tv_from_mirakurun: false
 
     # EDCB (EpgTimerNW) の TCP API の URL
-    # バックエンドに EDCB が選択されているときに利用されます。
+    # バックエンドまたはレコーダーに EDCB が選択されているときに利用されます。
     # tcp://edcb-namedpipe/ と指定すると、TCP API の代わりに名前付きパイプを使って通信します (ローカルのみ)。
     # 一部 Windows 環境では localhost の名前解決が遅いため、ストリーミング開始までの待機時間が長くなる場合があります。
     # EDCB と同じ PC に KonomiTV をインストールしている場合、localhost ではなく 127.0.0.1 の利用を推奨します。
@@ -22,9 +32,17 @@ general:
 
     # Mirakurun / mirakc の HTTP API の URL
     # バックエンドに Mirakurun が選択されているときに利用されます。
+    # backend が Mirakurun の場合、番組表データの取得とライブ視聴に使用されます。
     # 一部 Windows 環境では localhost の名前解決が遅いため、ストリーミング開始までの待機時間が長くなる場合があります。
     # Mirakurun / mirakc と同じ PC に KonomiTV をインストールしている場合、localhost ではなく 127.0.0.1 の利用を推奨します。
     mirakurun_url: 'http://127.0.0.1:40772/'
+
+    # EPGStation の HTTP API の URL
+    # レコーダーに EPGStation が選択されているときに利用されます（録画管理に使用）。
+    # EPGStation レコーダーを使用する場合、backend を Mirakurun に設定する必要があります。
+    # 番組表データは Mirakurun から取得され、録画管理のみ EPGStation を使用します。
+    # EPGStation と同じ PC に KonomiTV をインストールしている場合、localhost ではなく 127.0.0.1 の利用を推奨します。
+    epgstation_url: 'http://127.0.0.1:8888/'
 
     # 利用するエンコーダー
     # FFmpeg・QSVEncC・NVEncC・VCEEncC・rkmppenc から選択してください。

@@ -2,15 +2,21 @@
     <div v-ripple class="reservation" :class="{ 'reservation--disabled': !is_enabled }"
         @click="handleContentClick">
         <div class="reservation__container">
-            <!-- 左側：優先度と有効・無効スイッチ -->
+            <!-- 左側：優先度と有効・無効スイッチ (EPGStation は無効化機能なし) -->
             <div class="reservation__controls">
-                <div class="reservation__priority">
+                <div v-if="recorderType === 'EDCB'" class="reservation__priority">
                     <div class="reservation__priority-badge">{{ reservation.record_settings.priority }}</div>
                     <div class="reservation__priority-label">優先度</div>
                 </div>
-                <div v-if="!reservation.is_recording_in_progress" class="reservation__toggle" @click="handleSwitchClick">
+                <div
+                    v-if="!reservation.is_recording_in_progress"
+                    class="reservation__toggle"
+                    :class="{ 'reservation__toggle--disabled': recorderType === 'EPGStation' }"
+                    @click="handleSwitchClick"
+                >
                     <v-switch
                         v-model="is_enabled"
+                        :disabled="recorderType === 'EPGStation'"
                         color="primary"
                         density="compact"
                         hide-details
@@ -81,10 +87,11 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, watch } from 'vue';
+import { ref, watch, onMounted } from 'vue';
 
 import Message from '@/message';
 import Reservations, { IReservation } from '@/services/Reservations';
+import Settings from '@/services/Settings';
 import { useSnackbarsStore } from '@/stores/SnackbarsStore';
 import Utils, { ProgramUtils } from '@/utils';
 
@@ -101,13 +108,22 @@ const emit = defineEmits<{
 
 const snackbarsStore = useSnackbarsStore();
 
+// レコーダータイプを保持（EPGStation の場合は優先度を非表示）
+const recorderType = ref<'EDCB' | 'EPGStation'>('EDCB');
+
 // 有効・無効の状態を管理
 const is_enabled = ref(props.reservation.record_settings.is_enabled);
 const is_updating = ref(false);
 
 // propsの変更を監視
 watch(() => props.reservation.record_settings.is_enabled, (newValue) => {
-    is_enabled.value = newValue;
+    is_enabled.value = recorderType.value === 'EPGStation' ? true : newValue;
+});
+
+watch(recorderType, (newRecorder) => {
+    if (newRecorder === 'EPGStation') {
+        is_enabled.value = true;
+    }
 });
 
 // ロゴ画像エラー時のフォールバック
@@ -177,6 +193,10 @@ const handleContentClick = () => {
 
 // 有効・無効の切り替え処理
 const handleToggleEnabled = async () => {
+    if (recorderType.value !== 'EDCB') {
+        is_enabled.value = true;
+        return;
+    }
     if (is_updating.value) return;
 
     is_updating.value = true;
@@ -210,6 +230,14 @@ const handleToggleEnabled = async () => {
 const handleSwitchClick = (event: Event) => {
     event.stopPropagation();
 };
+
+// コンポーネントマウント時にレコーダータイプを取得
+onMounted(async () => {
+    const serverSettings = await Settings.fetchServerSettings();
+    if (serverSettings) {
+        recorderType.value = serverSettings.general.recorder;
+    }
+});
 
 </script>
 
@@ -398,6 +426,16 @@ const handleSwitchClick = (event: Event) => {
                 font-size: 9px;
             }
         }
+    }
+
+    &__toggle--placeholder {
+        width: 40px;
+        height: 34px;
+    }
+
+    &__toggle--disabled {
+        opacity: 0.5;
+        pointer-events: none;
     }
 
     &__content {

@@ -26,8 +26,6 @@ from app.metadata.ThumbnailGenerator import ThumbnailGenerator
 from app.models.Channel import Channel
 from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
-from app.streams.TSReplaceEncodingTask import TSReplaceEncodingTask
-from app.schemas import EncodingTask
 from app.utils.DriveIOLimiter import DriveIOLimiter
 from app.utils.EncodingFileTracker import EncodingFileTracker
 from app.utils.ProcessLimiter import ProcessLimiter
@@ -938,8 +936,12 @@ class RecordedScanTask:
             tsreplace_task.encoding_task.rec_file_id = recorded_video.id
 
             # WebSocket通知のためにタスクを登録
-            from app.routers.TSReplaceRouter import register_auto_encoding_task, cleanup_auto_encoding_task
             import asyncio
+
+            from app.routers.TSReplaceRouter import (
+                cleanup_auto_encoding_task,
+                register_auto_encoding_task,
+            )
 
             # タスクを管理辞書に追加
             register_auto_encoding_task(tsreplace_task)
@@ -1165,7 +1167,8 @@ class RecordedScanTask:
                 if db_recorded_video is not None:
                     # RecordedVideo の親テーブルである RecordedProgram を削除すると、
                     # CASCADE 制約により RecordedVideo も同時に削除される (Channel は親テーブルにあたるため削除されない)
-                    await db_recorded_video.recorded_program.delete()
+                    # OneToOne リレーションの場合、直接 RecordedProgram のレコードを削除する
+                    await RecordedProgram.filter(id=db_recorded_video.recorded_program_id).delete()
                     logging.info(f'{file_path}: Deleted record for removed file.')
 
             except Exception as ex:
@@ -1470,7 +1473,7 @@ class RecordedScanTask:
                 encoded_video.is_tsreplace_encoded = True
                 encoded_video.tsreplace_encoded_at = original_video.tsreplace_encoded_at
                 encoded_video.original_video_codec = original_video.original_video_codec
-                logging.info(f'Inherited TSReplace encoding information')
+                logging.info('Inherited TSReplace encoding information')
                 updated = True
 
             # 変更があった場合のみDBを更新
