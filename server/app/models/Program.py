@@ -637,13 +637,15 @@ class Program(TortoiseModel):
 
                         ## 主音声
                         ## 副音声の情報は常に存在しないため省略
-                        program.primary_audio_type = ariblib.constants.COMPONENT_TYPE[0x02].get(program_info['audio']['componentType'], 'Unknown')
-                        program.primary_audio_sampling_rate = str(int(program_info['audio']['samplingRate'] / 1000)) + 'kHz'  # kHz に変換
-                        ## Mirakurun 3.8 以下では言語コードが取得できないため、日本語で固定する
-                        program.primary_audio_language = '日本語'
-                        ## デュアルモノのみ
-                        if program.primary_audio_type == '1/0+1/0モード(デュアルモノ)':
-                            program.primary_audio_language = '日本語+英語'  # 日本語+英語で固定
+                        ## audio キーが存在する場合のみ音声情報を設定
+                        if 'audio' in program_info:
+                            program.primary_audio_type = ariblib.constants.COMPONENT_TYPE[0x02].get(program_info['audio']['componentType'], 'Unknown')
+                            program.primary_audio_sampling_rate = str(int(program_info['audio']['samplingRate'] / 1000)) + 'kHz'  # kHz に変換
+                            ## Mirakurun 3.8 以下では言語コードが取得できないため、日本語で固定する
+                            program.primary_audio_language = '日本語'
+                            ## デュアルモノのみ
+                            if program.primary_audio_type == '1/0+1/0モード(デュアルモノ)':
+                                program.primary_audio_language = '日本語+英語'  # 日本語+英語で固定
 
                     # 番組情報をデータベースに保存する
                     if duplicate_program is None:

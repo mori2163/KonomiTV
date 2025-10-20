@@ -8,6 +8,14 @@
             </span>
         </div>
 
+        <!-- EPGStation 使用時の制限警告バナー -->
+        <div v-if="recorderType === 'EPGStation'" class="recording-warning-banner">
+            <Icon icon="fluent:warning-16-filled" class="recording-warning-banner__icon" />
+            <span class="recording-warning-banner__text">
+                EPGStation 使用時には一部オプションが制限されます。
+            </span>
+        </div>
+
         <!-- 録画予約の有効/無効 (EPGStation は無効化非対応) -->
         <div class="reservation-recording-settings__section" :style="recorderType === 'EPGStation' ? { opacity: 0.5, pointerEvents: 'none' } : {}">
             <div class="reservation-recording-settings__header">

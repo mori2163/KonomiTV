@@ -45,6 +45,143 @@ _bitrate_ini_cache: dict[str, int] | None = None
 _bitrate_ini_cache_timestamp: float | None = None
 
 
+async def GetBitrateFromEDCB(network_id: int | None, transport_stream_id: int | None, service_id: int | None) -> int:
+    """
+    EDCB から Bitrate.ini を取得して、指定されたチャンネルのビットレートを取得する
+    ref: https://github.com/tkntrec/EDCB/blob/my-build/EpgTimer/EpgTimer/DefineClass/SearchItem.cs#L265-L290
+
+    Args:
+        network_id (int | None): ネットワーク ID (ONID)
+        transport_stream_id (int | None): トランスポートストリーム ID (TSID)
+        service_id (int | None): サービス ID (SID)
+
+    Returns:
+        int: ビットレート (kbps)
+    """
+
+    global _bitrate_ini_cache, _bitrate_ini_cache_timestamp
+
+    # None の場合は 0xFFFF として扱う（ワイルドカード検索用）
+    network_id = network_id if network_id is not None else 0xFFFF
+    transport_stream_id = transport_stream_id if transport_stream_id is not None else 0xFFFF
+    service_id = service_id if service_id is not None else 0xFFFF
+
+    # 常時マルチチャンネル放送のため、例外的に決め打ちの値を使うチャンネルリスト
+    # キー: (NID, SID), 値: ビットレート (kbps)
+    hardcoded_bitrates = {
+        (32391, 23608): 12000,  # TOKYO MX1(091ch) (12Mbps)
+        (32391, 23609): 12000,  # TOKYO MX1(092ch) (12Mbps)
+        (32391, 23610): 4800,   # TOKYO MX2(093ch) (4.8Mbps)
+        (32381, 24680): 10000,  # イッツコムch10(101ch) (10Mbps)
+        (32381, 24681): 10000,  # イッツコムch10(102ch) (10Mbps)
+        (32383, 24696): 10000,  # イッツコムch10(111ch) (10Mbps)
+        (32383, 24697): 10000,  # イッツコムch10(112ch) (10Mbps)
+    }
+
+    # 決めうちの値が設定されているかチェック
+    channel_key = (network_id, service_id)
+    if channel_key in hardcoded_bitrates:
+        return hardcoded_bitrates[channel_key]
+
+    # キャッシュが存在し、かつ15分以内の場合はそれを使用
+    current_time = time.time()
+    if (_bitrate_ini_cache is not None and
+        _bitrate_ini_cache_timestamp is not None and
+        current_time - _bitrate_ini_cache_timestamp < 900):  # 900秒 = 15分
+        # 段階的に検索: 全指定 -> SID=0xFFFF -> TSID=0xFFFF -> ONID=0xFFFF
+        for i in range(4):
+            onid = 0xFFFF if i > 2 else network_id
+            tsid = 0xFFFF if i > 1 else transport_stream_id
+            sid = 0xFFFF if i > 0 else service_id
+
+            # EpgTimer の Create64Key ロジックを移植: (onid << 32 | tsid << 16 | sid)
+            key = f"{(onid << 32 | tsid << 16 | sid):012X}"
+
+            if key in _bitrate_ini_cache and _bitrate_ini_cache[key] > 0:
+                return _bitrate_ini_cache[key]
+
+        # キャッシュに該当なし、デフォルト値を返す
+        return 19456
+
+    # EDCB の API から Bitrate.ini を取得
+    try:
+        files = await CtrlCmdUtil().sendFileCopy2(['Bitrate.ini'])
+        if not files or len(files) == 0:
+            return 19456
+
+        # ファイルデータをテキストとして解析
+        bitrate_ini_data = files[0]['data']
+        if not bitrate_ini_data:
+            return 19456
+
+        # バイナリデータを文字列に変換 (UTF-16 BOM つきまたは UTF-8)
+        try:
+            # UTF-16 BOM つきの場合
+            if bitrate_ini_data.startswith(b'\xff\xfe'):
+                ini_text = bitrate_ini_data.decode('utf-16')
+            else:
+                # UTF-8 として試行
+                ini_text = bitrate_ini_data.decode('utf-8')
+        except UnicodeDecodeError:
+            # システムデフォルトエンコーディングで試行
+            ini_text = bitrate_ini_data.decode('shift_jis', errors='ignore')
+
+        # Bitrate.ini をパースしてキャッシュに保存
+        bitrate_ini = configparser.ConfigParser()
+        bitrate_ini.read_string(ini_text)
+        _bitrate_ini_cache = {}
+        for section in bitrate_ini.sections():
+            # bitrate の値を取得して kbps に変換 (値の単位は bps)
+            if 'bitrate' not in bitrate_ini[section]:
+                continue
+            bitrate = bitrate_ini[section].getint('bitrate', 19456000) // 1000
+            _bitrate_ini_cache[section] = bitrate
+        _bitrate_ini_cache_timestamp = current_time
+
+        # 再度段階的に検索
+        for i in range(4):
+            onid = 0xFFFF if i > 2 else network_id
+            tsid = 0xFFFF if i > 1 else transport_stream_id
+            sid = 0xFFFF if i > 0 else service_id
+
+            # EpgTimer の Create64Key ロジックを移植: (onid << 32 | tsid << 16 | sid)
+            key = f"{(onid << 32 | tsid << 16 | sid):012X}"
+
+            if key in _bitrate_ini_cache and _bitrate_ini_cache[key] > 0:
+                return _bitrate_ini_cache[key]
+
+        # 見つからない場合はデフォルト値を返す
+        return 19456
+
+    except Exception as ex:
+        logging.error('[ReservationsRouter][GetBitrateFromEDCB] Failed to parse Bitrate.ini:', exc_info=ex)
+        return 19456
+
+
+def CalculateEstimatedFileSize(duration_seconds: float, bitrate_kbps: int, recording_mode: str) -> int:
+    """
+    録画予定時間とビットレートから想定ファイルサイズを計算する
+
+    Args:
+        duration_seconds (float): 録画予定時間 (秒)
+        bitrate_kbps (int): ビットレート (kbps)
+        recording_mode (str): 録画モード (視聴モードの場合は想定サイズ 0 を返す)
+
+    Returns:
+        int: 想定ファイルサイズ (バイト)
+    """
+
+    # 視聴モードの場合は想定サイズ 0 を返す (録画されないため)
+    if recording_mode == 'View':
+        return 0
+
+    # EpgTimer のロジック: bitrate / 8 * 1000 * duration (秒)
+    # ビットレート (kbps) を バイト/秒 に変換: kbps / 8 * 1000 = bytes/sec
+    estimated_size_bytes = max(int(bitrate_kbps / 8 * 1000 * duration_seconds), 0)
+
+    return estimated_size_bytes
+
+
 async def DecodeEDCBReserveData(reserve_data: ReserveDataRequired, channels: list[Channel] | None = None, programs: dict[tuple[int, int, int], Program] | None = None) -> schemas.Reservation:
     """
     EDCB の ReserveData オブジェクトを schemas.Reservation オブジェクトに変換する
@@ -57,141 +194,6 @@ async def DecodeEDCBReserveData(reserve_data: ReserveDataRequired, channels: lis
     Returns:
         schemas.Reservation: schemas.Reservation オブジェクト
     """
-
-    async def GetBitrateFromEDCB(network_id: int, transport_stream_id: int, service_id: int) -> int:
-        """
-        EDCB から Bitrate.ini を取得して、指定されたチャンネルのビットレートを取得する
-        ref: https://github.com/tkntrec/EDCB/blob/my-build/EpgTimer/EpgTimer/DefineClass/SearchItem.cs#L265-L290
-
-        Args:
-            network_id (int): ネットワーク ID (ONID)
-            transport_stream_id (int): トランスポートストリーム ID (TSID)
-            service_id (int): サービス ID (SID)
-
-        Returns:
-            int: ビットレート (kbps)
-        """
-
-        global _bitrate_ini_cache, _bitrate_ini_cache_timestamp
-
-        # 常時マルチチャンネル放送のため、例外的に決め打ちの値を使うチャンネルリスト
-        # キー: (NID, SID), 値: ビットレート (kbps)
-        hardcoded_bitrates = {
-            (32391, 23608): 12000,  # TOKYO MX1(091ch) (12Mbps)
-            (32391, 23609): 12000,  # TOKYO MX1(092ch) (12Mbps)
-            (32391, 23610): 4800,   # TOKYO MX2(093ch) (4.8Mbps)
-            (32381, 24680): 10000,  # イッツコムch10(101ch) (10Mbps)
-            (32381, 24681): 10000,  # イッツコムch10(102ch) (10Mbps)
-            (32383, 24696): 10000,  # イッツコムch10(111ch) (10Mbps)
-            (32383, 24697): 10000,  # イッツコムch10(112ch) (10Mbps)
-        }
-
-        # 決めうちの値が設定されているかチェック
-        channel_key = (network_id, service_id)
-        if channel_key in hardcoded_bitrates:
-            return hardcoded_bitrates[channel_key]
-
-        # キャッシュが存在し、かつ15分以内の場合はそれを使用
-        current_time = time.time()
-        if (_bitrate_ini_cache is not None and
-            _bitrate_ini_cache_timestamp is not None and
-            current_time - _bitrate_ini_cache_timestamp < 900):  # 900秒 = 15分
-            # 段階的に検索: 全指定 -> SID=0xFFFF -> TSID=0xFFFF -> ONID=0xFFFF
-            for i in range(4):
-                onid = 0xFFFF if i > 2 else network_id
-                tsid = 0xFFFF if i > 1 else transport_stream_id
-                sid = 0xFFFF if i > 0 else service_id
-
-                # EpgTimer の Create64Key ロジックを移植: (onid << 32 | tsid << 16 | sid)
-                key = f"{(onid << 32 | tsid << 16 | sid):012X}"
-
-                if key in _bitrate_ini_cache and _bitrate_ini_cache[key] > 0:
-                    return _bitrate_ini_cache[key]
-
-            # デフォルト値を返す
-            return 19456
-
-        try:
-            # EDCB から Bitrate.ini を取得
-            files = await CtrlCmdUtil().sendFileCopy2(['Bitrate.ini'])
-            if files is None or len(files) == 0:
-                logging.warning('[ReservationsRouter][GetBitrateFromEDCB] Failed to get Bitrate.ini from EDCB.')
-                return 19456
-
-            # ファイルデータをテキストとして解析
-            bitrate_ini_data = files[0]['data']
-            if not bitrate_ini_data:
-                logging.warning('[ReservationsRouter][GetBitrateFromEDCB] Bitrate.ini is empty.')
-                return 19456
-
-            # バイナリデータを文字列に変換 (UTF-16 BOM つきまたは UTF-8)
-            try:
-                # UTF-16 BOM つきの場合
-                if bitrate_ini_data.startswith(b'\xff\xfe'):
-                    ini_text = bitrate_ini_data.decode('utf-16')
-                else:
-                    # UTF-8 として試行
-                    ini_text = bitrate_ini_data.decode('utf-8')
-            except UnicodeDecodeError:
-                # システムデフォルトエンコーディングで試行
-                ini_text = bitrate_ini_data.decode('shift_jis', errors='ignore')
-
-            # ConfigParser で解析
-            config = configparser.ConfigParser()
-            config.read_string(ini_text)
-
-            # BITRATE セクションからビットレート情報を取得してキャッシュに保存
-            _bitrate_ini_cache = {}
-            _bitrate_ini_cache_timestamp = current_time
-            if 'BITRATE' in config:
-                for key, value in config['BITRATE'].items():
-                    try:
-                        _bitrate_ini_cache[key.upper()] = int(value)
-                    except ValueError:
-                        continue
-
-            # 段階的に検索: 全指定 -> SID=0xFFFF -> TSID=0xFFFF -> ONID=0xFFFF
-            for i in range(4):
-                onid = 0xFFFF if i > 2 else network_id
-                tsid = 0xFFFF if i > 1 else transport_stream_id
-                sid = 0xFFFF if i > 0 else service_id
-
-                # EpgTimer の Create64Key ロジックを移植: (onid << 32 | tsid << 16 | sid)
-                key = f"{(onid << 32 | tsid << 16 | sid):012X}"
-
-                if key in _bitrate_ini_cache and _bitrate_ini_cache[key] > 0:
-                    return _bitrate_ini_cache[key]
-
-            # 見つからない場合はデフォルト値を返す
-            return 19456
-
-        except Exception as ex:
-            logging.error('[ReservationsRouter][GetBitrateFromEDCB] Failed to parse Bitrate.ini:', exc_info=ex)
-            return 19456
-
-
-    def CalculateEstimatedFileSize(duration_seconds: float, bitrate_kbps: int, recording_mode: str) -> int:
-        """
-        録画予定時間とビットレートから想定ファイルサイズを計算する
-
-        Args:
-            duration_seconds (float): 録画予定時間 (秒)
-            bitrate_kbps (int): ビットレート (kbps)
-            recording_mode (str): 録画モード (視聴モードの場合は想定サイズ 0 を返す)
-
-        Returns:
-            int: 想定ファイルサイズ (バイト)
-        """
-
-        # 視聴モードの場合は想定サイズ 0 を返す (録画されないため)
-        if recording_mode == 'View':
-            return 0
-
-        # EpgTimer のロジック: bitrate / 8 * 1000 * duration (秒)
-        # ビットレート (kbps) を バイト/秒 に変換: kbps / 8 * 1000 = bytes/sec
-        estimated_size_bytes = max(int(bitrate_kbps / 8 * 1000 * duration_seconds), 0)
-
-        return estimated_size_bytes
 
     # 録画予約 ID
     reserve_id: int = reserve_data['reserve_id']
@@ -694,8 +696,9 @@ def ValidateEPGStationRecordSettings(record_settings: schemas.RecordSettings) ->
     if record_settings.forced_tuner_id is not None:
         unsupported_fields.append('forced_tuner_id')
 
-    if len(record_settings.recording_folders) > 1:
-        unsupported_fields.append('recording_folders')
+    # EPGStation は最大3つの保存先フォルダをサポート
+    if len(record_settings.recording_folders) > 3:
+        unsupported_fields.append('recording_folders (maximum 3 folders supported)')
 
     for index, folder in enumerate(record_settings.recording_folders):
         if folder.is_oneseg_separate_recording_folder:
@@ -1020,8 +1023,17 @@ async def DecodeEPGStationReserveData(
     # 録画設定を変換
     record_settings = DecodeEPGStationRecordSettings(reserve.get('option', {}))
 
-    # 想定ファイルサイズ（EPGStation では計算困難なため 0 を返す）
-    estimated_recording_file_size = 0
+    # 想定録画ファイルサイズを計算
+    estimated_recording_file_size: int = 0
+    try:
+        # EDCB から Bitrate.ini を取得してビットレートを計算
+        ## EPGStation の場合も、KonomiTV のチャンネル情報から network_id, transport_stream_id, service_id を取得できる
+        bitrate_kbps = await GetBitrateFromEDCB(channel.network_id, channel.transport_stream_id, channel.service_id)
+        # 想定ファイルサイズを計算
+        estimated_recording_file_size = CalculateEstimatedFileSize(program_obj.duration, bitrate_kbps, record_settings.recording_mode)
+    except Exception as ex:
+        logging.warning(f'[ReservationsRouter][DecodeEPGStationReserveData] Failed to calculate estimated file size. [reserve_id: {reserve_id}]', exc_info=ex)
+        estimated_recording_file_size = 0
 
     return schemas.Reservation(
         id = reserve_id,
@@ -1113,12 +1125,22 @@ def EncodeEPGStationRecordSettings(record_settings: schemas.RecordSettings) -> d
         'enable': record_settings.is_enabled,
     }
 
-    # 保存先フォルダ（最初の1つのみ使用）
-    if record_settings.recording_folders:
-        first_folder = record_settings.recording_folders[0]
-        option['directory'] = first_folder.recording_folder_path
-        if first_folder.recording_file_name_template:
-            option['recordedFormat'] = first_folder.recording_file_name_template
+    # 保存先フォルダ（最大3つまで対応）
+    for i, folder in enumerate(record_settings.recording_folders[:3]):
+        if i == 0:
+            # デフォルト保存先
+            option['directory'] = folder.recording_folder_path
+            if folder.recording_file_name_template:
+                option['recordedFormat'] = folder.recording_file_name_template
+        else:
+            # 追加保存先（mode1/directory1, mode2/directory2）
+            mode_key = f'mode{i}'
+            dir_key = f'directory{i}'
+            # mode 値は録画モード ID を指定（EPGStation の設定ファイルで定義されている）
+            # ここでは仮に 1 を設定（実際の値は環境依存のため、EPGStation の設定に従う）
+            option[mode_key] = 1
+            option[dir_key] = folder.recording_folder_path
+            logging.info(f'[ReservationsRouter][EncodeEPGStationRecordSettings] Multiple recording folders configured. [index: {i}, path: {folder.recording_folder_path}]')
 
     # EPGStation でサポートされていない設定は無視
     # クライアント側で EPGStation 使用時はこれらの設定を無効化する必要がある
@@ -1560,6 +1582,7 @@ async def AddReservationAPI(
         async with EPGStationUtil() as epgstation:
             epgstation_program_id, _ = await ResolveEPGStationProgram(epgstation, program)
 
+            logging.info(f'[ReservationsRouter][AddReservationAPI] Adding reservation to EPGStation. [program_id: {program.id}, epgstation_program_id: {epgstation_program_id}]')
             reserve_id = await epgstation.addReserve(epgstation_program_id, option)
             if reserve_id is None:
                 logging.error('[ReservationsRouter][AddReservationAPI] Failed to add a recording reservation to EPGStation.')
@@ -1567,6 +1590,7 @@ async def AddReservationAPI(
                     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail = 'Failed to add a recording reservation',
                 )
+            logging.info(f'[ReservationsRouter][AddReservationAPI] Successfully added reservation to EPGStation. [reserve_id: {reserve_id}]')
 
         # 201 Created を返す
 
@@ -1734,6 +1758,7 @@ async def UpdateReservationAPI(
 
         # EPGStation の予約を更新
         async with EPGStationUtil() as epgstation:
+            logging.info(f'[ReservationsRouter][UpdateReservationAPI] Updating reservation in EPGStation. [reservation_id: {reservation_id}]')
             success = await epgstation.updateReserve(reservation_id, option)
             if not success:
                 logging.error(f'[ReservationsRouter][UpdateReservationAPI] Failed to update the reservation. [reservation_id: {reservation_id}]')
@@ -1741,6 +1766,7 @@ async def UpdateReservationAPI(
                     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail = 'Failed to update the specified recording reservation',
                 )
+            logging.info(f'[ReservationsRouter][UpdateReservationAPI] Successfully updated reservation in EPGStation. [reservation_id: {reservation_id}]')
 
         # 更新後の予約情報を返す
         return await ReservationAPI(reservation_id)
