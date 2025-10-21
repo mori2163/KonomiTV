@@ -4,7 +4,7 @@ import json
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, Literal, cast
 from zoneinfo import ZoneInfo
 
 import typer
@@ -197,6 +197,10 @@ class MetadataAnalyzer:
     app.metadata モジュール内の各クラスを統括し、録画ファイルから取り出せるだけのメタデータを取り出す
     """
 
+    # FFprobe が VPS/SPS/PPS を確実に読み込めるよう解析対象の尺とサイズを拡張する
+    FFPROBE_ANALYZE_DURATION_US: ClassVar[str] = str(30 * 1_000_000)
+    FFPROBE_PROBESIZE: ClassVar[str] = '80M'
+
     def __init__(self, recorded_file_path: Path) -> None:
         """
         録画ファイルのメタデータを解析するクラスを初期化する
@@ -298,9 +302,6 @@ class MetadataAnalyzer:
             container_format = 'MPEG-TS'
         elif 'mp4' in full_probe.format.format_name:
             container_format = 'MPEG-4'
-        ## 再生時間
-        if full_probe.format.duration is not None:
-            duration = float(full_probe.format.duration)
 
         ## 部分解析: 映像・音声情報を取得
         is_video_track_analyzed = False
@@ -322,6 +323,12 @@ class MetadataAnalyzer:
         if len(sample_probe_video_streams) == 0 and len(sample_probe_audio_streams) == 0:
             logging.warning(f'{self.recorded_file_path}: No valid video or audio streams found.')
             return None
+
+        ## 再生時間
+        if full_probe_video_streams[0].duration is not None:
+            duration = full_probe_video_streams[0].duration
+        elif full_probe.format.duration is not None:
+            duration = float(full_probe.format.duration)
 
         ## 映像情報
         for video_stream in sample_probe_video_streams:
@@ -755,6 +762,8 @@ class MetadataAnalyzer:
         args_full = [
             '-hide_banner',
             '-loglevel', 'error',
+            '-analyzeduration', self.FFPROBE_ANALYZE_DURATION_US,
+            '-probesize', self.FFPROBE_PROBESIZE,
             '-show_format',
             '-show_streams',
             '-show_programs',
@@ -824,6 +833,8 @@ class MetadataAnalyzer:
                     args_sample = [
                         '-hide_banner',
                         '-loglevel', 'error',
+                        '-analyzeduration', self.FFPROBE_ANALYZE_DURATION_US,
+                        '-probesize', self.FFPROBE_PROBESIZE,
                         '-f', 'mpegts',
                         '-i', 'pipe:0',
                         '-show_streams',

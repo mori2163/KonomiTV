@@ -6,10 +6,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, cast
 
-from PIL import Image
 import puremagic
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
+from PIL import Image
 
 from app import logging
 from app.config import Config

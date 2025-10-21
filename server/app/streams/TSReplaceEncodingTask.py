@@ -10,7 +10,7 @@ import shutil
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Literal, Optional, Tuple
+from typing import Any, ClassVar, Literal
 
 from app import logging
 from app.config import Config
@@ -114,7 +114,7 @@ class TSReplaceEncodingTask:
         ]
     }
 
-    def _getQualityConfig(self) -> Dict[str, Any]:
+    def _getQualityConfig(self) -> dict[str, Any]:
         """品質設定を取得する"""
         config = self.DEFAULT_QUALITY_CONFIG.copy()
         config['is_hevc'] = self.encoding_task.codec == 'hevc'
@@ -636,7 +636,7 @@ class TSReplaceEncodingTask:
                     logging.error('This indicates the video record was deleted before encoding started')
                     return False
             else:
-                logging.warning(f'rec_file_id is 0 or not set - skipping database verification')
+                logging.warning('rec_file_id is 0 or not set - skipping database verification')
 
             # 入力ファイルの存在確認
             if not os.path.exists(self.encoding_task.input_file_path):
@@ -663,7 +663,7 @@ class TSReplaceEncodingTask:
             return True
 
         except Exception as e:
-            error_msg = f'Preparation failed: {str(e)}'
+            error_msg = f'Preparation failed: {e!s}'
             self.encoding_task.error_message = error_msg
             logging.error(error_msg, exc_info=True)
             return False
@@ -804,7 +804,7 @@ class TSReplaceEncodingTask:
 
                     logging.info(f'TSReplace encoding completed [{codec_info}]: {os.path.basename(self.encoding_task.output_file_path)} - {original_mb:.1f}MB -> {encoded_mb:.1f}MB (compression: {compression_ratio:.1f}%)')
                 else:
-                    logging.info(f'TSReplace encoding process completed successfully. Progress set to 100.0%')
+                    logging.info('TSReplace encoding process completed successfully. Progress set to 100.0%')
 
                 # エンコード後の処理を実行
                 post_process_success = await self._processEncodedFile()
@@ -856,7 +856,7 @@ class TSReplaceEncodingTask:
                 return False
 
         except Exception as e:
-            error_msg = f'Encoding execution failed: {str(e)}'
+            error_msg = f'Encoding execution failed: {e!s}'
             self.encoding_task.error_message = error_msg
             logging.error(error_msg, exc_info=True)
             return False
@@ -925,7 +925,7 @@ class TSReplaceEncodingTask:
 
         try:
             # エラーメッセージを記録
-            self.encoding_task.error_message = f'Unexpected error: {str(error)}'
+            self.encoding_task.error_message = f'Unexpected error: {error!s}'
 
             # エラーを処理
             _, processed_error_msg = await self._handleEncodingError(
@@ -1027,7 +1027,7 @@ class TSReplaceEncodingTask:
             try:
                 self._tsreplace_process.terminate()
                 await asyncio.wait_for(self._tsreplace_process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logging.warning('TSReplace process did not terminate gracefully, killing it')
                 self._tsreplace_process.kill()
                 await self._tsreplace_process.wait()
@@ -1046,7 +1046,7 @@ class TSReplaceEncodingTask:
                 logging.info(f'Cancelling TSReplace encoding process for task: {self.encoding_task.task_id}')
                 self._tsreplace_process.terminate()
                 await asyncio.wait_for(self._tsreplace_process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logging.warning('TSReplace process did not terminate gracefully, killing it')
                 self._tsreplace_process.kill()
                 await self._tsreplace_process.wait()
@@ -1115,7 +1115,7 @@ class TSReplaceEncodingTask:
         delay = min(base_delay * (2 ** retry_count), 300)
         return delay
 
-    async def _handleEncodingError(self, task: EncodingTask, error: Exception) -> Tuple[bool, str]:
+    async def _handleEncodingError(self, task: EncodingTask, error: Exception) -> tuple[bool, str]:
         """エンコードエラーを処理し、適切な対応を決定する"""
         error_message = str(error)
         error_category = self._categorizeError(error_message)
@@ -1183,9 +1183,9 @@ class TSReplaceEncodingTask:
         """
         try:
             if self.encoding_task.rec_file_id > 0:
-                from app.models.RecordedVideo import RecordedVideo
-                from app.metadata.KeyFrameAnalyzer import KeyFrameAnalyzer
                 from app.metadata.CMSectionsDetector import CMSectionsDetector
+                from app.metadata.KeyFrameAnalyzer import KeyFrameAnalyzer
+                from app.models.RecordedVideo import RecordedVideo
 
                 # データベースレコードを取得
                 recorded_video = await RecordedVideo.get(id=self.encoding_task.rec_file_id)
@@ -1257,15 +1257,15 @@ class TSReplaceEncodingTask:
                     logging.error(f'Failed to analyze encoded file metadata: {self.encoding_task.output_file_path}')
                     logging.warning(f'Failed to analyze metadata for encoded file: {metadata_error}', exc_info=True)
                     # メタデータ解析の失敗をキャッチして再度例外を投げる
-                    raise Exception(f'Post-processing failed')
+                    raise Exception('Post-processing failed')
 
             else:
-                logging.warning(f'Cannot update encoded flag - rec_file_id is 0 or not set')
+                logging.warning('Cannot update encoded flag - rec_file_id is 0 or not set')
 
         except Exception as e:
             logging.error(f'Failed to update encoded flag: {e}', exc_info=True)
 
-    def _logEncodingComplete(self, task: EncodingTask, success: bool, duration: Optional[float] = None) -> None:
+    def _logEncodingComplete(self, task: EncodingTask, success: bool, duration: float | None = None) -> None:
         """エンコード完了をログに記録する"""
         try:
             log_entry = {
@@ -1306,7 +1306,7 @@ class TSReplaceEncodingTask:
         except Exception as e:
             logging.error(f'Failed to log encoding completion: {e}', exc_info=True)
 
-    def _logEncodingError(self, task: EncodingTask, error: Exception, error_category: Optional[str] = None) -> None:
+    def _logEncodingError(self, task: EncodingTask, error: Exception, error_category: str | None = None) -> None:
         """エンコードエラーをログに記録する"""
         try:
             log_entry = {
@@ -1325,14 +1325,14 @@ class TSReplaceEncodingTask:
                 'status': task.status
             }
 
-            message = f'Encoding error - Task: {task.task_id}, Error: {str(error)}'
+            message = f'Encoding error - Task: {task.task_id}, Error: {error!s}'
             if error_category:
                 message += f', Category: {error_category}'
             message += f', Retry: {task.retry_count}/{task.max_retry_count}'
 
             self._writeTextLog(self.error_log_path, 'ERROR', message)
             self._writeJsonLog(self.error_json_log_path, log_entry)
-            logging.error(f'TSReplace encoding error: {task.task_id} - {str(error)}', exc_info=True)
+            logging.error(f'TSReplace encoding error: {task.task_id} - {error!s}', exc_info=True)
 
         except Exception as e:
             logging.error(f'Failed to log encoding error: {e}', exc_info=True)
@@ -1349,7 +1349,7 @@ class TSReplaceEncodingTask:
         except Exception as e:
             logging.error(f'Failed to write text log to {log_path}: {e}')
 
-    def _writeJsonLog(self, log_path: Path, log_entry: Dict[str, Any]) -> None:
+    def _writeJsonLog(self, log_path: Path, log_entry: dict[str, Any]) -> None:
         """JSON形式のログを書き込む（JSONL形式）"""
         try:
             json_line = json.dumps(log_entry, ensure_ascii=False, default=str) + '\n'
@@ -1392,7 +1392,7 @@ class TSReplaceEncodingTask:
             # エンコード済みファイルを適切なフォルダに移動
             final_output_path = await self._moveEncodedFileToDestination()
             if not final_output_path:
-                logging.error(f'Failed to move encoded file to destination')
+                logging.error('Failed to move encoded file to destination')
                 return False
 
             # データベースを簡略更新（元ファイルのメタデータを保持）
@@ -1400,14 +1400,14 @@ class TSReplaceEncodingTask:
                 # 元ファイルパスを削除処理のために保存
                 original_file_path_for_deletion = original_video.file_path
 
-                logging.info(f'Updating database with TSReplace encoding information (preserving original metadata)')
+                logging.info('Updating database with TSReplace encoding information (preserving original metadata)')
                 success = await self._updateDatabaseSimple(original_video, final_output_path)
                 if not success:
-                    logging.error(f'Failed to update database with encoded file information')
+                    logging.error('Failed to update database with encoded file information')
                     return False
 
                 # サムネイル処理：元ファイルと同じ内容なので既存サムネイルをそのまま使用
-                logging.info(f'Using existing thumbnails from original file (no regeneration needed)')
+                logging.info('Using existing thumbnails from original file (no regeneration needed)')
 
                 # 元ファイルの削除・保持処理
                 if self.delete_original:
@@ -1418,11 +1418,11 @@ class TSReplaceEncodingTask:
                 # エンコード完了をログに記録
                 logging.info(f'TSReplace encoding completed successfully. Original: {original_file_path_for_deletion} -> Encoded: {final_output_path}')
             else:
-                logging.warning(f'Skipping database update due to missing original video record')
+                logging.warning('Skipping database update due to missing original video record')
                 logging.info(f'Encoded file created successfully: {final_output_path}')
 
                 if self.delete_original:
-                    logging.warning(f'Cannot delete original file - original video record not found')
+                    logging.warning('Cannot delete original file - original video record not found')
 
             logging.info(f'Post-processing completed successfully for: {final_output_path}')
             return True

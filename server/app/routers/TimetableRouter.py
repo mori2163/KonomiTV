@@ -1,15 +1,13 @@
 
 from datetime import datetime
-from fastapi import APIRouter
-from fastapi import Depends
-from fastapi import Query
-from fastapi import status
 from zoneinfo import ZoneInfo
+
+from fastapi import APIRouter, Query, status
 
 from app import schemas
 from app.models.Channel import Channel
 from app.models.Program import Program
-from app.routers.UsersRouter import GetCurrentAdminUser
+
 
 router = APIRouter(
     prefix='/api/timetable',

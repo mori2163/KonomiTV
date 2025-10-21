@@ -1,9 +1,10 @@
 <template>
     <router-link v-ripple class="recorded-program"
-        :to="program.recorded_video.status === 'Recording' || !program.recorded_video.has_key_frames || isEncoding ? { path: '' } : `/videos/watch/${program.id}`"
+        :to="program.recorded_video.status === 'Recorded' && program.recorded_video.has_key_frames || isEncoding ? `/videos/watch/${program.id}` : { path: '' }"
         :class="{
             'recorded-program--recording': program.recorded_video.status === 'Recording',
-            'recorded-program--analyzing': !program.recorded_video.has_key_frames,
+            'recorded-program--analyzing': !program.recorded_video.has_key_frames && program.recorded_video.status !== 'AnalysisFailed',
+            'recorded-program--failed': program.recorded_video.status === 'AnalysisFailed',
             'recorded-program--encoding': isEncoding,
         }">
         <div class="recorded-program__container">
@@ -16,8 +17,11 @@
                     <div class="recorded-program__thumbnail-status-dot"></div>
                     録画中
                 </div>
-                <div v-else-if="!program.recorded_video.has_key_frames"
-                    class="recorded-program__thumbnail-status recorded-program__thumbnail-status--analyzing">
+                <div v-else-if="program.recorded_video.status === 'AnalysisFailed'" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--failed">
+                    <Icon icon="fluent:error-circle-12-regular" width="15px" height="15px" />
+                    メタデータ解析失敗
+                </div>
+                <div v-else-if="!program.recorded_video.has_key_frames" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--analyzing">
                     <Icon icon="fluent:clock-12-regular" width="15px" height="15px" />
                     メタデータ解析中
                 </div>
@@ -505,6 +509,13 @@ const deleteVideo = async () => {
                 svg {
                     color: rgb(var(--v-theme-primary));
                     animation: progress-rotate 1.5s infinite;
+                }
+            }
+
+            &--failed {
+                gap: 3px;
+                svg {
+                    color: rgb(var(--v-theme-error));
                 }
             }
 

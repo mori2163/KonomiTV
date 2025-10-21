@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.schemas import DiscordStatus
 
+
 router = APIRouter(
     tags = ['Discord'],
     prefix = '/api',

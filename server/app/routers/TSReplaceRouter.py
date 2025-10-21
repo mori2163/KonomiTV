@@ -1,21 +1,29 @@
 import asyncio
 import json
-from typing import Annotated, Any, Dict, List
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Path,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from tortoise.exceptions import DoesNotExist
 
 from app import logging, schemas
 from app.models.RecordedProgram import RecordedProgram
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentUser
-from app.streams.TSReplaceEncodingTask import TSReplaceEncodingTask
 from app.schemas import EncodingTask
+from app.streams.TSReplaceEncodingTask import TSReplaceEncodingTask
 
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: list[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -32,7 +40,7 @@ class ConnectionManager:
             except Exception:
                 self.disconnect(connection)
 
-    async def broadcast_json(self, data: Dict[str, Any] | List[Any]):
+    async def broadcast_json(self, data: dict[str, Any] | list[Any]):
         await self.broadcast(json.dumps(data, ensure_ascii=False))
 
 manager = ConnectionManager()
@@ -43,8 +51,8 @@ router = APIRouter(
 )
 
 # 実行中のタスクを管理する辞書
-_running_tasks: Dict[str, TSReplaceEncodingTask] = {}
-_last_broadcast_states: Dict[str, Dict[str, Any]] = {}
+_running_tasks: dict[str, TSReplaceEncodingTask] = {}
+_last_broadcast_states: dict[str, dict[str, Any]] = {}
 broadcast_task: Any = None
 
 
@@ -462,7 +470,7 @@ async def EncodingProgressWebSocket(
                     message = await asyncio.wait_for(websocket.receive_text(), timeout=0.5)  # より短い間隔で監視
                     if message == 'ping':
                         await websocket.send_text('pong')
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # タイムアウトは正常（0.5秒ごとに進捗をチェック）
                     pass
 

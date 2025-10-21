@@ -4,7 +4,6 @@ import asyncio
 import os
 import time
 from pathlib import Path
-from typing import Dict, Set
 
 from app import logging
 
@@ -20,9 +19,9 @@ class EncodingFileTracker:
 
     def __init__(self) -> None:
         # エンコード中のファイルパスを保持するセット
-        self._encoding_files: Set[str] = set()
+        self._encoding_files: set[str] = set()
         # ファイルの追加時刻を記録する辞書（タイムアウト判定用）
-        self._file_timestamps: Dict[str, float] = {}
+        self._file_timestamps: dict[str, float] = {}
         self._file_lock = asyncio.Lock()
         # タイムアウト時間（秒）- デフォルト60分
         self._timeout_seconds = 3600
@@ -94,7 +93,7 @@ class EncodingFileTracker:
 
             return is_encoding
 
-    async def getEncodingFiles(self) -> Set[str]:
+    async def getEncodingFiles(self) -> set[str]:
         """
         現在エンコード中のファイル一覧を取得する
 

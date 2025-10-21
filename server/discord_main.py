@@ -1,23 +1,30 @@
-import discord
-from discord.ext import commands
-from discord import app_commands
-from discord.ui import View, Button, Select
 import datetime
-from typing import Dict, List, Tuple, Optional
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+from discord.ui import Button, Select, View
 
 from app import logging
 from app.config import Config, SaveConfig
+
 
 # Botが実行中かどうかを示すグローバル変数
 is_bot_running: bool = False
 
 from fastapi import HTTPException
-from app.models.Channel import Channel
+
 from app import schemas
+from app.models.Channel import Channel
 from app.models.Program import Program
-from app.routers.VideosRouter import VideosAPI
-from app.routers.ReservationsRouter import ReservationsAPI, GetCtrlCmdUtil, AddReservationAPI
 from app.routers.ProgramsRouter import ProgramSearchAPI
+from app.routers.ReservationsRouter import (
+    AddReservationAPI,
+    GetCtrlCmdUtil,
+    ReservationsAPI,
+)
+from app.routers.VideosRouter import VideosAPI
+
 
 config = Config()
 
@@ -104,7 +111,7 @@ class UtilityCog(commands.Cog):
                         inline=False
                     )
 
-            embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+            embed.timestamp = datetime.datetime.now(datetime.UTC)
 
             await interaction.response.send_message(embed=embed)
         except Exception as e:
@@ -732,7 +739,7 @@ class SettingCog(commands.Cog):
         except Exception as e:
             logging.error(f'[DiscordBot] Error setting notification channel: {e}')
             await interaction.response.send_message(
-                f'❌通知チャンネルの設定に失敗しました。',
+                '❌通知チャンネルの設定に失敗しました。',
                   ephemeral=True
             )
 
@@ -759,7 +766,7 @@ class SettingCog(commands.Cog):
         except Exception as e:
             logging.error(f'[DiscordBot] Error setting reservation notifications: {e}')
             await interaction.response.send_message(
-                f'❌予約通知の設定に失敗しました。',
+                '❌予約通知の設定に失敗しました。',
                   ephemeral=True
             )
 
@@ -874,7 +881,7 @@ async def send_reservation_notification(reservation: schemas.Reservation, notifi
     except Exception as e:
         logging.error(f'[DiscordBot] Error sending {notification_type} notification for reservation ID {reservation.id}: {e}')
 
-def format_program_info(program: Optional[Program]):
+def format_program_info(program: Program | None):
     """番組情報をフォーマットする"""
     if not program:
         return "情報なし"
@@ -890,11 +897,11 @@ def format_program_info(program: Optional[Program]):
         return "番組情報のフォーマット中にエラーが発生しました"
 
 # チャンネル情報取得
-async def get_specific_channels(channel_types: List[str] = ['GR', 'BS', 'CS']) -> Dict[str, List[Tuple[str, str]]]:
+async def get_specific_channels(channel_types: list[str] = ['GR', 'BS', 'CS']) -> dict[str, list[tuple[str, str]]]:
     """
     指定されたチャンネルタイプのチャンネルID(display_channel_id)と名前のリストを取得する。
     """
-    channels_data: Dict[str, List[Tuple[str, str]]] = {ch_type: [] for ch_type in channel_types}
+    channels_data: dict[str, list[tuple[str, str]]] = {ch_type: [] for ch_type in channel_types}
     try:
         # 視聴可能なチャンネルをデータベースから取得 (タイプ、チャンネル番号、リモコンID順)
         all_channels = await Channel.filter(is_watchable=True).order_by('type', 'channel_number', 'remocon_id')
@@ -1019,7 +1026,7 @@ class RecordedProgramsView(View):
 
 class ProgramSelectMenu(Select):
     """番組選択用のSelectMenuクラス"""
-    def __init__(self, programs: List[schemas.Program], start_index: int):
+    def __init__(self, programs: list[schemas.Program], start_index: int):
         # 番組をオプションとして追加（最大25件まで）
         options = []
         for i, program in enumerate(programs[:25], start_index + 1):
@@ -1137,7 +1144,7 @@ class ProgramSelectMenu(Select):
 
 class ProgramSearchResultView(View):
     """番組検索結果表示用のViewクラス"""
-    def __init__(self, programs: List[schemas.Program], search_keyword: str, page: int, total_pages: int, total_items: int, items_per_page: int):
+    def __init__(self, programs: list[schemas.Program], search_keyword: str, page: int, total_pages: int, total_items: int, items_per_page: int):
         super().__init__(timeout=60)  # 60秒でタイムアウト
         self.programs = programs
         self.search_keyword = search_keyword
