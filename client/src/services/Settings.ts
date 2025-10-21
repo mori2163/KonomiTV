@@ -12,6 +12,19 @@ export interface IMutedCommentKeywords {
 }
 
 /**
+ * ストレージ情報のインターフェイス
+ */
+export interface IStorageInfo {
+    drive_root: string;
+    recording_folders: string[];
+    total_bytes: number;
+    used_bytes: number;
+    free_bytes: number;
+    usage_percent: number;
+    available_recording_hours: number;
+}
+
+/**
  * サーバーに保存されるクライアント設定を表すインターフェース
  * サーバー側の app.config.ClientSettings で定義されているものと同じ
  */
@@ -342,6 +355,24 @@ class Settings {
         } catch (error) {
             console.error('Hardware encoder status check failed:', error);
             return { hardware_encoder_available: false, encoder_name: '', available_codecs: [] };
+        }
+    }
+
+    /**
+     * ストレージ状態を取得する
+     * @returns ストレージ使用状況と録画可能時間の情報
+     */
+    static async fetchStorageStatus(): Promise<{storage_info: IStorageInfo[]}> {
+        try {
+            const response = await APIClient.get<{storage_info: IStorageInfo[]}>('/settings/storage-status');
+            if (response.type === 'success') {
+                return response.data;
+            }
+            console.error('Storage status check failed:', response.data.detail);
+            return { storage_info: [] };
+        } catch (error) {
+            console.error('Storage status check failed:', error);
+            return { storage_info: [] };
         }
     }
 }

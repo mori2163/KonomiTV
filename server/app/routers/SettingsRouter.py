@@ -1,4 +1,8 @@
 
+import os
+import shutil
+from collections import defaultdict
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
@@ -118,4 +122,83 @@ async def TSReplaceEncodingHardwareEncoderStatusAPI():
         'hardware_encoder_available': hardware_available,
         'available_codecs': available_codecs,
         'encoder_name': Config().general.encoder,
+    }
+
+
+@router.get(
+    '/storage-status',
+    summary = 'ストレージ状態取得 API',
+    response_description = '録画フォルダのストレージ使用状況と録画可能時間の情報。',
+)
+async def StorageStatusAPI():
+    """
+    録画フォルダが配置されているドライブのストレージ使用状況を取得する。<br>
+    各録画フォルダごとに、合計容量・使用容量・空き容量・使用率・録画可能時間を返す。<br>
+    録画可能時間は、平均ビットレート 18Mbps を基に計算される。
+    """
+
+    config = Config()
+    storage_info_list = []
+
+    # 録画フォルダごとにストレージ情報を取得
+    ## 同じドライブに複数の録画フォルダがある場合は重複を避けるため、ドライブごとに集計する
+    drive_folder_map: dict[str, list[str]] = defaultdict(list)
+
+    for recording_folder_path_str in config.video.recorded_folders:
+        recording_folder_path = Path(recording_folder_path_str)
+        resolved_path = recording_folder_path.resolve()
+        if not resolved_path.exists():
+            continue
+
+        # ドライブのルートパスを取得 (Windows: C:\, Linux: マウントポイント)
+        try:
+            # Windows: ドライブレターを使用
+            if resolved_path.drive:
+                drive_root = str(resolved_path.drive) + '\\'
+            else:
+                # Linux: マウントポイントを取得
+                drive_root = str(resolved_path)
+                # 親ディレクトリを辿ってマウントポイントを見つける
+                while not os.path.ismount(drive_root):
+                    parent = os.path.dirname(drive_root)
+                    if parent == drive_root:  # ルートに到達
+                        drive_root = '/'
+                        break
+                    drive_root = parent
+
+            # このドライブに録画フォルダを追加
+            drive_folder_map[drive_root].append(recording_folder_path_str)
+
+        except Exception as ex:
+            logging.warning(f'[StorageStatusAPI] Failed to resolve drive for {recording_folder_path}: {ex}')
+            continue
+
+    # ドライブごとにストレージ情報を集計
+    for drive_root, folders in drive_folder_map.items():
+        try:
+            disk_usage = shutil.disk_usage(folders[0])
+
+            # 録画可能時間を計算
+            # ビットレートは 18Mbps と仮定
+            ## 地デジは 18Mbps, BS は 24Mbps と規定はされているが、実際はどちらも18Mbpsぐらい
+            available_recording_hours = (
+                disk_usage.free / (18 * 1000 * 1000 / 8)
+            ) / 3600
+
+            storage_info_list.append({
+                'drive_root': drive_root,
+                'recording_folders': folders,
+                'total_bytes': disk_usage.total,
+                'used_bytes': disk_usage.used,
+                'free_bytes': disk_usage.free,
+                'usage_percent': round((disk_usage.used / disk_usage.total) * 100, 2) if disk_usage.total > 0 else 0,
+                'available_recording_hours': round(available_recording_hours, 2),
+            })
+
+        except Exception as ex:
+            logging.error(f'[StorageStatusAPI] Failed to get storage info for drive {drive_root}: {ex}')
+            continue
+
+    return {
+        'storage_info': storage_info_list,
     }

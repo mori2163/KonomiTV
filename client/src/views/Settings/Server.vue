@@ -237,6 +237,83 @@
                     <span class="ml-1">保存先フォルダを追加</span>
                 </v-btn>
             </div>
+            <div class="settings__item">
+                <div class="settings__item-heading">ストレージ使用状況</div>
+                <div class="settings__item-label">
+                    録画フォルダが配置されているドライブのストレージ使用状況です。<br>
+                    録画可能時間は、平均ビットレート 18Mbps を基に計算されています。<br>
+                </div>
+                <div v-if="storage_info.length === 0" class="storage-info-empty mt-3">
+                    <Icon icon="fluent:hard-drive-call-20-regular" width="48px" height="48px" />
+                    <div class="storage-info-empty__text">録画フォルダが設定されていません</div>
+                    <div class="storage-info-empty__subtext">上の設定で録画フォルダを追加してください</div>
+                </div>
+                <div v-for="(info, index) in storage_info" :key="'storage-info-' + index" class="storage-card mt-4">
+                    <div class="storage-card__header">
+                        <div class="storage-card__drive">
+                            <Icon icon="fluent:hard-drive-20-filled" width="24px" height="24px" />
+                            <span class="storage-card__drive-name">{{ info.drive_root }}</span>
+                        </div>
+                        <div class="storage-card__usage-badge"
+                            :class="{
+                                'storage-card__usage-badge--critical': info.usage_percent > 90,
+                                'storage-card__usage-badge--warning': info.usage_percent > 75 && info.usage_percent <= 90,
+                                'storage-card__usage-badge--normal': info.usage_percent <= 75
+                            }">
+                            {{ info.usage_percent.toFixed(1) }}% 使用中
+                        </div>
+                    </div>
+
+                    <div class="storage-card__progress">
+                        <div class="storage-card__progress-bar-container"
+                            role="progressbar"
+                            :aria-valuenow="Math.min(info.usage_percent, 100)"
+                            aria-valuemin="0"
+                            aria-valuemax="100"
+                            :aria-label="`ストレージ使用率: ${info.usage_percent.toFixed(1)}%`">
+                            <div class="storage-card__progress-bar"
+                                :style="{ width: Math.min(info.usage_percent, 100) + '%' }"
+                                :class="{
+                                    'storage-card__progress-bar--critical': info.usage_percent > 90,
+                                    'storage-card__progress-bar--warning': info.usage_percent > 75 && info.usage_percent <= 90,
+                                    'storage-card__progress-bar--normal': info.usage_percent <= 75
+                                }">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="storage-card__stats">
+                        <div class="storage-card__stat">
+                            <Icon icon="fluent:database-20-regular" width="20px" class="storage-card__stat-icon" />
+                            <div class="storage-card__stat-content">
+                                <div class="storage-card__stat-label">合計容量</div>
+                                <div class="storage-card__stat-value">{{ formatBytes(info.total_bytes) }}</div>
+                            </div>
+                        </div>
+                        <div class="storage-card__stat">
+                            <Icon icon="fluent:arrow-upload-20-regular" width="20px" class="storage-card__stat-icon storage-card__stat-icon--used" />
+                            <div class="storage-card__stat-content">
+                                <div class="storage-card__stat-label">使用中</div>
+                                <div class="storage-card__stat-value storage-card__stat-value--used">{{ formatBytes(info.used_bytes) }}</div>
+                            </div>
+                        </div>
+                        <div class="storage-card__stat">
+                            <Icon icon="fluent:arrow-download-20-regular" width="20px" class="storage-card__stat-icon storage-card__stat-icon--free" />
+                            <div class="storage-card__stat-content">
+                                <div class="storage-card__stat-label">空き容量</div>
+                                <div class="storage-card__stat-value storage-card__stat-value--free">{{ formatBytes(info.free_bytes) }}</div>
+                            </div>
+                        </div>
+                        <div class="storage-card__stat storage-card__stat--highlight">
+                            <Icon icon="fluent:clock-20-regular" width="20px" class="storage-card__stat-icon storage-card__stat-icon--time" />
+                            <div class="storage-card__stat-content">
+                                <div class="storage-card__stat-label">録画可能時間</div>
+                                <div class="storage-card__stat-value storage-card__stat-value--time">約 {{ formatRecordingHours(info.available_recording_hours) }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div class="settings__content-heading mt-6">
                 <Icon icon="fluent:image-multiple-16-filled" width="22px" />
                 <span class="ml-2">キャプチャ</span>
@@ -391,13 +468,13 @@
 </template>
 <script lang="ts" setup>
 
-import { ref, watch } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 
 import AccountManageSettings from '@/components/Settings/AccountManageSettings.vue';
 import ServerLogDialog from '@/components/Settings/ServerLogDialog.vue';
 import Message from '@/message';
 import Maintenance from '@/services/Maintenance';
-import Settings, { IServerSettings, IServerSettingsDefault } from '@/services/Settings';
+import Settings, { IServerSettings, IServerSettingsDefault, IStorageInfo } from '@/services/Settings';
 import Version from '@/services/Version';
 import useUserStore from '@/stores/UserStore';
 import Utils from '@/utils';
@@ -417,11 +494,46 @@ user_store.fetchUser().then((user) => {
 
 // サーバー設定を取得
 const server_settings = ref<IServerSettings>(structuredClone(IServerSettingsDefault));
+
+const storage_info = ref<IStorageInfo[]>([]);
+
 Settings.fetchServerSettings().then((settings) => {
     if (settings) {
         server_settings.value = settings;
     }
 });
+const fetchStorageInfo = async () => {
+    const result = await Settings.fetchStorageStatus();
+    storage_info.value = result.storage_info;
+};
+
+// マウント時にストレージ情報を取得
+onMounted(() => {
+    fetchStorageInfo();
+});
+
+// 録画フォルダが変更されたときにストレージ情報を再取得
+watch(() => server_settings.value.video.recorded_folders, () => {
+    fetchStorageInfo();
+}, { deep: true });
+
+// バイト数を人間が読みやすい形式にフォーマットする関数
+const formatBytes = (bytes: number): string => {
+    return Utils.formatBytes(bytes);
+};
+
+// 録画可能時間をフォーマットする関数
+const formatRecordingHours = (hours: number): string => {
+    if (hours < 1) {
+        return `${Math.round(hours * 60)}分`;
+    } else if (hours < 24) {
+        return `${hours.toFixed(1)}時間`;
+    } else {
+        const days = Math.floor(hours / 24);
+        const remainingHours = Math.round(hours % 24);
+        return `${days}日${remainingHours > 0 ? remainingHours + '時間' : ''}`;
+    }
+};
 
 // バックエンドが変更されたときに、レコーダー設定を適切に調整する
 watch(() => server_settings.value.general.backend, (newBackend) => {
@@ -523,4 +635,285 @@ async function shutdownServer() {
 }
 
 </script>
+<style lang="scss" scoped>
 
+// ストレージ情報が空の場合の表示
+.storage-info-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    border-radius: 12px;
+    background: rgb(var(--v-theme-background-lighten-1));
+    color: rgb(var(--v-theme-text-darken-1));
+    text-align: center;
+
+    &__text {
+        margin-top: 16px;
+        font-size: 16px;
+        font-weight: 600;
+    }
+
+    &__subtext {
+        margin-top: 8px;
+        font-size: 14px;
+        opacity: 0.7;
+    }
+}
+
+// ストレージカード
+.storage-card {
+    padding: 24px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgb(var(--v-theme-background-lighten-1)) 0%, rgb(var(--v-theme-background-lighten-2)) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transition: all 0.3s ease;
+
+    &:hover {
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+        transform: translateY(-2px);
+    }
+
+    // ヘッダー部分
+    &__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 20px;
+        padding-bottom: 16px;
+        border-bottom: 2px solid rgba(255, 255, 255, 0.08);
+    }
+
+    &__drive {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: rgb(var(--v-theme-text));
+    }
+
+    &__drive-name {
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+    }
+
+    &__usage-badge {
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+
+        &--normal {
+            background: linear-gradient(135deg, rgb(var(--v-theme-primary)) 0%, rgb(var(--v-theme-primary-darken-1)) 100%);
+            color: white;
+        }
+
+        &--warning {
+            background: linear-gradient(135deg, #FFA726 0%, #FB8C00 100%);
+            color: white;
+        }
+
+        &--critical {
+            background: linear-gradient(135deg, rgb(var(--v-theme-error)) 0%, rgb(var(--v-theme-error-darken-1)) 100%);
+            color: white;
+            animation: pulse 2s ease-in-out infinite;
+        }
+    }
+
+    // プログレスバー
+    &__progress {
+        margin-bottom: 24px;
+    }
+
+    &__progress-bar-container {
+        height: 12px;
+        border-radius: 10px;
+        background: rgba(0, 0, 0, 0.2);
+        overflow: hidden;
+        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    &__progress-bar {
+        height: 100%;
+        border-radius: 10px;
+        transition: width 0.6s ease, background 0.3s ease;
+        position: relative;
+        overflow: hidden;
+
+        &::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            animation: shimmer 2s infinite;
+        }
+
+        &--normal {
+            background: linear-gradient(90deg, rgb(var(--v-theme-primary)) 0%, rgb(var(--v-theme-primary-lighten-1)) 100%);
+        }
+
+        &--warning {
+            background: linear-gradient(90deg, #FFA726 0%, #FFB74D 100%);
+        }
+
+        &--critical {
+            background: linear-gradient(90deg, rgb(var(--v-theme-error)) 0%, rgb(var(--v-theme-error-lighten-1)) 100%);
+        }
+    }
+
+    // 統計情報グリッド
+    &__stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+    }
+
+    &__stat {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 16px;
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        transition: all 0.3s ease;
+
+        &:hover {
+            background: rgba(0, 0, 0, 0.25);
+            transform: translateY(-2px);
+        }
+
+        &--highlight {
+            background: linear-gradient(135deg, rgba(var(--v-theme-primary-rgb), 0.15) 0%, rgba(var(--v-theme-primary-rgb), 0.05) 100%);
+            border: 1px solid rgba(var(--v-theme-primary-rgb), 0.3);
+
+            &:hover {
+                background: linear-gradient(135deg, rgba(var(--v-theme-primary-rgb), 0.25) 0%, rgba(var(--v-theme-primary-rgb), 0.1) 100%);
+            }
+        }
+    }
+
+    &__stat-icon {
+        flex-shrink: 0;
+        color: rgb(var(--v-theme-text-darken-1));
+
+        &--used {
+            color: #FB8C00;
+        }
+
+        &--free {
+            color: #66BB6A;
+        }
+
+        &--time {
+            color: rgb(var(--v-theme-primary));
+        }
+    }
+
+    &__stat-content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    &__stat-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: rgb(var(--v-theme-text-darken-1));
+        margin-bottom: 4px;
+    }
+
+    &__stat-value {
+        font-size: 15px;
+        font-weight: 700;
+        color: rgb(var(--v-theme-text));
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+
+        &--used {
+            color: #FFA726;
+        }
+
+        &--free {
+            color: #81C784;
+        }
+
+        &--time {
+            color: rgb(var(--v-theme-primary-lighten-1));
+            font-size: 16px;
+        }
+    }
+}
+
+// アニメーション
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}
+
+@keyframes shimmer {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(100%);
+    }
+}
+
+// タブレット/小画面対応
+@media (max-width: 1024px) {
+    .storage-card {
+        &__stats {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+}
+
+// スマートフォン縦画面での調整
+@include smartphone-vertical {
+    .storage-card {
+        padding: 20px;
+
+        &__header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        &__usage-badge {
+            align-self: flex-start;
+        }
+
+        &__stats {
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+
+        &__stat {
+            padding: 14px;
+        }
+
+        &__stat-value {
+            font-size: 14px;
+
+            &--time {
+                font-size: 15px;
+            }
+        }
+    }
+}
+
+</style>
