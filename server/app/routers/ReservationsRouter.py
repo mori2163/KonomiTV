@@ -211,6 +211,10 @@ async def DecodeEDCBReserveData(reserve_data: ReserveDataRequired, channels: lis
     ## 基本全角なので半角に変換する必要がある
     service_name: str = TSInformation.formatString(reserve_data['station_name'])
 
+    # 録画予約番組のイベント ID
+    event_id: int = reserve_data['eid']
+
+
     # ここでネットワーク ID・サービス ID・トランスポートストリーム ID が一致するチャンネルをデータベースから取得する
     channel: Channel | None
     if channels is not None:
@@ -968,13 +972,38 @@ async def DecodeEPGStationReserveData(
     # 予約 ID
     reserve_id = reserve.get('id', 0)
 
+    # EPGStation の番組 ID
+    epgstation_program_id = program.get('id', 0)
+
+    # EPGStation から取得した番組情報から network_id, service_id, event_id を取得
+    # EPGStation の番組情報に含まれていない場合は、番組 ID から逆算する
+    # EPGStation の番組 ID は文字列として扱うと "networkId + serviceId + eventId" の10進数連結形式
+    # 例: 324172151209780 -> networkId=32417, serviceId=21512, eventId=09780
+    network_id = program.get('networkId')
+    service_id = program.get('serviceId')
+    event_id = program.get('eventId')
+
+    if network_id is None or service_id is None or event_id is None:
+        # 番組 ID を文字列に変換して各値を抽出
+        program_id_str = str(epgstation_program_id)
+        # 右から5桁が eventId、その左5桁が serviceId、残りが networkId
+        if len(program_id_str) >= 10:
+            event_id = int(program_id_str[-5:])
+            service_id = int(program_id_str[-10:-5])
+            network_id = int(program_id_str[:-10]) if len(program_id_str) > 10 else 0
+        else:
+            # フォーマットが想定外の場合はデフォルト値
+            network_id = 0
+            service_id = 0
+            event_id = 0
+
     # 番組情報を KonomiTV の Program オブジェクトに変換
     program_obj = Program(
-        id = f'NID{program.get("networkId", 0)}-SID{program.get("serviceId", 0)}-EID{program.get("eventId", 0)}',
+        id = f'NID{network_id}-SID{service_id}-EID{event_id}',
         channel_id = channel.id,
-        network_id = program.get('networkId', 0),
-        service_id = program.get('serviceId', 0),
-        event_id = program.get('eventId', 0),
+        network_id = network_id,
+        service_id = service_id,
+        event_id = event_id,
         title = TSInformation.formatString(program.get('name', '')),
         description = program.get('description', '') or '',
         detail = {},  # EPGStation の extended を解析して detail に変換する処理は省略

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 
 import { ChannelType } from '@/services/Channels';
+import Reservations from '@/services/Reservations';
 import Timetable from '@/services/Timetable';
 import { ITimetableChannel } from '@/services/Timetable';
 
@@ -14,6 +15,10 @@ export const useTimetableStore = defineStore('timetable', {
         selected_channel_type: 'ALL' as 'ALL' | ChannelType,
         // ロード中フラグ
         is_loading: false,
+        // 録画予約されている番組IDの配列
+        reserved_program_ids: [] as string[],
+        // 番組IDから録画予約IDへのマップ (削除時に必要) - オブジェクトとして保持
+        program_id_to_reservation_id: {} as Record<string, number>,
     }),
     getters: {
         /**
@@ -31,6 +36,33 @@ export const useTimetableStore = defineStore('timetable', {
     },
     actions: {
         /**
+         * 録画予約情報を取得して、予約されている番組IDのセットを更新する
+         */
+        async fetchReservations() {
+            try {
+                const reservations = await Reservations.fetchReservations();
+                console.log('[TimetableStore] 録画予約情報を取得:', reservations);
+                if (reservations) {
+
+                    // 録画予約されている番組のIDを抽出して配列に格納
+                    this.reserved_program_ids = reservations.reservations.map(reservation => reservation.program.id);
+                    // 番組IDから録画予約IDへのマップを作成
+                    const map_obj: Record<string, number> = {};
+                    for (const reservation of reservations.reservations) {
+                        map_obj[reservation.program.id] = reservation.id;
+                    }
+                    this.program_id_to_reservation_id = map_obj;
+                } else {
+                    this.reserved_program_ids = [];
+                    this.program_id_to_reservation_id = {};
+                }
+            } catch (error) {
+                this.reserved_program_ids = [];
+                this.program_id_to_reservation_id = {};
+            }
+        },
+
+        /**
          * 番組表のデータを取得・更新する
          */
         async fetchTimetable() {
@@ -44,7 +76,11 @@ export const useTimetableStore = defineStore('timetable', {
             end_time.setDate(end_time.getDate() + 1);
 
             try {
-                const timetable_channels = await Timetable.fetchTimetable(start_time, end_time);
+                // 番組表と録画予約情報を並行取得
+                const [timetable_channels] = await Promise.all([
+                    Timetable.fetchTimetable(start_time, end_time),
+                    this.fetchReservations(),
+                ]);
                 this._timetable_channels = timetable_channels;
             } catch (error) {
                 console.error(error);

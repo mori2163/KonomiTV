@@ -54,10 +54,13 @@
                                     <v-tooltip location="top" :disabled="isTooltipDisabled(program)">
                                         <template v-slot:activator="{ props }">
                                             <div v-bind="props" class="program-cell elevation-2"
+                                                :class="{'program-cell--reserved': isReserved(program.id)}"
                                                 :style="getProgramStyle(program, ch_index)"
                                                 @click="showProgramDetails(program)">
                                                 <div class="program-header">
-                                                    <div class="program-title">{{ program.title }}</div>
+                                                    <div class="program-title">
+                                                        {{ program.title }}
+                                                    </div>
                                                     <div class="program-badges">
                                                         <span v-if="!program.is_free" class="program-badge program-badge--paid">有料</span>
                                                         <span v-if="program.genres.length > 0" class="program-badge program-badge--genre">{{ program.genres[0].major }}</span>
@@ -110,72 +113,30 @@
             </v-btn>
         </div>
 
-        <!-- 番組詳細サイドパネル -->
-        <v-navigation-drawer v-model="is_panel_shown" location="right" temporary width="600">
-            <v-card v-if="selected_program" class="detail-panel">
-                <v-card-title class="text-h5 pb-2">{{ selected_program.title }}</v-card-title>
-                <v-card-subtitle class="pb-3">{{ formatFullDateTime(selected_program.start_time) }} - {{ formatFullDateTime(selected_program.end_time) }} ({{ Math.floor(selected_program.duration / 60) }}分)</v-card-subtitle>
-
-                <!-- 番組情報バッジ -->
-                <v-card-text class="pt-0 pb-2">
-                    <div class="program-info-badges">
-                        <v-chip v-if="!selected_program.is_free" color="warning" size="small" class="mr-2 mb-2">
-                            <v-icon start>mdi-currency-yen</v-icon>
-                            有料放送
-                        </v-chip>
-                        <v-chip v-if="selected_program.video_resolution === '1080i' || selected_program.video_resolution === '1080p'" color="success" size="small" class="mr-2 mb-2">
-                            <v-icon start>mdi-high-definition</v-icon>
-                            HD
-                        </v-chip>
-                        <v-chip v-for="genre in selected_program.genres.slice(0, 2)" :key="genre.major" color="primary" variant="outlined" size="small" class="mr-2 mb-2">
-                            {{ genre.major }}
-                        </v-chip>
-                    </div>
-                </v-card-text>
-
-                <!-- 番組説明 -->
-                <v-card-text class="py-2">
-                    <v-divider class="mb-3"></v-divider>
-                    <h4 class="text-subtitle-1 mb-2">番組内容</h4>
-                    <p class="text-body-2 mb-3">{{ selected_program.description }}</p>
-
-                    <!-- 詳細情報 -->
-                    <div v-if="selected_program.detail && Object.keys(selected_program.detail).length > 0" class="program-detail-section">
-                        <h4 class="text-subtitle-1 mb-2">詳細情報</h4>
-                        <div class="program-detail-grid">
-                            <template v-for="(value, key) in selected_program.detail" :key="key">
-                                <div class="detail-item">
-                                    <span class="detail-key">{{ key }}:</span>
-                                    <span class="detail-value">{{ value }}</span>
-                                </div>
-                            </template>
-                        </div>
-                    </div>
-                </v-card-text>
-
-                <v-card-actions class="detail-panel__actions">
-                    <v-spacer></v-spacer>
-                    <v-btn :loading="is_reserving" @click="reserveProgram(selected_program.id)" color="primary" variant="elevated">
-                        <v-icon start>mdi-record-rec</v-icon>
-                        録画予約
-                    </v-btn>
-                    <v-btn @click="is_panel_shown = false" variant="outlined">閉じる</v-btn>
-                </v-card-actions>
-            </v-card>
-        </v-navigation-drawer>
+        <!-- 番組詳細ドロワー -->
+        <ProgramDetailDrawer
+            v-model="is_panel_shown"
+            :program="selected_program"
+            :is-reserved="selected_program ? isReserved(selected_program.id) : false"
+            :is-reserving="is_reserving"
+            @reserve="reserveProgram"
+            @remove="deleteReservation"
+        />
     </div>
 </template>
 
 <script lang="ts" setup>
-import { computed, onMounted, onUnmounted, ref, watch ,nextTick} from 'vue';
-import { useTimetableStore } from '@/stores/TimetableStore';
-import { useSnackbarsStore } from '@/stores/SnackbarsStore';
-import { IProgram } from '@/services/Programs';
-import Reservations, { IRecordSettings } from '@/services/Reservations';
+import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue';
+
 import HeaderBar from '@/components/HeaderBar.vue';
 import Navigation from '@/components/Navigation.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
+import ProgramDetailDrawer from '@/components/Timetable/ProgramDetailDrawer.vue';
 import { ChannelType } from '@/services/Channels';
+import { IProgram } from '@/services/Programs';
+import Reservations, { IRecordSettings } from '@/services/Reservations';
+import { useSnackbarsStore } from '@/stores/SnackbarsStore';
+import { useTimetableStore } from '@/stores/TimetableStore';
 
 const timetableStore = useTimetableStore();
 const snackbarsStore = useSnackbarsStore();
@@ -235,12 +196,6 @@ const formatTime = (time: string) => {
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 };
 
-const formatFullDateTime = (time: string) => {
-    const date = new Date(time);
-    return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${formatTime(time)}`;
-};
-
-
 // テキストを指定した文字数で切り詰める
 const truncateText = (text: string, maxLength: number): string => {
     if (text.length <= maxLength) {
@@ -265,8 +220,12 @@ const getProgramStyle = (program: IProgram, ch_index: number) => {
         'grid-row-end': start_minutes + duration_minutes + 1,
         'background-color': color.background,
         'color': color.text,
-        'border-color': color.background,
     };
+
+    // 予約済みでない番組のみborder-colorを設定(予約済みの赤枠を優先)
+    if (!isReserved(program.id)) {
+        style['border-color'] = color.background;
+    }
 
     // 過去の番組か判定
     if (new Date(program.end_time) < now.value) {
@@ -296,6 +255,16 @@ const isTooltipDisabled = (program: IProgram) => {
     return program.duration / 60 > 15; // 15分より長い番組ではツールチップを無効化
 };
 
+// 番組が録画予約されているか判定
+const reservedProgramIdsSet = computed(() => {
+    const set = new Set(timetableStore.reserved_program_ids);
+    return set;
+});
+
+const isReserved = (program_id: string) => {
+    return reservedProgramIdsSet.value.has(program_id);
+};
+
 const is_panel_shown = ref(false);
 const selected_program = ref<IProgram | null>(null);
 const showProgramDetails = (program: IProgram) => {
@@ -304,6 +273,8 @@ const showProgramDetails = (program: IProgram) => {
 };
 
 const is_reserving = ref(false);
+
+// 録画予約を追加する
 const reserveProgram = async (program_id: string) => {
     is_reserving.value = true;
     const default_settings: IRecordSettings = {
@@ -327,8 +298,32 @@ const reserveProgram = async (program_id: string) => {
     if (success) {
         snackbarsStore.show('success', '録画予約を追加しました。');
         is_panel_shown.value = false;
+        // 録画予約情報を再取得して表示を更新
+        await timetableStore.fetchReservations();
     } else {
         snackbarsStore.show('error', '録画予約の追加に失敗しました。');
+    }
+    is_reserving.value = false;
+};
+
+// 録画予約を削除する
+const deleteReservation = async (program_id: string) => {
+    is_reserving.value = true;
+    const reservation_id = timetableStore.program_id_to_reservation_id[program_id];
+    if (!reservation_id) {
+        snackbarsStore.show('error', '録画予約情報が見つかりませんでした。');
+        is_reserving.value = false;
+        return;
+    }
+
+    const success = await Reservations.deleteReservation(reservation_id);
+    if (success) {
+        snackbarsStore.show('success', '録画予約を削除しました。');
+        is_panel_shown.value = false;
+        // 録画予約情報を再取得して表示を更新
+        await timetableStore.fetchReservations();
+    } else {
+        snackbarsStore.show('error', '録画予約の削除に失敗しました。');
     }
     is_reserving.value = false;
 };
@@ -576,6 +571,12 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     flex-direction: column;
     gap: 4px;
 
+    // 録画予約されている番組
+    &--reserved {
+        border: 3px solid #E53935 !important;
+        box-shadow: 0 0 8px rgba(229, 57, 53, 0.5) !important;
+    }
+
     &:hover {
         filter: brightness(1.1);
         transform: scale(1.02);
@@ -633,6 +634,7 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
         overflow: hidden;
         display: -webkit-box;
         -webkit-line-clamp: 2;
+        line-clamp: 2;
         -webkit-box-orient: vertical;
     }
 
@@ -648,118 +650,6 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
 .tooltip-text {
     font-size: 14px;
     color: rgb(var(--v-theme-text));
-}
-
-.detail-panel {
-    &__actions {
-        position: sticky;
-        bottom: 0;
-        background: rgb(var(--v-theme-background));
-        border-top: 1px solid rgb(var(--v-theme-background-lighten-2));
-        padding: 16px;
-    }
-}
-
-.program-info-badges {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.program-detail-section {
-    margin-bottom: 16px;
-}
-
-.program-detail-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-
-    .detail-item {
-        display: flex;
-        padding: 8px 0;
-        border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-
-        .detail-key {
-            font-weight: 600;
-            min-width: 80px;
-            margin-right: 12px;
-            color: rgb(var(--v-theme-primary));
-        }
-
-        .detail-value {
-            flex: 1;
-            word-break: break-word;
-        }
-    }
-}
-
-.tech-info-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-
-    @include smartphone-vertical {
-        grid-template-columns: 1fr;
-    }
-
-    .tech-info-item {
-        display: flex;
-        flex-direction: column;
-        padding: 12px;
-        background-color: rgb(var(--v-theme-background-lighten-1));
-        border-radius: 8px;
-        border: 1px solid rgb(var(--v-theme-background-lighten-2));
-
-        .tech-info-label {
-            font-size: 0.85em;
-            font-weight: 600;
-            color: rgb(var(--v-theme-text-darken-1));
-            margin-bottom: 4px;
-        }
-
-        .tech-info-value {
-            font-size: 0.9em;
-            word-break: break-word;
-        }
-    }
-}
-
-.program-detail-content {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-
-    .detail-section {
-        &:not(:last-child) {
-            border-bottom: 1px solid rgb(var(--v-theme-background-lighten-2));
-            padding-bottom: 12px;
-        }
-
-        .detail-section-title {
-            font-size: 0.9em;
-            font-weight: 600;
-            color: rgb(var(--v-theme-primary));
-            margin-bottom: 8px;
-        }
-
-        .detail-section-content {
-            font-size: 0.875em;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-break: break-word;
-            margin: 0;
-        }
-    }
-}
-
-.program-detail {
-    white-space: pre-wrap;
-    word-break: break-all;
-    background-color: rgb(var(--v-theme-background-lighten-1));
-    padding: 16px;
-    border-radius: 4px;
-    margin-top: 16px;
 }
 
 .epg-controls-floating {
