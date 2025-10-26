@@ -31,6 +31,17 @@
                 </v-switch>
             </div>
             <div class="settings__item settings__item--switch">
+                <label class="settings__item-heading" for="offline_mode">オフラインモードを有効にする</label>
+                <label class="settings__item-label" for="offline_mode">
+                    オフラインモードを有効にすると、オフライン視聴ページ以外のすべてのページが非表示になります。デフォルトはオフです。<br>
+                    ダウンロード済みの録画番組のみを視聴したい場合に、この設定をオンにできます。<br>
+                    オンにすると、自動的にオフライン視聴ページに移動します。<br>
+                </label>
+                <v-switch class="settings__item-switch" color="primary" id="offline_mode" hide-details
+                    v-model="is_offline_mode" @update:model-value="handleOfflineModeChange">
+                </v-switch>
+            </div>
+            <div class="settings__item settings__item--switch">
                 <label class="settings__item-heading" for="use_pure_black_player_background">プレイヤー表示領域の背景色を完全な黒にする</label>
                 <label class="settings__item-label" for="use_pure_black_player_background">
                     映像の上下 or 左右に表示される黒帯の色を、完全な黒に変更できます。デフォルトはオフです。<br>
@@ -143,6 +154,7 @@ import { defineComponent } from 'vue';
 
 import PinnedChannelSettings from '@/components/Settings/PinnedChannelSettings.vue';
 import Message from '@/message';
+import useOfflineStore from '@/stores/OfflineStore';
 import useSettingsStore from '@/stores/SettingsStore';
 import Utils from '@/utils';
 import SettingsBase from '@/views/Settings/Base.vue';
@@ -164,6 +176,9 @@ export default defineComponent({
 
             // ピン留め中チャンネルの並び替え設定のモーダルを表示するか
             pinned_channel_settings_modal: false,
+
+            // オフラインモードの状態
+            is_offline_mode: false,
 
             // デフォルトのパネルの表示状態の選択肢
             panel_display_state: [
@@ -193,9 +208,23 @@ export default defineComponent({
         };
     },
     computed: {
-        ...mapStores(useSettingsStore),
+        ...mapStores(useSettingsStore, useOfflineStore),
+    },
+    mounted() {
+        // オフラインモードの状態を復元
+        this.is_offline_mode = this.offlineStore.is_offline_mode;
     },
     methods: {
+
+        // オフラインモードの変更を処理
+        handleOfflineModeChange(value: boolean | null) {
+            const enabled = value ?? false;
+            this.offlineStore.setOfflineMode(enabled);
+            // オフラインモードを有効にした場合はオフライン視聴ページに遷移
+            if (enabled) {
+                this.$router.push('/offline');
+            }
+        },
 
         // 設定データをエクスポートする
         exportSettings() {

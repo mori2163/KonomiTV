@@ -5,7 +5,7 @@
                 <img class="konomitv-logo__image" src="/assets/images/logo.svg" height="21">
             </router-link>
             <v-spacer></v-spacer>
-            <div v-ripple class="search-button" @click="activateSearch">
+            <div v-if="canShowSearch" v-ripple class="search-button" @click="activateSearch">
                 <Icon icon="fluent:search-20-filled" height="24px" />
             </div>
         </template>
@@ -25,7 +25,7 @@
 </template>
 <script lang="ts" setup>
 
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 
 const router = useRouter();
@@ -51,7 +51,8 @@ const searchPlaceholder = computed(() => {
 const isVideoSection = (path: string) => {
     return path.startsWith('/videos') ||
            path.startsWith('/mylist') ||
-           path.startsWith('/watched-history');
+           path.startsWith('/watched-history') ||
+           path.startsWith('/offline');
 };
 
 // 検索パスを取得
@@ -61,8 +62,16 @@ const getSearchPath = () => {
         : '/tv/search';
 };
 
+// 検索ボタンを表示するかどうか
+const canShowSearch = computed(() => {
+    return route.path.startsWith('/offline') === false;
+});
+
 // 検索窓を開く
 const activateSearch = () => {
+    if (canShowSearch.value === false) {
+        return;
+    }
     isSearchActive.value = true;
     // 次のティックで入力フォーカスを設定
     setTimeout(() => {
@@ -99,6 +108,12 @@ onMounted(() => {
     if (route.path.endsWith('/search') && route.query.query) {
         searchQuery.value = decodeURIComponent(route.query.query as string);
         isSearchActive.value = true;
+    }
+});
+
+watch(() => route.path, (path) => {
+    if (path.startsWith('/offline') && isSearchActive.value === true) {
+        deactivateSearch();
     }
 });
 

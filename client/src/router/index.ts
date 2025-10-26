@@ -169,6 +169,16 @@ const router = createRouter({
             component: () => import('@/views/Reservations/Reservations.vue'),
         },
         {
+            path: '/offline/',
+            name: 'Offline',
+            component: () => import('@/views/Offline/Index.vue'),
+        },
+        {
+            path: '/offline/watch/:download_id',
+            name: 'Offline Watch',
+            component: () => import('@/views/Offline/Watch.vue'),
+        },
+        {
             path: '/:pathMatch(.*)*',
             name: 'NotFound',
             component: () => import('@/views/NotFound.vue'),

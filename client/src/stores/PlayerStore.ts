@@ -2,6 +2,8 @@
 import mitt from 'mitt';
 import { defineStore } from 'pinia';
 
+import type { OfflineDownloadMetadata } from '@/offline/types';
+
 import { ITweetCapture } from '@/components/Watch/Panel/Twitter.vue';
 import { ICommentData } from '@/services/player/managers/LiveCommentManager';
 import { IRecordedProgram, IRecordedProgramDefault } from '@/services/Videos';
@@ -74,6 +76,9 @@ const usePlayerStore = defineStore('player', {
         // 現在視聴中の録画番組の情報
         // 視聴中の録画番組がない場合は IRecordedProgramDefault を設定すべき (初期値も IRecordedProgramDefault にしている)
         recorded_program: IRecordedProgramDefault as IRecordedProgram,
+
+        // オフライン視聴時に利用するダウンロードメタデータ
+        offline_download: null as OfflineDownloadMetadata | null,
 
         // 仮想キーボードが表示されているか
         // 既定で表示されていない想定
@@ -182,7 +187,7 @@ const usePlayerStore = defineStore('player', {
          * 呼び出すと自動的に状態がリセットされ、is_watching が true になる
          */
         startWatching(): void {
-            this.reset();
+            this.reset({ preserve_offline_download: true });
             this.is_watching = true;
         },
 
@@ -191,18 +196,22 @@ const usePlayerStore = defineStore('player', {
          * 呼び出すと自動的に状態がリセットされ、is_watching が false になる
          */
         stopWatching(): void {
-            this.reset();
+            this.reset({ preserve_offline_download: true });
             this.is_watching = false;
         },
 
         /**
-         * PlayerStore の内容を初期値に戻す
+         * PlayerStore の状態をリセットする
          * startWatching() / stopWatching() で呼び出される
+         * @param options preserve オフライン視聴情報など保持したい state を指定
          */
-        reset(): void {
+        reset(options?: { preserve_offline_download?: boolean } ): void {
+            const offline_download = options?.preserve_offline_download ? this.offline_download : null;
+
             this.is_watching = false;
             this.is_player_initialized = false;
             this.recorded_program = IRecordedProgramDefault;
+            this.offline_download = offline_download;
             this.is_virtual_keyboard_display = false;
             this.is_fullscreen = false;
             this.is_document_pip = false;

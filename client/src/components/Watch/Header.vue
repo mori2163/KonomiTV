@@ -1,6 +1,6 @@
 <template>
     <header class="watch-header" :class="{'watch-header--video': playback_mode === 'Video'}">
-        <router-link class="watch-header__back-icon" v-ripple :to="playback_mode === 'Live' ? '/tv/' : '/videos/'">
+        <router-link class="watch-header__back-icon" v-ripple :to="backLink">
             <Icon icon="fluent:chevron-left-12-filled" width="21px" />
         </router-link>
         <img class="watch-header__broadcaster" v-if="playback_mode === 'Live'"
@@ -33,6 +33,10 @@ export default defineComponent({
             type: String as PropType<'Live' | 'Video'>,
             required: true,
         },
+        is_offline: {
+            type: Boolean,
+            default: false,
+        },
     },
     data() {
         return {
@@ -47,6 +51,15 @@ export default defineComponent({
     },
     computed: {
         ...mapStores(useChannelsStore, usePlayerStore),
+        backLink(): string {
+            if (this.playback_mode === 'Live') {
+                return '/tv/';
+            }
+            if (this.is_offline === true) {
+                return '/offline/';
+            }
+            return '/videos/';
+        },
     },
     methods: {
         formatTime(time_obj: Dayjs): string {

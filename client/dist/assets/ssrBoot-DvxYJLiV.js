@@ -1,0 +1,1 @@
+import{dj as o,ah as e,G as t,q as a,cr as n}from"./index-DJnqFb91.js";const c="/assets/images/logo.svg",u=o("v-spacer","div","VSpacer");function l(){const s=e(!1);return t(()=>{window.requestAnimationFrame(()=>{s.value=!0})}),{ssrBootStyles:a(()=>s.value?void 0:{transition:"none !important"}),isBooted:n(s)}}export{u as V,c as _,l as u};

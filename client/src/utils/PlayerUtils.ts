@@ -91,8 +91,16 @@ export class PlayerUtils {
         if (player.quality === null) {
             return null;
         }
-        const url = new URL(player.quality.url);
-        return url.searchParams.get('session_id');
+        const url_string = player.quality.url;
+        try {
+            const url = url_string.startsWith('http') === true || url_string.startsWith('https') === true ?
+                new URL(url_string) :
+                new URL(url_string, window.location.href);
+            return url.searchParams.get('session_id');
+        } catch (error) {
+            console.warn('[PlayerUtils] Failed to extract session_id from URL.', url_string, error);
+            return null;
+        }
     }
 
 

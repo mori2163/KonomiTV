@@ -14,6 +14,10 @@
             <Icon icon="material-symbols:install-desktop-rounded" height="20px" class="mr-1" />
             アプリとしてインストール
         </v-btn>
+        <v-btn variant="flat" class="offline-mode-toggle-button" @click="toggleOfflineMode">
+            <Icon :icon="offlineStore.is_offline_mode ? 'fluent:wifi-off-24-filled' : 'fluent:wifi-1-24-filled'" height="20px" class="mr-1" />
+            {{ offlineStore.is_offline_mode ? 'オフラインモード' : 'オンライン' }}
+        </v-btn>
         <div class="mr-3 mr-md-6"></div>
     </header>
 </template>
@@ -23,6 +27,9 @@ import { pwaInstallHandler } from 'pwa-install-handler';
 import { onMounted, ref, computed, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 
+import useOfflineStore from '@/stores/OfflineStore';
+
+const offlineStore = useOfflineStore();
 const isButtonDisplay = ref(false);
 const search_query = ref('');
 const router = useRouter();
@@ -46,13 +53,13 @@ onMounted(() => {
 watch(() => route.fullPath, initialize_search_query);
 
 const search_placeholder = computed(() => {
-    return route.path.startsWith('/videos') || route.path.startsWith('/mylist') || route.path.startsWith('/watched-history')
+    return route.path.startsWith('/videos') || route.path.startsWith('/mylist') || route.path.startsWith('/watched-history') || route.path.startsWith('/offline')
         ? '録画番組を検索...'
         : '放送予定の番組を検索...';
 });
 
 const getSearchPath = () => {
-    return route.path.startsWith('/videos') || route.path.startsWith('/mylist') || route.path.startsWith('/watched-history')
+    return route.path.startsWith('/videos') || route.path.startsWith('/mylist') || route.path.startsWith('/watched-history') || route.path.startsWith('/offline')
         ? '/videos/search'
         : '/tv/search';
 };
@@ -72,8 +79,22 @@ const doSearch = () => {
 
 const showSearchInput = computed(() => {
     const path = route.path;
-    return !path.startsWith('/captures') && !path.startsWith('/settings') && !path.startsWith('/login') && !path.startsWith('/register');
+    return !path.startsWith('/captures') && !path.startsWith('/settings') && !path.startsWith('/login') && !path.startsWith('/register') && !path.startsWith('/offline');
 });
+
+// オフラインモードの切り替え
+const toggleOfflineMode = () => {
+    const newMode = !offlineStore.is_offline_mode;
+    offlineStore.setOfflineMode(newMode);
+
+    if (newMode) {
+        // オフラインモードに切り替えた場合はオフライン視聴ページに遷移
+        router.push('/offline');
+    } else if (route.path.startsWith('/offline')) {
+        // オンラインモードに戻した場合、オフラインページから移動
+        router.push('/videos');
+    }
+};
 
 </script>
 <style lang="scss" scoped>
@@ -138,6 +159,17 @@ const showSearchInput = computed(() => {
             display: none !important;
         }
         @media (display-mode: standalone) {
+            display: none !important;
+        }
+    }
+
+    .offline-mode-toggle-button {
+        height: 46px;
+        margin-left: 12px;
+        background: rgb(var(--v-theme-background-lighten-1));
+        color: rgb(var(--v-theme-text));
+
+        @include smartphone-horizontal {
             display: none !important;
         }
     }

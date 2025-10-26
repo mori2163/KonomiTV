@@ -588,12 +588,16 @@ class RecordedScanTask:
                 if self._is_encoded_file(file_path):
                     logging.info(f'{file_path}: Detected encoded file, attempting to inherit metadata from original file.')
 
-                    # 既にTSReplaceEncodingTaskで処理済みかチェック
-                    if existing_db_recorded_video and existing_db_recorded_video.is_tsreplace_encoded:
-                        logging.info(f'{file_path}: File already processed by TSReplaceEncodingTask with metadata inheritance (ID: {existing_db_recorded_video.id}, is_encoded: {existing_db_recorded_video.is_tsreplace_encoded}).')
-                        return
-
-                    logging.info(f'{file_path}: Existing record found: ID={existing_db_recorded_video.id if existing_db_recorded_video else "None"}, is_encoded={existing_db_recorded_video.is_tsreplace_encoded if existing_db_recorded_video else "None"}')
+                    # 既存レコードがある場合、TSReplaceEncodingTaskで処理済みかチェック
+                    if existing_recorded_video_summary is not None:
+                        # DB から完全なレコードを取得して is_tsreplace_encoded をチェック
+                        existing_recorded_video = await RecordedVideo.get_or_none(id=existing_recorded_video_summary.id)
+                        if existing_recorded_video and existing_recorded_video.is_tsreplace_encoded:
+                            logging.info(f'{file_path}: File already processed by TSReplaceEncodingTask with metadata inheritance (ID: {existing_recorded_video.id}, is_encoded: {existing_recorded_video.is_tsreplace_encoded}).')
+                            return
+                        logging.info(f'{file_path}: Existing record found: ID={existing_recorded_video_summary.id}, is_encoded={existing_recorded_video.is_tsreplace_encoded if existing_recorded_video else "Unknown"}')
+                    else:
+                        logging.info(f'{file_path}: No existing record found.')
 
                     inherited = await self._inherit_metadata_if_encoded_file(file_path)
                     if inherited:

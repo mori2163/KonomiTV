@@ -12,7 +12,7 @@
                  @mousemove="playerStore.event_emitter.emit('SetControlDisplayTimer', {event: $event, is_player_region_event: true})"
                  @touchmove="playerStore.event_emitter.emit('SetControlDisplayTimer', {event: $event, is_player_region_event: true})"
                  @click="playerStore.event_emitter.emit('SetControlDisplayTimer', {event: $event, is_player_region_event: true})">
-                <WatchHeader :playback_mode="playback_mode" />
+                <WatchHeader :playback_mode="playback_mode" :is_offline="is_offline" />
                 <WatchPlayer :playback_mode="playback_mode" />
             </div>
             <WatchPanel :playback_mode="playback_mode" />
@@ -51,6 +51,10 @@ export default defineComponent({
         playback_mode: {
             type: String as PropType<'Live' | 'Video'>,
             required: true,
+        },
+        is_offline: {
+            type: Boolean,
+            default: false,
         },
     },
     data() {

@@ -14,6 +14,7 @@ import Message from '@/message';
 import FloatingVue from '@/plugins/floating-vue';
 import vuetify from '@/plugins/vuetify';
 import router from '@/router';
+import useOfflineStore from '@/stores/OfflineStore';
 import useSettingsStore, {
     getLocalStorageSettings,
     getNormalizedLocalClientSettings,
@@ -63,6 +64,10 @@ app.mount('#app');
 // TSReplaceエンコーディング進捗のWebSocketを初期化
 const tsReplaceEncodingStore = useTSReplaceEncodingStore();
 tsReplaceEncodingStore.initializeWebSocket();
+
+// オフラインモードの状態を復元
+const offlineStore = useOfflineStore();
+offlineStore.restoreOfflineMode();
 
 // ***** Service Worker のイベントを登録 *****
 

@@ -1,7 +1,9 @@
 <template>
     <v-app id="app">
         <router-view v-slot="{ Component }">
-            <component :is="Component" />
+            <!-- オフラインモード時: オフライン視聴ページ以外ではメッセージを表示 -->
+            <OfflineModeMessage v-if="shouldShowOfflineMessage" />
+            <component v-else :is="Component" />
         </router-view>
         <Snackbars />
     </v-app>
@@ -9,18 +11,49 @@
 </template>
 <script lang="ts" setup>
 
-import { onMounted } from 'vue';
+import { computed, onMounted, onUnmounted } from 'vue';
+import { useRoute } from 'vue-router';
 
+import OfflineModeMessage from '@/components/OfflineModeMessage.vue';
 import Snackbars from '@/components/Snackbars.vue';
 import GlobalTSReplaceEncodingProgress from '@/components/Videos/GlobalTSReplaceEncodingProgress.vue';
+import useOfflineStore from '@/stores/OfflineStore';
 import useTSReplaceEncodingStore from '@/stores/TSReplaceEncodingStore';
 
-// エンコードストアを初期化
+// ルート情報とストアの初期化
+const route = useRoute();
+const offlineStore = useOfflineStore();
 const encodingStore = useTSReplaceEncodingStore();
 
-// アプリケーション初期化時にWebSocket接続を開始
+// オフラインモードメッセージを表示すべきか判定
+const shouldShowOfflineMessage = computed(() => {
+    // オフラインモードが有効で、かつオフライン視聴ページ以外の場合にメッセージを表示
+    return offlineStore.is_offline_mode && !route.path.startsWith('/offline');
+});
+
+// サーバー接続チェック用のインターバル ID
+let serverCheckInterval: number | null = null;
+
+// アプリケーション初期化時にWebSocket接続を開始し、サーバー接続チェックを開始
 onMounted(() => {
     encodingStore.initializeWebSocket();
+
+    // オフラインモードが有効な場合、定期的にサーバー接続をチェック
+    // 30秒ごとにチェックを実行
+    serverCheckInterval = window.setInterval(async () => {
+        await offlineStore.checkServerConnection();
+    }, 30 * 1000);
+
+    // 初回は即座にチェック
+    offlineStore.checkServerConnection();
+});
+
+// コンポーネント破棄時にインターバルをクリア
+onUnmounted(() => {
+    if (serverCheckInterval !== null) {
+        clearInterval(serverCheckInterval);
+        serverCheckInterval = null;
+    }
 });
 
 </script>
