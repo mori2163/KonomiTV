@@ -1,0 +1,1 @@
+import{df as o,bW as e,G as t,q as a,bK as n}from"./index-CQ2c3tog.js";const u="/assets/images/logo.svg",c=o("v-spacer","div","VSpacer");function l(){const s=e(!1);return t(()=>{window.requestAnimationFrame(()=>{s.value=!0})}),{ssrBootStyles:a(()=>s.value?void 0:{transition:"none !important"}),isBooted:n(s)}}export{c as V,u as _,l as u};
