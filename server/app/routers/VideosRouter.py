@@ -129,6 +129,7 @@ async def ConvertRowToRecordedProgram(row: dict[str, Any]) -> schemas.RecordedPr
         'is_tsreplace_encoded': bool(row['is_tsreplace_encoded']),
         'tsreplace_encoded_at': row['tsreplace_encoded_at'],
         'original_video_codec': row['original_video_codec'],
+        'is_tsuide': bool(row['is_tsuide']),
         'created_at': row['rv_created_at'],
         'updated_at': row['rv_updated_at'],
     }
@@ -426,6 +427,7 @@ async def VideosAPI(
             rv.is_tsreplace_encoded,
             rv.tsreplace_encoded_at,
             rv.original_video_codec,
+            rv.is_tsuide,
             rv.created_at AS rv_created_at,
             rv.updated_at AS rv_updated_at,
             ch.id AS ch_id,
@@ -680,6 +682,7 @@ async def VideosSearchAPI(
             rv.is_tsreplace_encoded,
             rv.tsreplace_encoded_at,
             rv.original_video_codec,
+            rv.is_tsuide,
             rv.created_at AS rv_created_at,
             rv.updated_at AS rv_updated_at,
             ch.id AS ch_id,

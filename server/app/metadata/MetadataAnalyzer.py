@@ -212,7 +212,7 @@ class MetadataAnalyzer:
         self.recorded_file_path = recorded_file_path
 
 
-    def analyze(self) -> schemas.RecordedProgram | None:
+    def analyze(self, force_allow_recent: bool = False) -> schemas.RecordedProgram | None:
         """
         録画ファイル内のメタデータを解析する
         このメソッドは同期的なため、非同期メソッドから実行する際は asyncio.to_thread() または ProcessPoolExecutor で実行すること
@@ -530,8 +530,10 @@ class MetadataAnalyzer:
                     recorded_video.recording_start_time = recording_time[0]
                     recorded_video.recording_end_time = recording_time[1]
             else:
-                # 取得失敗時、最終更新日時が現在時刻から30秒以内ならまだ録画中の可能性が高いので、None を返し DB には保存しない
-                if (now - recorded_video.file_modified_at).total_seconds() < 30:
+                # 取得失敗時、最終更新日時が現在時刻から30秒以内ならまだ録画中の可能性が高い
+                # ただし、明示的に force_allow_recent=True の場合はガードを無視して後続のフォールバック処理へ進む
+                if ((now - recorded_video.file_modified_at).total_seconds() < 30 and
+                    force_allow_recent is False):
                     logging.warning(f'{self.recorded_file_path}: MPEG-TS SDT/EIT analysis failed. (still recording?)')
                     return None
         else:
@@ -574,6 +576,16 @@ class MetadataAnalyzer:
                 created_at = datetime.now(tz=ZoneInfo('Asia/Tokyo')),
                 updated_at = datetime.now(tz=ZoneInfo('Asia/Tokyo')),
             )
+
+            # 可能であれば SDT からチャンネルだけでも取得して紐付ける
+            try:
+                channel_only = TSInfoAnalyzer(recorded_video, end_ts_offset=end_ts_offset).analyzeChannelOnly()
+                if channel_only is not None:
+                    recorded_program.channel = channel_only
+                    recorded_program.network_id = channel_only.network_id
+                    recorded_program.service_id = channel_only.service_id
+            except Exception as ex:
+                logging.warning(f'{self.recorded_file_path}: Failed to attach channel info in fallback.', exc_info=ex)
 
         # この時点で番組情報を正常に取得できており、かつ録画開始時刻・録画終了時刻の両方が取得できている場合
         elif (recorded_video.recording_start_time is not None and

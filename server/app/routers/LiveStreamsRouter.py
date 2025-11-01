@@ -183,6 +183,16 @@ async def LiveStreamEventAPI(
                         'event': 'clients_update',  # clients_update イベントを設定
                         'data': status.model_dump_json(),
                     }
+                # 録画状態が以前と異なる（録画開始/停止）
+                # 独立してチェックして、他の変更と同時に発生しても見逃さないようにする
+                # イベント種別は recording_update として分離し、クライアント側で最小限の UI 更新に留める
+                if (previous_status.is_recording != status.is_recording or
+                    previous_status.recording_start_time != status.recording_start_time or
+                    previous_status.recording_file_path != status.recording_file_path):
+                    yield {
+                        'event': 'recording_update',
+                        'data': status.model_dump_json(),
+                    }
 
                 # 取得結果を保存
                 previous_status = copy.copy(status)
@@ -258,6 +268,64 @@ async def LivePSIArchivedDataAPI(
     response.listen_for_disconnect = listen_for_disconnect_monkeypatch
 
     return response
+
+
+@router.post(
+    '/{display_channel_id}/{quality}/recording/start',
+    summary = 'ついで録画開始 API',
+    status_code = status.HTTP_200_OK,
+)
+async def LiveRecordingStartAPI(
+    display_channel_id: Annotated[str, Depends(ValidateChannelID)],
+    quality: Annotated[QUALITY_TYPES, Depends(ValidateQuality)],
+):
+    """
+    指定されたライブストリームのついで録画を開始する。<br>
+    ライブストリームが ONAir 状態でない場合はエラーを返す。
+    """
+
+    # ライブストリームを取得
+    live_stream = LiveStream(display_channel_id, quality)
+
+    # 録画を開始
+    success, message = await live_stream.startRecording()
+
+    if success:
+        return {'status': 'success', 'message': message}
+    else:
+        raise HTTPException(
+            status_code = status.HTTP_400_BAD_REQUEST,
+            detail = message,
+        )
+
+
+@router.post(
+    '/{display_channel_id}/{quality}/recording/stop',
+    summary = 'ついで録画停止 API',
+    status_code = status.HTTP_200_OK,
+)
+async def LiveRecordingStopAPI(
+    display_channel_id: Annotated[str, Depends(ValidateChannelID)],
+    quality: Annotated[QUALITY_TYPES, Depends(ValidateQuality)],
+):
+    """
+    指定されたライブストリームのついで録画を停止する。<br>
+    録画中でない場合はエラーを返す。
+    """
+
+    # ライブストリームを取得
+    live_stream = LiveStream(display_channel_id, quality)
+
+    # 録画を停止
+    success, message = await live_stream.stopRecording()
+
+    if success:
+        return {'status': 'success', 'message': message}
+    else:
+        raise HTTPException(
+            status_code = status.HTTP_400_BAD_REQUEST,
+            detail = message,
+        )
 
 
 # ***** MPEG-TS ストリーミング API *****

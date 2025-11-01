@@ -39,6 +39,10 @@
                     <span class="ml-2">映像情報</span>
                 </div>
                 <div class="video-info__item">
+                    <div class="video-info__item-label">ついで録画</div>
+                    <div class="video-info__item-value">{{ program.recorded_video.is_tsuide ? 'はい' : 'いいえ' }}</div>
+                </div>
+                <div class="video-info__item">
                     <div class="video-info__item-label">コーデック</div>
                     <div class="video-info__item-value">{{program.recorded_video.video_codec}} ({{program.recorded_video.video_codec_profile}})</div>
                 </div>

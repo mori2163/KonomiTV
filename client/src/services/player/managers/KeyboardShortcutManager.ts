@@ -88,6 +88,11 @@ class KeyboardShortcutManager implements PlayerManager {
         const capture_button_element = this.player.container.querySelector<HTMLDivElement>('.dplayer-capture-icon')!;
         const comment_capture_button_element = this.player.container.querySelector<HTMLDivElement>('.dplayer-comment-capture-icon')!;
 
+        // 録画ボタンの HTML 要素を取得
+        // KeyboardShortcutManager より先に RecordingManager が初期化されていることが前提
+        // ビデオ視聴時は録画ボタンが存在しないため null になる
+        const recording_button_element = this.player.container.querySelector<HTMLDivElement>('.dplayer-recording-icon');
+
         // ツイート送信フォーム / ツイート送信ボタンの HTML 要素を取得
         // Twitter パネルコンポーネントが視聴画面に追加されていることが前提
         const tweet_form_element = document.querySelector<HTMLDivElement>('.tweet-form__textarea')!;
@@ -287,6 +292,14 @@ class KeyboardShortcutManager implements PlayerManager {
             // V: 映像をコメントを付けてキャプチャする
             {mode: 'Both', key: 'KeyV', repeat: false, ctrl: false, shift: false, alt: false, handler: () => {
                 comment_capture_button_element.click();
+            }},
+
+            // Shift + R: ライブ視聴: ついで録画を開始/停止する
+            {mode: 'Live', key: 'KeyR', repeat: false, ctrl: false, shift: true, alt: false, handler: () => {
+                // 録画ボタンが存在しない場合は何もしない (ONAir 状態でない場合など)
+                if (recording_button_element) {
+                    recording_button_element.click();
+                }
             }},
 
             // M: ライブ視聴: コメント入力フォームにフォーカスする

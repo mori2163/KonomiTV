@@ -121,6 +121,7 @@ class RecordedVideo(PydanticModel):
     original_video_codec: Literal['MPEG-2', 'H.264', 'H.265'] | None = None
     encoded_file_path: str | None = None
     is_original_file_deleted: bool = False
+    is_tsuide: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -281,6 +282,10 @@ class LiveStreamStatus(BaseModel):
     started_at: float
     updated_at: float
     client_count: int
+    # ついで録画機能の状態
+    is_recording: bool  # 録画中かどうか
+    recording_start_time: float | None  # 録画開始時刻
+    recording_file_path: str | None  # 録画ファイルのパス
 
 class LiveStreamStatuses(BaseModel):
     Restart: dict[str, LiveStreamStatus]

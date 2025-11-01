@@ -793,6 +793,7 @@ class LiveEncodingTask:
 
         async def Reader() -> None:
             nonlocal tuner_ts_read_at
+            nonlocal background_tasks
 
             # 受信した放送波が入るイテレータを作成
             # R/W バッファ: 188B (TS Packet Size) * 256 = 48128B
@@ -828,6 +829,15 @@ class LiveEncodingTask:
                         # ストリームデータを tsreadex の標準入力に書き込む
                         cast(asyncio.StreamWriter, tsreadex.stdin).write(chunk)
                         await cast(asyncio.StreamWriter, tsreadex.stdin).drain()
+
+                        # ついで録画: 生の放送波をそのまま保存する（録画モードが raw の場合）
+                        background_tasks.add(asyncio.create_task(self.live_stream.writeRawRecordingChunk(chunk)))
+
+                        # PSI/SI 書庫 (.psc) 収集中であれば、psisiarc にも生 TS を渡す
+                        background_tasks.add(asyncio.create_task(self.live_stream.pushPSIArchiveChunk(chunk)))
+
+                        # 完了したタスクをクリーンアップ
+                        background_tasks = {task for task in background_tasks if not task.done()}
 
                         # 生の放送波の TS パケットを PSI/SI データアーカイバーに送信する
                         ## 放送波の tsreadex への書き込みを最優先で行うため、非同期タスクとして実行する

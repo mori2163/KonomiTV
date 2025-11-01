@@ -73,6 +73,14 @@
                             再エンコード済み
                         </v-chip>
                     </div>
+                    <!-- ついで録画ラベル -->
+                    <div v-if="program.recorded_video.is_tsuide"
+                        class="recorded-program__content-meta-tsuide">
+                        <v-chip size="x-small" color="info" variant="tonal">
+                            <Icon icon="fluent:bookmark-16-regular" width="12px" height="12px" class="mr-1" />
+                            ついで録画
+                        </v-chip>
+                    </div>
                     <div class="recorded-program__content-meta-time">{{ ProgramUtils.getProgramTime(program) }}</div>
                 </div>
                 <div class="recorded-program__content-description"
@@ -675,6 +683,27 @@ const deleteVideo = async () => {
             }
 
             &-encoded {
+                display: flex;
+                align-items: center;
+                margin-left: 12px;
+
+                @include tablet-vertical {
+                    margin-left: 0px;
+                    margin-top: 4px;
+                }
+
+                @include smartphone-horizontal {
+                    margin-left: 0px;
+                    margin-top: 4px;
+                }
+
+                @include smartphone-vertical {
+                    margin-left: 0px;
+                    margin-top: 3px;
+                }
+            }
+
+            &-tsuide {
                 display: flex;
                 align-items: center;
                 margin-left: 12px;

@@ -39,6 +39,7 @@ export interface IRecordedVideo {
     is_tsreplace_encoded: boolean;
     tsreplace_encoded_at: string | null;
     original_video_codec: 'MPEG-2' | 'H.264' | 'H.265' | null;
+    is_tsuide: boolean;
     created_at: string;
     updated_at: string;
 }
@@ -73,6 +74,7 @@ export const IRecordedVideoDefault: IRecordedVideo = {
     is_tsreplace_encoded: false,
     tsreplace_encoded_at: null,
     original_video_codec: null,
+    is_tsuide: false,
     created_at: '2000-01-01T00:00:00+09:00',
     updated_at: '2000-01-01T00:00:00+09:00',
 };

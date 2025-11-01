@@ -148,8 +148,81 @@ class TSInfoAnalyzer:
         # サービス (チャンネル) 情報を取得
         channel = self.__analyzeSDTInformation()
         if channel is None:
-            logging.warning(f'{self.recorded_video.file_path}: Channel information not found.')
-            return None
+            # フォールバック: TS から取得できなかった場合、.psc (PSI/SI 書庫) が存在すれば仮想 TS を生成して再試行する
+            if self.recorded_video.container_format == 'MPEG-TS':
+                try:
+                    psc_path = Path(self.recorded_video.file_path).with_suffix('.psc')
+                    if psc_path.exists():
+                        # .psc から PAT/SDT/NIT/TOT/EIT を抽出して仮想 TS を生成
+                        packets = bytearray()
+                        # PID ごとの連続性指標
+                        counters: dict[int, int] = {}
+                        last_time_sec = 0.0
+                        last_tot_time_sec: float | None = None
+
+                        def callback(time_sec: float, pid: int, section: bytes):
+                            nonlocal last_time_sec, last_tot_time_sec
+                            last_time_sec = time_sec
+                            if pid in (0x12, 0x26, 0x27):
+                                # EIT は 20% の位置から 60 秒間だけ
+                                if time_sec < self.recorded_video.duration * 0.2 or time_sec > self.recorded_video.duration * 0.2 + 60:
+                                    return True
+                            elif pid == 0x14:
+                                # 録画時刻の解析の精度を上げるため
+                                if last_tot_time_sec is None:
+                                    self.first_tot_timedelta = timedelta(seconds = time_sec)
+                                last_tot_time_sec = time_sec
+                            else:
+                                # TOT 以外は 60 秒間だけ
+                                if time_sec > 60:
+                                    return True
+
+                            i = 0
+                            while i < len(section):
+                                # TS パケットに変換
+                                packets.append(0x47)
+                                packets.append((0x40 if i == 0 else 0) | pid >> 8)
+                                packets.append(pid & 0xff)
+                                counters[pid] = (counters[pid] + 1) & 0x0f if pid in counters else 0
+                                packets.append(0x10 | counters[pid])
+                                if i == 0:
+                                    packets.append(0)
+                                while len(packets) % 188 != 0 and i < len(section):
+                                    packets.append(section[i])
+                                    i += 1
+                                while len(packets) % 188 != 0:
+                                    packets.append(0xff)
+                            return True
+
+                        with open(psc_path, 'rb') as f:
+                            # PAT, NIT, SDT, TOT, EIT を取り出す
+                            if not TSInfoAnalyzer.readPSIData(f, [0x00, 0x10, 0x11, 0x14, 0x12, 0x26, 0x27], callback):
+                                logging.warning(f'{psc_path}: File contents may be invalid.')
+                            if last_tot_time_sec is not None:
+                                self.last_tot_timedelta = timedelta(seconds = last_time_sec - last_tot_time_sec)
+
+                        class TransportStreamFileWorkaround(ariblib.TransportStreamFile):
+                            def __init__(self, stream: Any):
+                                BufferedReader.__init__(self, stream)
+                                self.chunk_size = 1
+                                self._callbacks = dict()
+
+                        # 仮想 TS を self.ts として差し替え、以降の解析を続行
+                        self.ts = TransportStreamFileWorkaround(BytesIO(packets))
+                        self.end_ts_offset = len(packets)
+                        channel = self.__analyzeSDTInformation()
+                        if channel is None:
+                            logging.warning(f'{self.recorded_video.file_path}: Channel information not found (even with .psc).')
+                            return None
+                    else:
+                        logging.warning(f'{self.recorded_video.file_path}: Channel information not found. (.psc not found)')
+                        return None
+                except Exception as ex:
+                    logging.warning(f'{self.recorded_video.file_path}: Channel information not found (psc fallback failed).', exc_info=ex)
+                    return None
+            else:
+                logging.warning(f'{self.recorded_video.file_path}: Channel information not found.')
+                return None
 
         # 録画番組情報のモデルを作成
         ## EIT[p/f] のうち、現在と次の番組情報を両方取得した上で、録画マージンを考慮してどちらの番組を録画したかを判定する
@@ -297,6 +370,21 @@ class TSInfoAnalyzer:
                 return None
 
             return (first_tot_time - self.first_tot_timedelta, last_tot_time + self.last_tot_timedelta)
+
+
+    def analyzeChannelOnly(self) -> schemas.Channel | None:
+        """
+        SDT からチャンネル情報のみを解析して返す。
+        EIT が取得できない状況でも、可能であればチャンネルだけでも紐付けるための簡易 API。
+
+        Returns:
+            schemas.Channel | None: チャンネル情報（取得できなかった場合は None）
+        """
+        try:
+            return self.__analyzeSDTInformation()
+        except Exception as ex:
+            logging.warning(f'{self.recorded_video.file_path}: Failed to analyze channel from SDT.', exc_info=ex)
+            return None
 
 
     def __analyzeSDTInformation(self) -> schemas.Channel | None:

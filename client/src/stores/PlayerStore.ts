@@ -151,6 +151,10 @@ const usePlayerStore = defineStore('player', {
         // 既定で null (未視聴) とする
         live_stream_status: null as 'Offline' | 'Standby' | 'ONAir' | 'Idling' | 'Restart' | null,
 
+        // ライブ視聴: ついで録画機能の状態
+        is_live_recording: false,  // 録画中かどうか
+        live_recording_start_time: null as number | null,  // 録画開始時刻
+
         // ライブ視聴: ニコニコ実況への接続に失敗した際のエラーメッセージ
         // null のとき、エラーは発生していないとみなす
         live_comment_init_failed_message: null as string | null,

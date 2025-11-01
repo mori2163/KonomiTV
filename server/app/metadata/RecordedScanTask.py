@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import functools
 import pathlib
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +13,7 @@ from zoneinfo import ZoneInfo
 import anyio
 from fastapi import HTTPException, status
 from tortoise import transactions
+from tortoise.exceptions import MultipleObjectsReturned
 from watchfiles import Change, awatch
 
 from app import logging, schemas
@@ -153,6 +155,9 @@ class RecordedScanTask:
 
         # 録画中ファイルの状態管理
         self._recording_files: dict[anyio.Path, FileRecordingInfo] = {}
+
+        # ついで録画中のファイルを追跡（メタデータ解析をスキップするため）
+        self._tsuide_recording_files: set[anyio.Path] = set()
 
         # タスクの状態管理
         self._is_running = False
@@ -449,12 +454,208 @@ class RecordedScanTask:
         self._is_batch_scan_running = False
 
 
+    async def registerRecordingFile(self, file_path: str | anyio.Path) -> None:
+        """
+        録画中のファイルを手動で登録する（ついで録画などで使用）
+
+        Args:
+            file_path (str | anyio.Path): 録画中のファイルパス
+        """
+
+        # anyio.Path に変換
+        if isinstance(file_path, str):
+            file_path = anyio.Path(file_path)
+
+        # ファイルの存在確認
+        if not await self.isFileExists(file_path):
+            logging.warning(f'{file_path}: File does not exist, cannot register as recording.')
+            return
+
+        try:
+            # ファイルの状態を取得
+            stat = await file_path.stat()
+            now = datetime.now(tz=ZoneInfo('Asia/Tokyo'))
+            last_modified = datetime.fromtimestamp(stat.st_mtime, tz=ZoneInfo('Asia/Tokyo'))
+            file_size = stat.st_size
+
+            # 録画中ファイルとして登録
+            # mtime_continuous_start_at を現在時刻に設定することで、録画中として扱われる
+            self._recording_files[file_path] = FileRecordingInfo(
+                last_modified = last_modified,
+                last_checked = now,
+                file_size = file_size,
+                mtime_continuous_start_at = last_modified,  # 録画開始時刻を設定
+            )
+
+            # ついで録画中のファイルとしても登録（メタデータ解析をスキップするため）
+            self._tsuide_recording_files.add(file_path)
+
+            logging.info(f'{file_path}: Registered as tsuide recording file.')
+
+            # メタデータ解析は行わず、watchfiles のファイル変更検知に任せる
+            # これにより、ファイルにデータが書き込まれた後に解析が実行される
+        except Exception as ex:
+            logging.error(f'{file_path}: Error registering recording file:', exc_info=ex)
+
+
+    async def unregisterRecordingFile(self, file_path: str | anyio.Path) -> None:
+        """
+        録画中のファイルの登録を解除する（録画停止時に使用）
+
+        Args:
+            file_path (str | anyio.Path): 録画停止したファイルパス
+        """
+
+        # anyio.Path に変換
+        if isinstance(file_path, str):
+            file_path = anyio.Path(file_path)
+
+        # 録画中ファイルから削除
+        if file_path in self._recording_files:
+            self._recording_files.pop(file_path, None)
+            logging.info(f'{file_path}: Unregistered from recording files.')
+
+            # ついで録画フラグを取得してから登録解除
+            is_tsuide = file_path in self._tsuide_recording_files
+            self._tsuide_recording_files.discard(file_path)
+
+            # 最終的なメタデータ解析を実行（録画完了後の解析）
+            # 停止直後は mtime が新しすぎて通常はスキップされるため、force_allow_recent=True で強制解析する
+            # メタデータ解析をバックグラウンドで実行し、I/O負荷を分散
+            asyncio.create_task(self.processRecordedFile(file_path, force_allow_recent=True, is_tsuide=is_tsuide))
+
+            # メタデータをファイルに保存
+            await self.saveRecordedMetadataToFile(file_path)
+        else:
+            logging.warning(f'{file_path}: File was not registered as recording.')
+
+
+    async def saveRecordedMetadataToFile(self, file_path: anyio.Path) -> None:
+        """
+        録画ファイルのメタデータを .program.txt ファイルに保存する（EDCB 互換形式）
+
+        Args:
+            file_path (anyio.Path): 録画ファイルのパス
+        """
+
+        try:
+            # DB から録画番組情報を取得
+            db_recorded_video = await RecordedVideo.get_or_none(
+                file_path=str(file_path)
+            ).select_related('recorded_program', 'recorded_program__channel')
+
+            if db_recorded_video is None:
+                logging.warning(f'{file_path}: Cannot save metadata to file - not found in database.')
+                return
+
+            recorded_program = db_recorded_video.recorded_program
+            if recorded_program is None:
+                logging.warning(f'{file_path}: Cannot save metadata to file - program not found.')
+                return
+
+            # メタデータファイルのパス (.ts の場合は .ts.program.txt)
+            metadata_file_path = anyio.Path(f'{file_path}.program.txt')
+
+            # EDCB 互換形式のメタデータを作成
+            metadata_lines: list[str] = []
+
+            # タイトル
+            metadata_lines.append(f'{recorded_program.title}')
+            metadata_lines.append('')
+
+            # 番組詳細
+            if recorded_program.description:
+                metadata_lines.append(recorded_program.description)
+                metadata_lines.append('')
+
+            # 番組情報（拡張詳細）
+            if recorded_program.detail:
+                # detail は辞書: {見出し: 本文}
+                for head, text in recorded_program.detail.items():
+                    head_str = str(head).strip()
+                    text_str = str(text).strip()
+                    if head_str:
+                        metadata_lines.append(f'{head_str}: {text_str}')
+                    else:
+                        metadata_lines.append(text_str)
+                metadata_lines.append('')
+
+            # チャンネル情報
+            if recorded_program.channel:
+                channel = recorded_program.channel
+                metadata_lines.append(f'チャンネル名: {channel.name}')
+                metadata_lines.append(f'サービスID: {channel.service_id}')
+                metadata_lines.append(f'ネットワークID: {channel.network_id}')
+                metadata_lines.append('')
+
+            # 放送日時
+            metadata_lines.append(f'開始時刻: {recorded_program.start_time.strftime("%Y/%m/%d %H:%M:%S")}')
+            metadata_lines.append(f'終了時刻: {recorded_program.end_time.strftime("%Y/%m/%d %H:%M:%S")}')
+            metadata_lines.append(f'長さ: {int(recorded_program.duration)}秒')
+            metadata_lines.append('')
+
+            # 録画時刻（録画開始/終了時刻が取得できている場合）
+            if db_recorded_video.recording_start_time and db_recorded_video.recording_end_time:
+                metadata_lines.append(f'録画開始時刻: {db_recorded_video.recording_start_time.strftime("%Y/%m/%d %H:%M:%S")}')
+                metadata_lines.append(f'録画終了時刻: {db_recorded_video.recording_end_time.strftime("%Y/%m/%d %H:%M:%S")}')
+                metadata_lines.append('')
+
+            # 映像情報
+            metadata_lines.append(f'映像: {db_recorded_video.video_codec}')
+            metadata_lines.append(f'解像度: {db_recorded_video.video_resolution_width}x{db_recorded_video.video_resolution_height}')
+            metadata_lines.append(f'フレームレート: {db_recorded_video.video_frame_rate}fps')
+            metadata_lines.append(f'スキャン方式: {db_recorded_video.video_scan_type}')
+            metadata_lines.append('')
+
+            # 音声情報
+            metadata_lines.append(f'主音声: {db_recorded_video.primary_audio_codec} {db_recorded_video.primary_audio_channel}')
+            if recorded_program.primary_audio_type:
+                metadata_lines.append(f'主音声種別: {recorded_program.primary_audio_type}')
+            if db_recorded_video.secondary_audio_codec:
+                metadata_lines.append(f'副音声: {db_recorded_video.secondary_audio_codec} {db_recorded_video.secondary_audio_channel}')
+                if recorded_program.secondary_audio_type:
+                    metadata_lines.append(f'副音声種別: {recorded_program.secondary_audio_type}')
+            metadata_lines.append('')
+
+            # ジャンル情報
+            if recorded_program.genres:
+                genre_strs = []
+                for genre in recorded_program.genres:
+                    genre_strs.append(f'{genre["major"]}/{genre["middle"]}')
+                metadata_lines.append(f'ジャンル: {", ".join(genre_strs)}')
+                metadata_lines.append('')
+
+            # ファイル情報
+            metadata_lines.append(f'ファイルサイズ: {db_recorded_video.file_size:,} bytes')
+            metadata_lines.append(f'コンテナ: {db_recorded_video.container_format}')
+
+            # ついで録画ラベル
+            try:
+                if getattr(db_recorded_video, 'is_tsuide', False):
+                    metadata_lines.append('ついで録画: はい')
+                else:
+                    metadata_lines.append('ついで録画: いいえ')
+            except Exception:
+                pass
+
+            # ファイルに書き込み
+            metadata_content = '\n'.join(metadata_lines)
+            await metadata_file_path.write_text(metadata_content, encoding='utf-8')
+
+            logging.info(f'{file_path}: Saved metadata to {metadata_file_path.name}')
+
+        except Exception as ex:
+            logging.error(f'{file_path}: Failed to save metadata to file:', exc_info=ex)
+
+
     async def processRecordedFile(
         self,
         file_path: anyio.Path,
         original_path: anyio.Path | None = None,
         existing_db_recorded_videos: dict[anyio.Path, RecordedVideoSummary] | None = None,
         force_update: bool = False,
+        force_allow_recent: bool = False,
+        is_tsuide: bool = False,
     ) -> None:
         """
         指定された録画ファイルのメタデータを解析し、DB に永続化する
@@ -480,6 +681,10 @@ class RecordedScanTask:
         # 同一ファイルパスへの DB レコード操作を排他制御する
         async with file_lock:
             try:
+                # ついで録画中のファイルはメタデータ解析をスキップ
+                if file_path in self._tsuide_recording_files:
+                    return
+
                 # 万が一この時点でファイルが存在しない場合はスキップ
                 # ファイル変更イベント発火後に即座にファイルが削除される可能性も考慮
                 if not await self.isFileExists(file_path):
@@ -624,6 +829,11 @@ class RecordedScanTask:
                     logging.info(f'{file_path}: Detected encoded file, attempting to inherit metadata from original file.')
 
                     # 既にTSReplaceEncodingTaskで処理済みかチェック
+                    existing_db_recorded_video = None
+                    try:
+                        existing_db_recorded_video = await RecordedVideo.get_or_none(file_path=file_path_str)
+                    except MultipleObjectsReturned:
+                        existing_db_recorded_video = await RecordedVideo.filter(file_path=file_path_str).order_by('-id').first()
                     if existing_db_recorded_video and existing_db_recorded_video.is_tsreplace_encoded:
                         logging.info(f'{file_path}: File already processed by TSReplaceEncodingTask with metadata inheritance (ID: {existing_db_recorded_video.id}, is_encoded: {existing_db_recorded_video.is_tsreplace_encoded}).')
                         return
@@ -645,7 +855,7 @@ class RecordedScanTask:
                 analyzer = MetadataAnalyzer(pathlib.Path(str(file_path)))  # anyio.Path -> pathlib.Path に変換
                 try:
                     with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
-                        recorded_program = await loop.run_in_executor(executor, analyzer.analyze)
+                        recorded_program = await loop.run_in_executor(executor, functools.partial(analyzer.analyze, force_allow_recent=force_allow_recent))
                     if recorded_program is None:
                         logging.error(f'{file_path}: Failed to analyze metadata.')
                         # メタデータ解析に失敗したがこの時点ですでに DB にエントリが存在している場合は、UI から判別できるようステータスを更新する
@@ -667,9 +877,14 @@ class RecordedScanTask:
 
                 # 60秒未満のファイルは録画失敗または切り抜きとみなしてスキップ
                 # 録画中だがまだ60秒に満たない場合、今後のファイル変更イベント発火時に60秒を超えていれば録画中ファイルとして処理される
-                if recorded_program.recorded_video.duration < self.MINIMUM_RECORDING_SECONDS:
+                if (recorded_program.recorded_video.duration < self.MINIMUM_RECORDING_SECONDS and
+                    force_allow_recent is False):
                     logging.debug_simple(f'{file_path}: This file is too short. (duration {recorded_program.recorded_video.duration:.1f}s < {self.MINIMUM_RECORDING_SECONDS}s) Skipped.')
                     return
+
+                # ついで録画フラグを付与
+                if is_tsuide:
+                    recorded_program.recorded_video.is_tsuide = True
 
                 # 前回の DB 取得からメタデータ解析までの間に他のタスクがレコードを作成/更新している可能性があるため、
                 # メタデータ解析後に再度ファイルパスに対応するレコードを取得する
@@ -687,30 +902,41 @@ class RecordedScanTask:
                     existing_db_recorded_video_after_analyze is not None and
                     existing_db_recorded_video_after_analyze.status == 'Recorded' and
                     existing_db_recorded_video_after_analyze.file_hash == recorded_program.recorded_video.file_hash):
-                    return
+                    # 同一ハッシュで既に Recorded だが、ついで録画フラグなど更新すべき差分がある場合はスキップしない
+                    existing_is_tsuide = getattr(existing_db_recorded_video_after_analyze, 'is_tsuide', False)
+                    analyzed_is_tsuide = getattr(recorded_program.recorded_video, 'is_tsuide', False)
+                    if existing_is_tsuide == analyzed_is_tsuide:
+                        return
 
-                # 録画中のファイルとして処理
-                ## 他ドライブからファイルコピー中のファイルも、実際の録画処理より高速に書き込まれるだけで随時書き込まれることに変わりはないので、
-                ## 録画中として判断されることがある（その場合、ファイルコピーが完了した段階で「録画完了」扱いとなる）
-                if is_recording or (now - file_modified_at).total_seconds() < self.RECORDING_COMPLETE_SECONDS:
-                    # status を Recording に設定
-                    recorded_program.recorded_video.status = 'Recording'
-                    # 状態を更新
-                    self._recording_files[file_path] = FileRecordingInfo(
-                        last_modified = file_modified_at,
-                        last_checked = now,
-                        file_size = file_size,
-                        mtime_continuous_start_at = file_modified_at,  # 初回は必ず mtime_continuous_start_at を設定
-                    )
-                    logging.debug_simple(f'{file_path}: This file is recording or copying. (duration {recorded_program.recorded_video.duration:.1f}s >= {self.MINIMUM_RECORDING_SECONDS}s)')
-                else:
-                    # status を Recorded に設定
-                    # MetadataAnalyzer 側で既に Recorded に設定されているが、念のため
+                # 録画中/完了の状態決定
+                ## 停止直後の強制解析時は、たとえ mtime が新しくても Recorded とみなす
+                if force_allow_recent is True:
                     recorded_program.recorded_video.status = 'Recorded'
-                    # 録画完了後のバックグラウンド解析タスクを開始
                     if file_path not in self._background_tasks:
                         task = asyncio.create_task(self.__runBackgroundAnalysis(recorded_program))
                         self._background_tasks[file_path] = task
+                else:
+                    ## 他ドライブからファイルコピー中のファイルも、実際の録画処理より高速に書き込まれるだけで随時書き込まれることに変わりはないので、
+                    ## 録画中として判断されることがある（その場合、ファイルコピーが完了した段階で「録画完了」扱いとなる）
+                    if is_recording or (now - file_modified_at).total_seconds() < self.RECORDING_COMPLETE_SECONDS:
+                        # status を Recording に設定
+                        recorded_program.recorded_video.status = 'Recording'
+                        # 状態を更新
+                        self._recording_files[file_path] = FileRecordingInfo(
+                            last_modified = file_modified_at,
+                            last_checked = now,
+                            file_size = file_size,
+                            mtime_continuous_start_at = file_modified_at,  # 初回は必ず mtime_continuous_start_at を設定
+                        )
+                        logging.debug_simple(f'{file_path}: This file is recording or copying. (duration {recorded_program.recorded_video.duration:.1f}s >= {self.MINIMUM_RECORDING_SECONDS}s)')
+                    else:
+                        # status を Recorded に設定
+                        # MetadataAnalyzer 側で既に Recorded に設定されているが、念のため
+                        recorded_program.recorded_video.status = 'Recorded'
+                        # 録画完了後のバックグラウンド解析タスクを開始
+                        if file_path not in self._background_tasks:
+                            task = asyncio.create_task(self.__runBackgroundAnalysis(recorded_program))
+                            self._background_tasks[file_path] = task
 
                 # DB に永続化
                 # メタデータ解析後の最新のデータベース情報を使う
@@ -897,6 +1123,11 @@ class RecordedScanTask:
             db_recorded_video.secondary_audio_codec = recorded_program.recorded_video.secondary_audio_codec
             db_recorded_video.secondary_audio_channel = recorded_program.recorded_video.secondary_audio_channel
             db_recorded_video.secondary_audio_sampling_rate = recorded_program.recorded_video.secondary_audio_sampling_rate
+            # ついで録画フラグ
+            try:
+                db_recorded_video.is_tsuide = getattr(recorded_program.recorded_video, 'is_tsuide', False)
+            except Exception:
+                db_recorded_video.is_tsuide = False
             # この時点では CM 区間情報は未解析なので、明示的に未解析を表す None を設定する (デフォルトで None だが念のため)
             # 「解析したが CM 区間がなかった/検出に失敗した」場合、CMSectionsDetector 側で [] が設定される
             # ただし、TSReplaceエンコード済みファイルの場合は、既存のCM区間情報を保持
@@ -1092,15 +1323,14 @@ class RecordedScanTask:
 
         try:
             # watchfiles によるファイル監視
-            try:
-                async for changes in awatch(*watch_paths, recursive=True):
+            async for changes in awatch(*watch_paths, recursive=True):
+                if not self._is_running:
+                    break
+
+                # 変更があったファイルごとに処理
+                for change_type, file_path_str in changes:
                     if not self._is_running:
                         break
-
-                    # 変更があったファイルごとに処理
-                    for change_type, file_path_str in changes:
-                        if not self._is_running:
-                            break
 
                     file_path = anyio.Path(file_path_str)
                     # Mac の metadata ファイルをスキップ
@@ -1244,6 +1474,9 @@ class RecordedScanTask:
                 # 録画中とマークされていたファイルの場合は記録から削除
                 self._recording_files.pop(file_path, None)
 
+                # ついで録画中としてマークされていた場合も記録から削除
+                self._tsuide_recording_files.discard(file_path)
+
                 # DB からレコードを削除
                 db_recorded_video = await RecordedVideo.get_or_none(file_path=str(file_path))
                 if db_recorded_video is None and original_file_path is not None:
@@ -1279,6 +1512,10 @@ class RecordedScanTask:
                 # 録画中ファイルをチェック
                 for file_path, recording_info in self._recording_files.items():
                     try:
+                        # ついで録画中のファイルは自動完了チェックをスキップ（手動で停止ボタンを押すまで録画中扱い）
+                        if file_path in self._tsuide_recording_files:
+                            continue
+
                         # ファイルの現在の状態を取得
                         stat = await file_path.stat()
                         current_modified = datetime.fromtimestamp(stat.st_mtime, tz=ZoneInfo('Asia/Tokyo'))

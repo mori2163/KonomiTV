@@ -59,6 +59,7 @@ class RecordedVideo(TortoiseModel):
     original_video_codec = cast(TortoiseField[Literal['MPEG-2', 'H.264', 'H.265'] | None], fields.CharField(255, null=True))  # 元の映像コーデック
     encoded_file_path = cast(TortoiseField[str | None], fields.TextField(null=True))  # エンコード済みファイルのパス
     is_original_file_deleted = fields.BooleanField(default=False)  # 元ファイルが削除されたかどうか
+    is_tsuide = fields.BooleanField(default=False)  # ついで録画かどうか（ユーザー操作起点での録画）
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
 

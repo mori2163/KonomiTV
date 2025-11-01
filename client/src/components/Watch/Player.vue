@@ -17,6 +17,11 @@
         <v-progress-circular indeterminate size="60" width="6" class="watch-player__buffering"
             :class="{'watch-player__buffering--display': playerStore.is_video_buffering}">
         </v-progress-circular>
+        <!-- ついで録画中のラベル表示 (ライブ視聴時のみ) -->
+        <div class="watch-player__recording-label" v-if="playback_mode === 'Live' && playerStore.is_live_recording">
+            <Icon icon="fluent:record-20-filled" width="16px" />
+            <span>録画中</span>
+        </div>
         <div class="watch-player__dplayer"
             @touchend="playback_mode === 'Video' ? handleDoubleTap($event) : null"></div>
         <div class="watch-player__dplayer-setting-cover"
@@ -320,6 +325,22 @@ const handleDoubleTap = (event: TouchEvent) => {
                     padding: 7.3px !important;
                     @include smartphone-vertical {
                         padding: 5.4px !important;
+                    }
+                }
+                // ついで録画ボタンのスタイル
+                &.dplayer-recording-icon {
+                    transition: background-color 0.08s ease;
+                    border-radius: 6px;
+                    padding: 7.5px !important;
+                    @include smartphone-vertical {
+                        padding: 5.6px !important;
+                    }
+                    // 録画中は赤いハイライトを表示
+                    &.dplayer-recording {
+                        background: rgba(220, 20, 60, 0.85);
+                        .dplayer-icon-content {
+                            opacity: 1;
+                        }
                     }
                 }
                 // ブラウザフルスクリーンボタンを削除（実質あまり意味がないため）
@@ -669,6 +690,50 @@ _::-webkit-full-page-media, _:future, :root .dplayer-icon:hover .dplayer-icon-co
         &--display {
             opacity: 1;
             visibility: visible;
+        }
+    }
+
+    .watch-player__recording-label {
+        position: absolute;
+        top: 16px;
+        right: 20px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        background: rgba(220, 20, 60, 0.9);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+        border-radius: 6px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        z-index: 4;
+        animation: recording-pulse 2s ease-in-out infinite;
+        pointer-events: none;  // クリックイベントを無効化
+
+        @include tablet-vertical {
+            top: 12px;
+            right: 16px;
+            font-size: 12px;
+            padding: 5px 10px;
+        }
+
+        @include smartphone-vertical {
+            top: 10px;
+            right: 12px;
+            font-size: 11px;
+            padding: 4px 8px;
+            gap: 4px;
+        }
+    }
+
+    // 録画中ラベルのアニメーション (ほんのり点滅)
+    @keyframes recording-pulse {
+        0%, 100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.85;
         }
     }
 

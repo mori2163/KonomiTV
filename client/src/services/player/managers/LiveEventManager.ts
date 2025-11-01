@@ -20,6 +20,10 @@ interface ILiveStreamStatusEvent {
     updated_at: number;
     // このライブストリームを視聴しているクライアント数
     client_count: number;
+    // ついで録画機能の状態
+    is_recording: boolean;  // 録画中かどうか
+    recording_start_time: number | null;  // 録画開始時刻 (UNIX タイムスタンプ、録画していない場合は null)
+    recording_file_path: string | null;  // 録画ファイルのパス (録画していない場合は null)
 }
 
 
@@ -89,6 +93,10 @@ class LiveEventManager implements PlayerManager {
             // ライブストリームのステータスを設定
             player_store.live_stream_status = event.status;
 
+            // ついで録画機能の状態を設定
+            player_store.is_live_recording = event.is_recording;
+            player_store.live_recording_start_time = event.recording_start_time;
+
             // ステータスごとに処理を振り分け
             switch (event.status) {
 
@@ -116,6 +124,10 @@ class LiveEventManager implements PlayerManager {
 
             // ライブストリームのステータスを設定
             player_store.live_stream_status = event.status;
+
+            // ついで録画機能の状態を設定
+            player_store.is_live_recording = event.is_recording;
+            player_store.live_recording_start_time = event.recording_start_time;
 
             // 視聴者数を更新
             channels_store.viewer_count = event.client_count;
@@ -273,6 +285,18 @@ class LiveEventManager implements PlayerManager {
                     break;
                 }
             }
+        });
+
+        // 録画状態だけが更新されたときのイベント
+        this.eventsource.addEventListener('recording_update', (event_raw: MessageEvent) => {
+            if (this.destroyed === true)  return;
+
+            // イベントを取得
+            const event: ILiveStreamStatusEvent = JSON.parse(event_raw.data);
+
+            // ついで録画機能の状態のみを最小限更新
+            player_store.is_live_recording = event.is_recording;
+            player_store.live_recording_start_time = event.recording_start_time;
         });
 
         // クライアント数 (だけ) が更新されたときのイベント

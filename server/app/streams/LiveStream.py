@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import ClassVar, Literal
 
+import anyio
 from hashids import Hashids
 
 from app import logging
-from app.constants import QUALITY_TYPES
+from app.config import Config
+from app.constants import LIBRARY_PATH, QUALITY_TYPES
 from app.schemas import LiveStreamStatus
 from app.streams.LiveEncodingTask import LiveEncodingTask
 from app.streams.LivePSIDataArchiver import LivePSIDataArchiver
@@ -159,6 +163,16 @@ class LiveStream:
             ## Mirakurun バックエンドを使っている場合は None のまま
             instance.tuner = None
 
+            # ついで録画機能の状態
+            instance._is_recording = False  # 録画中かどうか
+            instance._recording_start_time = None  # 録画開始時刻
+            instance._recording_file_path = None  # 録画ファイルのパス
+            instance._recording_file_handle = None  # 録画ファイルハンドル
+            instance._recording_mode = 'raw'  # 録画モード (raw: 放送波そのままの生録画, encoded: エンコード後のストリームを録画)
+            # PSI/SI 書庫 (.psc) を録るための psisiarc プロセス
+            instance._psi_archive_process = None
+            instance._psi_archive_path = None
+
             # 生成したインスタンスを登録する
             cls.__instances[live_stream_id] = instance
 
@@ -189,6 +203,14 @@ class LiveStream:
         self._live_encoding_task_ref: asyncio.Task[None] | None
         self.psi_data_archiver: LivePSIDataArchiver | None
         self.tuner: EDCBTuner | None
+        # ついで録画機能の状態
+        self._is_recording: bool
+        self._recording_start_time: float | None
+        self._recording_file_path: str | None
+        self._recording_file_handle: anyio.AsyncFile | None  # type: ignore
+        self._recording_mode: Literal['raw', 'encoded']
+        self._psi_archive_process: asyncio.subprocess.Process | None
+        self._psi_archive_path: str | None
 
 
     @classmethod
@@ -383,6 +405,10 @@ class LiveStream:
             started_at = self._started_at,  # ライブストリームが開始された (ステータスが Offline or Restart → Standby に移行した) 時刻
             updated_at = self._updated_at,  # ライブストリームのステータスが最後に更新された時刻
             client_count = len(self._clients),  # ライブストリームに接続中のクライアント数
+            # ついで録画機能の状態
+            is_recording = self._is_recording,
+            recording_start_time = self._recording_start_time,
+            recording_file_path = self._recording_file_path,
         )
 
 
@@ -493,3 +519,263 @@ class LiveStream:
         # ストリームデータが空でなければ、最終書き込み時刻を更新
         if stream_data != b'':
             self._stream_data_written_at = now
+
+        # ついで録画機能: 録画中かつ録画モードが encoded の場合、エンコード後のストリームデータをファイルにも書き込む
+        if self._is_recording and self._recording_mode == 'encoded' and self._recording_file_handle is not None and stream_data != b'':
+            try:
+                await self._recording_file_handle.write(stream_data)
+                await self._recording_file_handle.flush()
+            except Exception as ex:
+                # ファイル書き込みエラーが発生した場合は録画を停止
+                logging.error(f'[Live: {self.live_stream_id}] Recording file write error: {ex}')
+                await self.stopRecording()
+
+
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        """
+        ファイル名に使えない文字を安全な文字に置換する
+
+        Args:
+            name (str): 元の文字列
+
+        Returns:
+            str: 置換後の文字列
+        """
+        return (
+            name.replace('/', '／')
+                .replace('\\', '＼')
+                .replace(':', '：')
+                .replace('*', '＊')
+                .replace('?', '？')
+                .replace('"', '”')
+                .replace('<', '＜')
+                .replace('>', '＞')
+                .replace('|', '｜')
+        )
+
+    async def startRecording(self) -> tuple[bool, str]:
+        """
+        ついで録画を開始する
+
+        Returns:
+            tuple[bool, str]: 成功したかどうかと、メッセージ
+        """
+
+        # 既に録画中の場合は何もしない
+        if self._is_recording:
+            return False, 'すでに録画中です。'
+
+        # ライブストリームが ONAir 状態でない場合は録画できない
+        if self._status != 'ONAir':
+            return False, 'ライブストリームが ONAir 状態ではありません。'
+
+        # チャンネル情報を取得
+        from app.models.Channel import Channel
+        channel = await Channel.filter(display_channel_id=self.display_channel_id).first()
+        if channel is None:
+            return False, 'チャンネル情報が見つかりません。'
+
+        # 現在の番組情報を取得
+        program_present = (await channel.getCurrentAndNextProgram())[0]
+        if program_present is None:
+            program_title = '番組情報なし'
+        else:
+            program_title = program_present.title
+
+        # 録画ファイル名を生成: チャンネル名_番組名_YYYYMMDD_HHMMSS.ts
+        ## ファイル名に使えない文字を置換
+        safe_channel_name = self._sanitize_filename(channel.name)
+        safe_program_title = self._sanitize_filename(program_title)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'{safe_channel_name}_{safe_program_title}_{timestamp}.ts'
+
+        # 録画先フォルダを取得
+        config = Config()
+        if len(config.video.recorded_folders) == 0:
+            return False, '録画先フォルダが設定されていません。'
+        recorded_folder = Path(config.video.recorded_folders[0])
+
+        # 録画先フォルダが存在しない場合は作成
+        if not recorded_folder.exists():
+            try:
+                recorded_folder.mkdir(parents=True, exist_ok=True)
+            except Exception as ex:
+                logging.error(f'[Live: {self.live_stream_id}] Failed to create recorded folder: {ex}')
+                return False, f'録画先フォルダの作成に失敗しました: {ex}'
+
+        # 録画ファイルのパスを生成
+        recording_file_path = recorded_folder / filename
+        self._recording_file_path = str(recording_file_path)
+
+        # 録画ファイルを開く（デフォルトは放送波そのままの raw 録画）
+        try:
+            self._recording_file_handle = await anyio.open_file(str(recording_file_path), mode='wb')
+            # raw : 放送波そのままの生録画, encoded : エンコード後のストリームを録画
+            self._recording_mode = 'raw'
+            self._is_recording = True
+            self._recording_start_time = time.time()
+
+            # PSI/SI 書庫 (.psc) も同時に保存する（EIT を除去しているため、番組情報復元に必要）
+            try:
+                psc_path = str(Path(self._recording_file_path).with_suffix('.psc'))
+                await self.__startPSIArchiveToFile(channel.service_id, psc_path)
+            except Exception as ex:
+                logging.warning(f'[Live: {self.live_stream_id}] Failed to start PSI archive: {ex}')
+
+            logging.info(f'[Live: {self.live_stream_id}] Recording started: {self._recording_file_path}')
+
+            # RecordedScanTask に録画開始を通知（ついで録画フラグ付与と解析スキップのため）
+            try:
+                from app.metadata.RecordedScanTask import RecordedScanTask
+                recorded_scan_task = RecordedScanTask()
+                await recorded_scan_task.registerRecordingFile(self._recording_file_path)
+            except Exception as ex:
+                # ここでの失敗は録画自体には致命的でないため警告として扱う
+                logging.warning(f'[Live: {self.live_stream_id}] Failed to notify RecordedScanTask (register): {ex}')
+
+            return True, f'ついで録画を開始しました: {filename}'
+        except Exception as ex:
+            logging.error(f'[Live: {self.live_stream_id}] Failed to open recording file: {ex}')
+            return False, f'録画ファイルのオープンに失敗しました: {ex}'
+
+
+    async def stopRecording(self) -> tuple[bool, str]:
+        """
+        ついで録画を停止する
+
+        Returns:
+            tuple[bool, str]: 成功したかどうかと、メッセージ
+        """
+
+        # 録画中でない場合は何もしない
+        if not self._is_recording:
+            return False, '録画中ではありません。'
+
+        async def _reset_recording_state(recording_file_path: str | None) -> None:
+            self._is_recording = False
+            self._recording_start_time = None
+            self._recording_file_handle = None
+            self._recording_mode = 'raw'
+            self._recording_file_path = None
+            self._psi_archive_process = None
+            self._psi_archive_path = None
+
+            # RecordedScanTask に録画停止を通知
+            if recording_file_path is not None:
+                try:
+                    from app.metadata.RecordedScanTask import RecordedScanTask
+                    recorded_scan_task = RecordedScanTask()
+                    await recorded_scan_task.unregisterRecordingFile(recording_file_path)
+                except Exception as ex:
+                    logging.warning(f'[Live: {self.live_stream_id}] Failed to notify RecordedScanTask: {ex}')
+
+        # 録画ファイルを閉じる
+        recording_file_path = self._recording_file_path
+        try:
+            # PSI/SI 書庫の収集を停止する
+            try:
+                await self.__stopPSIArchiveToFile()
+            except Exception as ex:
+                logging.warning(f'[Live: {self.live_stream_id}] Failed to stop PSI archive: {ex}')
+
+            if self._recording_file_handle is not None:
+                await self._recording_file_handle.aclose()
+                logging.info(f'[Live: {self.live_stream_id}] Recording stopped: {self._recording_file_path}')
+
+            await _reset_recording_state(recording_file_path)
+
+            if recording_file_path is not None:
+                return True, f'録画を停止しました: {Path(recording_file_path).name}'
+            else:
+                return True, '録画を停止しました。'
+        except Exception as ex:
+            logging.error(f'[Live: {self.live_stream_id}] Failed to close recording file: {ex}')
+            # エラーが発生しても状態はリセットする
+            await _reset_recording_state(recording_file_path)
+            return False, f'録画ファイルのクローズに失敗しました: {ex}'
+
+    async def writeRawRecordingChunk(self, stream_data: bytes) -> None:
+        """
+        放送波の生 TS チャンクを書き込む（録画モードが raw のときのみ呼び出される想定）
+
+        Args:
+            stream_data (bytes): TS チャンクデータ
+        """
+
+        if not self._is_recording or self._recording_mode != 'raw':
+            return
+        if self._recording_file_handle is None or stream_data == b'':
+            return
+        try:
+            await self._recording_file_handle.write(stream_data)
+            await self._recording_file_handle.flush()
+        except Exception as ex:
+            logging.error(f'[Live: {self.live_stream_id}] Recording file write error (raw): {ex}')
+            await self.stopRecording()
+
+    async def pushPSIArchiveChunk(self, stream_data: bytes) -> None:
+        """
+        PSI/SI 書庫 (.psc) 出力中であれば、放送波の生 TS チャンクを psisiarc にも送る
+
+        Args:
+            stream_data (bytes): TS チャンクデータ
+        """
+
+        if self._psi_archive_process is None or stream_data == b'':
+            return
+        try:
+            assert type(self._psi_archive_process.stdin) is asyncio.StreamWriter
+            if self._psi_archive_process.stdin.is_closing() is False:
+                self._psi_archive_process.stdin.write(stream_data)
+                await self._psi_archive_process.stdin.drain()
+        except Exception:
+            # アーカイバープロセス側の一時的なエラーは無視（録画自体は継続）
+            pass
+
+    async def __startPSIArchiveToFile(self, service_id: int, psc_path: str) -> None:
+        """
+        psisiarc を起動し、PSI/SI 書庫 (.psc) をファイルに保存する
+
+        Args:
+            service_id (int): サービス ID
+            psc_path (str): 出力する .psc ファイルパス
+        """
+
+        # 既に起動済みなら何もしない
+        if self._psi_archive_process is not None:
+            return
+
+        psisiarc_options = [
+            '-r', 'arib-data',
+            '-n', str(service_id),
+            '-i', '1',
+            '-',              # stdin から放送波を受け取る
+            psc_path,         # 出力先ファイル
+        ]
+        self._psi_archive_process = await asyncio.subprocess.create_subprocess_exec(
+            LIBRARY_PATH['psisiarc'], *psisiarc_options,
+            stdin = asyncio.subprocess.PIPE,
+            stdout = asyncio.subprocess.DEVNULL,
+            stderr = asyncio.subprocess.DEVNULL,
+        )
+        self._psi_archive_path = psc_path
+        logging.debug_simple(f'[Live: {self.live_stream_id}] psisiarc (to file) started. (PID: {self._psi_archive_process.pid})')
+
+    async def __stopPSIArchiveToFile(self) -> None:
+        """
+        psisiarc による PSI/SI 書庫の保存を停止し、プロセスをクリーンアップする
+        """
+
+        if self._psi_archive_process is None:
+            return
+        try:
+            if self._psi_archive_process.returncode is None:
+                self._psi_archive_process.kill()
+                try:
+                    await asyncio.wait_for(self._psi_archive_process.wait(), timeout=3.0)
+                except Exception:
+                    pass
+        finally:
+            self._psi_archive_process = None
+

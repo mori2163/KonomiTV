@@ -15,6 +15,7 @@ import LiveCommentManager from '@/services/player/managers/LiveCommentManager';
 import LiveDataBroadcastingManager from '@/services/player/managers/LiveDataBroadcastingManager';
 import LiveEventManager from '@/services/player/managers/LiveEventManager';
 import MediaSessionManager from '@/services/player/managers/MediaSessionManager';
+import RecordingManager from '@/services/player/managers/RecordingManager';
 import PlayerManager from '@/services/player/PlayerManager';
 import Videos from '@/services/Videos';
 import useChannelsStore from '@/stores/ChannelsStore';
@@ -892,7 +893,7 @@ class PlayerController {
 
         // 各 PlayerManager を初期化・登録
         // ライブ視聴とビデオ視聴で必要な PlayerManager が異なる
-        // この初期化順序は意図的 (入れ替えても動作するものもあるが、CaptureManager は KeyboardShortcutManager より先に初期化する必要がある)
+        // この初期化順序は意図的 (入れ替えても動作するものもあるが、CaptureManager と RecordingManager は KeyboardShortcutManager より先に初期化する必要がある)
         if (this.playback_mode === 'Live') {
             // ライブ視聴時に設定する PlayerManager
             this.player_managers = [
@@ -900,6 +901,7 @@ class PlayerController {
                 new LiveCommentManager(this.player),
                 new LiveDataBroadcastingManager(this.player),
                 new CaptureManager(this.player, this.playback_mode),
+                new RecordingManager(this.player, this.playback_mode),
                 new DocumentPiPManager(this.player, this.playback_mode),
                 new KeyboardShortcutManager(this.player, this.playback_mode),
                 new MediaSessionManager(this.player, this.playback_mode),
