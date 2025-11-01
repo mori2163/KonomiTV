@@ -17,7 +17,8 @@
         <v-progress-circular indeterminate size="60" width="6" class="watch-player__buffering"
             :class="{'watch-player__buffering--display': playerStore.is_video_buffering}">
         </v-progress-circular>
-        <div class="watch-player__dplayer"></div>
+        <div class="watch-player__dplayer"
+            @touchend="playback_mode === 'Video' ? handleDoubleTap($event) : null"></div>
         <div class="watch-player__dplayer-setting-cover"
             :class="{'watch-player__dplayer-setting-cover--display': playerStore.is_player_setting_panel_open}"
             @click="handleSettingCoverClick"></div>
@@ -43,7 +44,10 @@
 </template>
 <script setup lang="ts">
 
+import { ref } from 'vue';
 import { PropType } from 'vue';
+
+import type DPlayer from 'dplayer';
 
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
@@ -63,12 +67,74 @@ const channelsStore = useChannelsStore();
 const playerStore = usePlayerStore();
 const settingsStore = useSettingsStore();
 
+const dplayerInstance = ref<DPlayer | null>(null);
+
+// ダブルタップ検出用の状態管理
+const lastTapTime = ref<number>(0);
+const doubleTapTimeout = ref<number | null>(null);
+
 // watch-player__dplayer-setting-cover がクリックされたとき、設定パネルを閉じる
 const handleSettingCoverClick = () => {
     const dplayer_mask = document.querySelector<HTMLDivElement>('.dplayer-mask');
     if (dplayer_mask) {
         // dplayer-mask をクリックすることで、player.setting.hide() が内部的に呼び出され、設定パネルが閉じられる
         dplayer_mask.click();
+    }
+};
+
+// ダブルタップ時のスキップ秒数
+const SKIP_SECONDS = 10;
+
+// ダブルタップと判定する時間間隔（ミリ秒）
+const TAP_DELAY = 300;
+
+// ダブルタップ処理（ビデオ視聴時のみ）
+// タッチイベントから左右を判定し、10秒スキップを実行
+const handleDoubleTap = (event: TouchEvent) => {
+    const currentTime = Date.now();
+
+    // タッチ位置から左右を判定
+    const touch = event.changedTouches[0];
+    const target = event.currentTarget as HTMLElement;
+    const rect = target.getBoundingClientRect();
+    const x = touch.clientX - rect.left;
+    const width = rect.width;
+
+    // 画面の左半分か右半分かで判定
+    const direction: 'forward' | 'backward' = x > width / 2 ? 'forward' : 'backward';
+
+    if (currentTime - lastTapTime.value < TAP_DELAY) {
+        // ダブルタップ検出時
+        // DPlayer インスタンスを取得
+        const player = (window as any).player;
+        if (player) {
+            const skipSeconds = direction === 'forward' ? SKIP_SECONDS : -SKIP_SECONDS;
+            const newTime = player.video.currentTime + skipSeconds;
+
+            player.seek(newTime);
+
+            // 通知を表示
+            const message = direction === 'forward' ? `${SKIP_SECONDS}秒送りました` : `${SKIP_SECONDS}秒戻しました`;
+            player.notice(message, 1000);
+        }
+
+        // リセット
+        lastTapTime.value = 0;
+        if (doubleTapTimeout.value !== null) {
+            clearTimeout(doubleTapTimeout.value);
+            doubleTapTimeout.value = null;
+        }
+    } else {
+        // 最初のタップを記録
+        lastTapTime.value = currentTime;
+
+        // 一定時間後にリセット
+        if (doubleTapTimeout.value !== null) {
+            clearTimeout(doubleTapTimeout.value);
+        }
+        doubleTapTimeout.value = window.setTimeout(() => {
+            lastTapTime.value = 0;
+        }, TAP_DELAY);
     }
 };
 
