@@ -29,20 +29,42 @@
                     class="recorded-program__thumbnail-status recorded-program__thumbnail-status--partial">
                     ⚠️ 一部のみ録画
                 </div>
+                <div v-else-if="isOfflineDownloading && offlineDownloadProgress"
+                    class="recorded-program__thumbnail-status recorded-program__thumbnail-status--offline-downloading">
+                    <Icon icon="fluent:arrow-download-16-regular" width="15px" height="15px"
+                        class="recorded-program__thumbnail-status-icon--spin" />
+                    保存中 ({{ offlineDownloadProgressPercent }}%)
+                </div>
                 <div v-else-if="isEncoding && encodingProgress"
                     class="recorded-program__thumbnail-status recorded-program__thumbnail-status--encoding">
                     <Icon icon="fluent:arrow-sync-12-regular" width="15px" height="15px"
                         class="recorded-program__thumbnail-status-icon--spin" />
                     エンコード中 ({{ Math.round(encodingProgress.progress) }}%)
                 </div>
+                <div v-else-if="isOfflineSaved"
+                    class="recorded-program__thumbnail-status recorded-program__thumbnail-status--offline-saved">
+                    <Icon icon="fluent:arrow-download-12-regular" width="15px" height="15px" />
+                    オフライン保存済み
+                </div>
                 <div v-else-if="program?.recorded_video.is_tsreplace_encoded"
                     class="recorded-program__thumbnail-status recorded-program__thumbnail-status--encoded">
                     <Icon icon="fluent:checkmark-circle-12-regular" width="15px" height="15px" />
                     再エンコード済み
                 </div>
-                <div v-if="watchHistory && !isEncoding" class="recorded-program__thumbnail-progress">
+                <div v-else-if="program?.recorded_video.is_tsuide"
+                    class="recorded-program__thumbnail-status recorded-program__thumbnail-status--tsuide">
+                    <Icon icon="fluent:bookmark-12-regular" width="15px" height="15px" />
+                    ついで録画
+                </div>
+                <div v-if="watchHistory && !isEncoding && !isOfflineDownloading" class="recorded-program__thumbnail-progress">
                     <div class="recorded-program__thumbnail-progress-bar"
                         :style="`width: ${(watchHistory.last_playback_position / program.recorded_video.duration) * 100}%`">
+                    </div>
+                </div>
+                <div v-else-if="isOfflineDownloading && offlineDownloadProgress"
+                    class="recorded-program__thumbnail-progress recorded-program__thumbnail-progress--offline-downloading">
+                    <div class="recorded-program__thumbnail-progress-bar recorded-program__thumbnail-progress-bar--offline-downloading"
+                        :style="`width: ${offlineDownloadProgressPercent}%`">
                     </div>
                 </div>
                 <div v-else-if="isEncoding && encodingProgress"
@@ -85,6 +107,13 @@
                 </div>
                 <div class="recorded-program__content-description"
                     v-html="ProgramUtils.decorateProgramInfo(program, 'description')"></div>
+                <!-- オフライン保存中の詳細情報 -->
+                <div v-if="isOfflineDownloading && offlineDownloadProgress" class="recorded-program__offline-download-info">
+                    <div class="recorded-program__offline-download-info-text">
+                        <span>{{ offlineDownloadProgressText }}</span>
+                        <span>{{ offlineDownloadByteProgressText }}</span>
+                    </div>
+                </div>
             </div>
             <div v-if="!forWatchedHistory" v-ripple class="recorded-program__mylist"
                 :class="{'recorded-program__mylist--highlight': isInMylist && !forMylist}"
@@ -165,6 +194,14 @@
                                 }})</v-list-item-title>
                             </v-list-item>
                         </template>
+                        <v-list-item @click="show_offline_save_dialog = true"
+                            :disabled="program.recorded_video.status === 'Recording' || isEncoding || !program.recorded_video.has_key_frames"
+                            v-ftooltip="'選択した画質でHLSセグメントを保存し、オフラインで再生できるようにします'">
+                            <template v-slot:prepend>
+                                <Icon icon="fluent:arrow-download-24-regular" width="20px" height="20px" />
+                            </template>
+                            <v-list-item-title class="ml-3">オフライン保存</v-list-item-title>
+                        </v-list-item>
                         <v-list-item @click="reanalyzeVideo" v-ftooltip="'再生時に必要な録画ファイル情報や番組情報などを解析し直します'">
                             <template v-slot:prepend>
                                 <Icon icon="fluent:book-arrow-clockwise-20-regular" width="20px" height="20px" />
@@ -207,6 +244,7 @@
         </div>
     </router-link>
     <RecordedFileInfoDialog :program="program" v-model:show="show_video_info" />
+    <OfflineSaveDialog v-model:show="show_offline_save_dialog" :program="program" />
 
     <!-- 録画ファイル削除確認ダイアログ -->
     <v-dialog max-width="750" v-model="show_delete_confirmation">
@@ -241,10 +279,12 @@
 
 import { ref, computed } from 'vue';
 
+import OfflineSaveDialog from '@/components/Videos/Dialogs/OfflineSaveDialog.vue';
 import RecordedFileInfoDialog from '@/components/Videos/Dialogs/RecordedFileInfoDialog.vue';
 import TSReplaceEncodingDialog from '@/components/Videos/Dialogs/TSReplaceEncodingDialog.vue';
 import Message from '@/message';
 import Videos, { IRecordedProgram } from '@/services/Videos';
+import useOfflineStore from '@/stores/OfflineStore';
 import useSettingsStore from '@/stores/SettingsStore';
 import useTSReplaceEncodingStore from '@/stores/TSReplaceEncodingStore';
 import useUserStore from '@/stores/UserStore';
@@ -272,9 +312,84 @@ const show_video_info = ref(false);
 const show_delete_confirmation = ref(false);
 // エンコードダイアログの表示状態
 const show_encoding_dialog = ref(false);
+// オフライン保存ダイアログの表示状態
+const show_offline_save_dialog = ref(false);
 
 // エンコードストア
 const encodingStore = useTSReplaceEncodingStore();
+
+// オフラインストア
+const offlineStore = useOfflineStore();
+
+// この録画番組がオフライン保存済みかどうか
+const isOfflineSaved = computed(() => {
+    return offlineStore.downloads.some(download =>
+        download.video_id === props.program.id &&
+        download.status === 'completed'
+    );
+});
+
+// この録画番組がオフライン保存中かどうか
+const isOfflineDownloading = computed(() => {
+    return offlineStore.downloads.some(download =>
+        download.video_id === props.program.id &&
+        download.status === 'downloading'
+    );
+});
+
+// オフライン保存の進捗情報
+const offlineDownloadProgress = computed(() => {
+    const download = offlineStore.downloads.find(download =>
+        download.video_id === props.program.id &&
+        download.status === 'downloading'
+    );
+    if (download === undefined) {
+        return null;
+    }
+    return offlineStore.progress[download.id] ?? null;
+});
+
+// オフライン保存の進捗パーセント
+const offlineDownloadProgressPercent = computed(() => {
+    const download = offlineStore.downloads.find(download =>
+        download.video_id === props.program.id &&
+        download.status === 'downloading'
+    );
+    if (download === undefined || offlineDownloadProgress.value === null) {
+        return 0;
+    }
+    const progress = offlineDownloadProgress.value;
+    if (progress.total_segments === 0) {
+        return 0;
+    }
+    return Math.min(100, Math.round((progress.downloaded_segments / progress.total_segments) * 100));
+});
+
+// オフライン保存の進捗テキスト (セグメント)
+const offlineDownloadProgressText = computed(() => {
+    const progress = offlineDownloadProgress.value;
+    if (progress === null) {
+        return '';
+    }
+    return `${progress.downloaded_segments} / ${progress.total_segments} セグメント (${offlineDownloadProgressPercent.value}%)`;
+});
+
+// オフライン保存の進捗テキスト (バイト)
+const offlineDownloadByteProgressText = computed(() => {
+    const progress = offlineDownloadProgress.value;
+    const download = offlineStore.downloads.find(download =>
+        download.video_id === props.program.id &&
+        download.status === 'downloading'
+    );
+    if (progress === null || download === undefined) {
+        return '';
+    }
+    const downloadedBytes = progress.downloaded_bytes ?? download.downloaded_bytes;
+    // ダウンロード中は推定値を使用
+    const totalBytes = progress.total_bytes_estimated ?? download.total_size;
+    const totalText = totalBytes > 0 ? Utils.formatBytes(totalBytes) : '--';
+    return `${Utils.formatBytes(downloadedBytes)} / ${totalText}`;
+});
 
 // この録画番組がエンコード中かどうか
 const isEncoding = computed(() => {
@@ -539,6 +654,24 @@ const deleteVideo = async () => {
                 color: rgba(255, 255, 255, 0.95);
             }
 
+            &--tsuide {
+                gap: 3px;
+                background: rgba(var(--v-theme-info), 0.9);
+                color: rgba(255, 255, 255, 0.95);
+            }
+
+            &--offline-downloading {
+                gap: 3px;
+                background: rgba(var(--v-theme-primary), 0.9);
+                color: rgba(255, 255, 255, 0.95);
+            }
+
+            &--offline-saved {
+                gap: 3px;
+                background: rgba(var(--v-theme-info), 0.9);
+                color: rgba(255, 255, 255, 0.95);
+            }
+
             &-dot {
                 width: 7px;
                 height: 7px;
@@ -560,6 +693,10 @@ const deleteVideo = async () => {
             height: 3px;
             background: rgba(0, 0, 0, 0.6);
 
+            &--offline-downloading {
+                background: rgba(var(--v-theme-primary), 0.3);
+            }
+
             &--encoding {
                 background: rgba(var(--v-theme-primary), 0.3);
             }
@@ -568,6 +705,10 @@ const deleteVideo = async () => {
                 height: 100%;
                 background: rgb(var(--v-theme-secondary-lighten-1));
                 transition: width 0.2s ease;
+
+                &--offline-downloading {
+                    background: rgb(var(--v-theme-primary));
+                }
 
                 &--encoding {
                     background: rgb(var(--v-theme-primary));
@@ -781,6 +922,27 @@ const deleteVideo = async () => {
                 margin-right: 12px;
                 font-size: 10px;
                 line-height: 1.45;
+            }
+        }
+    }
+
+    &__offline-download-info {
+        margin-top: 6px;
+        padding: 6px 10px;
+        background: rgba(var(--v-theme-primary), 0.12);
+        border-radius: 4px;
+        border-left: 3px solid rgb(var(--v-theme-primary));
+
+        &-text {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 11px;
+            color: rgb(var(--v-theme-text));
+            @include smartphone-vertical {
+                flex-direction: column;
+                gap: 4px;
+                font-size: 10px;
             }
         }
     }

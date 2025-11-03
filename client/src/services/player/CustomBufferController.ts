@@ -59,6 +59,13 @@ class CustomBufferController extends BufferController {
         const media: HTMLMediaElement = this.media;
         // seeking イベントのリスナーを登録
         media.addEventListener('seeking', this.onCustomBufferFlushingHandler);
+
+        // オフライン再生時は SSE 接続を行わない
+        if (this.isOfflineSource(hls)) {
+            console.log('[CustomBufferController] Skipping SSE connection for offline playback.');
+            return;
+        }
+
         // SSE の接続を開始
         this.sse = new EventSource(hls.url!.replace('playlist', 'buffer'));
         this.sse.addEventListener('buffer_range_update', (event) => {
@@ -98,6 +105,11 @@ class CustomBufferController extends BufferController {
         // @ts-ignore
         const media: HTMLMediaElement = this.media;
         if (!media) return;
+
+        // オフライン再生時はバッファフラッシュを行わない（全セグメントがローカルに存在するため）
+        if (this.isOfflineSource(hls)) {
+            return;
+        }
 
         // シーク位置がバッファの範囲内かチェック
         let isInBufferedRange = false;
@@ -141,6 +153,23 @@ class CustomBufferController extends BufferController {
             hls.trigger(Hls.Events.MANIFEST_LOADING, {
                 url: url.toString()
             });
+        }
+    }
+
+    /**
+     * 再生ソースがオフライン用プレイリストかどうかを判定する
+     */
+    private isOfflineSource(hls: Hls): boolean {
+        const url = hls.url;
+        if (!url) {
+            return false;
+        }
+        try {
+            const resolved = new URL(url, window.location.origin);
+            return resolved.pathname.startsWith('/offline/streams/');
+        } catch (error) {
+            // 既に相対パスになっている場合は startsWith で判定
+            return url.startsWith('/offline/streams/');
         }
     }
 }

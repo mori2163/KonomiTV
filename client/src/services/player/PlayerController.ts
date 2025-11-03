@@ -6,6 +6,7 @@ import Hls from 'hls.js';
 import mpegts from 'mpegts.js';
 import { watch } from 'vue';
 
+import OfflineStorage from '@/offline/storage';
 import APIClient from '@/services/APIClient';
 import CustomBufferController from '@/services/player/CustomBufferController';
 import CaptureManager from '@/services/player/managers/CaptureManager';
@@ -16,6 +17,7 @@ import LiveDataBroadcastingManager from '@/services/player/managers/LiveDataBroa
 import LiveEventManager from '@/services/player/managers/LiveEventManager';
 import MediaSessionManager from '@/services/player/managers/MediaSessionManager';
 import RecordingManager from '@/services/player/managers/RecordingManager';
+import HlsOfflineLoader from '@/services/player/offline/HlsOfflineLoader';
 import PlayerManager from '@/services/player/PlayerManager';
 import Videos from '@/services/Videos';
 import useChannelsStore from '@/stores/ChannelsStore';
@@ -205,6 +207,10 @@ class PlayerController {
         const settings_store = useSettingsStore();
         console.log('\u001b[31m[PlayerController] Initializing...');
 
+        // オフライン動画再生かどうかを事前に確定する
+        const is_offline_video = player_store.offline_download !== null;
+        console.log('\u001b[31m[PlayerController] is_offline_video:', is_offline_video, 'offline_download:', player_store.offline_download);
+
         // 破棄済みかどうかのフラグを下ろす
         this.destroyed = false;
 
@@ -238,15 +244,27 @@ class PlayerController {
         let seek_seconds = options.seek_seconds;
         if (seek_seconds === null) {
             if (this.playback_mode === 'Video') {
-                const history = settings_store.settings.watched_history.find(
-                    history => history.video_id === player_store.recorded_program.id
-                );
-                if (history) {
-                    seek_seconds = history.last_playback_position;
-                    console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Watched History)`);
+                // recorded_program.id が有効な場合は視聴履歴をチェック（オンライン・オフライン共通）
+                if (player_store.recorded_program.id !== -1) {
+                    const history = settings_store.settings.watched_history.find(
+                        history => history.video_id === player_store.recorded_program.id
+                    );
+                    if (history) {
+                        seek_seconds = history.last_playback_position;
+                        console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Watched History)`);
+                    } else if (player_store.offline_download !== null) {
+                        // オフライン視聴で視聴履歴がない場合は先頭から再生
+                        seek_seconds = 0;
+                        console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Offline Video - No History)`);
+                    } else {
+                        // オンライン視聴で視聴履歴がない場合は録画開始マージン + 2秒から再生
+                        seek_seconds = player_store.recorded_program.recording_start_margin + 2;
+                        console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Recording Start Margin + 2)`);
+                    }
                 } else {
-                    seek_seconds = player_store.recorded_program.recording_start_margin + 2;
-                    console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Recording Start Margin + 2)`);
+                    // recorded_program.id が -1 の場合は安全のために 0 から開始
+                    seek_seconds = 0;
+                    console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Default)`);
                 }
             } else {
                 // ライブ再生時は使わない値だが、型エラー回避のために 0 を設定
@@ -377,30 +395,40 @@ class PlayerController {
                 } else {
                     // ビデオストリーミング API のベース URL
                     const streaming_api_base_url = `${Utils.api_base_url}/streams/video/${player_store.recorded_program.id}`;
-                    // 画質リストを作成
-                    for (const quality_name of VIDEO_STREAMING_QUALITIES) {
+                    if (is_offline_video) {
+                        // オフライン再生: 保存済みの1画質のみ
+                        const offline = usePlayerStore().offline_download!;
+                        const label = offline.quality === '1080p-60fps' ? '1080p (60fps)' : offline.quality;
+                        qualities.push({ name: label, type: 'hls', url: `/offline/streams/${offline.id}/playlist.m3u8` });
+                        // オフライン視聴時はタイルサムネイルは利用できないため thumbnails を undefined にする
+                        return {
+                            quality: qualities,
+                            defaultQuality: label,
+                            thumbnails: undefined,
+                        };
+                    } else {
+                        // オンライン再生: すべての画質
+                        for (const quality_name of VIDEO_STREAMING_QUALITIES) {
                         // 画質ごとに異なるセッション ID を生成 (セッション ID は UUID の - で区切って一番左側のみを使う)
-                        const session_id = crypto.randomUUID().split('-')[0];
-                        // 画質設定を追加
-                        qualities.push({
+                            const session_id = crypto.randomUUID().split('-')[0];
+                            // 画質設定を追加
+                            qualities.push({
                             // 1080p-60fps のみ、見栄えの観点から表示上 "1080p (60fps)" と表示する
-                            name: quality_name === '1080p-60fps' ? '1080p (60fps)' : quality_name,
-                            type: 'hls',
-                            url: `${streaming_api_base_url}/${quality_name}${hevc_prefix}/playlist?session_id=${session_id}`,
-                        });
-                    }
-                    // デフォルトの画質
-                    // ビデオ視聴時はラジオは考慮しない
-                    let default_quality: string = this.quality_profile.video_streaming_quality;
-                    if (options.default_quality !== null) {
+                                name: quality_name === '1080p-60fps' ? '1080p (60fps)' : quality_name,
+                                type: 'hls',
+                                url: `${streaming_api_base_url}/${quality_name}${hevc_prefix}/playlist?session_id=${session_id}`,
+                            });
+                        }
+                        // デフォルトの画質
+                        // ビデオ視聴時はラジオは考慮しない
+                        let default_quality: string = this.quality_profile.video_streaming_quality;
+                        if (options.default_quality !== null) {
                         // PlayerController.init() のオプションでデフォルト画質が指定されている場合は
                         // 画質プロファイルに記載の画質ではなく、指定された（前回再生時の）画質を使ってレジュームする
-                        default_quality = options.default_quality;
-                    }
-                    return {
-                        quality: qualities,
-                        defaultQuality: default_quality,
-                        thumbnails: {
+                            default_quality = options.default_quality;
+                        }
+                        // recorded_program.id が -1 (デフォルト値) の場合はタイルサムネイルを無効化
+                        const thumbnails = (player_store.recorded_program.id === -1) ? undefined : {
                             url: `${Utils.api_base_url}/videos/${player_store.recorded_program.id}/thumbnail/tiled`,
                             interval: (() => {
                                 // 以下のロジックは server/app/metadata/ThumbnailGenerator.py のものと同一
@@ -428,8 +456,13 @@ class PlayerController {
                             width: 480,  // サムネイルの幅
                             height: 270,  // サムネイルの高さ
                             columnCount: 34,  // サムネイルの列数
-                        }
-                    };
+                        };
+                        return {
+                            quality: qualities,
+                            defaultQuality: default_quality,
+                            thumbnails: thumbnails,
+                        };
+                    }
                 }
             })(),
 
@@ -454,35 +487,78 @@ class PlayerController {
                         // ライブ視聴では LiveCommentManager 側でリアルタイムにコメントを受信して直接描画するため、ここでは一旦コメント0件として認識させる
                         options.success([]);
                     } else {
-                        // ビデオ視聴: 過去ログコメントを取得して返す
-                        const jikkyo_comments = await Videos.fetchVideoJikkyoComments(player_store.recorded_program.id);
-                        if (jikkyo_comments.is_success === false) {
-                            // 取得に失敗した場合はコメントリストにエラーメッセージを表示する
-                            // ただし「この録画番組の過去ログコメントは存在しないか、現在取得中です。」の場合はエラー扱いしない
-                            player_store.video_comment_init_failed_message = jikkyo_comments.detail;
-                            if (jikkyo_comments.detail !== 'この録画番組の過去ログコメントは存在しないか、現在取得中です。') {
-                                options.error(jikkyo_comments.detail);
+                        // ビデオ視聴
+                        const offline = usePlayerStore().offline_download;
+                        if (offline !== null) {
+                            // オフライン視聴: 保存済みコメントを読み出して返す
+                            console.log('[PlayerController] Loading offline comments for download:', offline.id);
+                            const stored = await OfflineStorage.readComments(offline.id);
+                            console.log('[PlayerController] Offline comments loaded:', stored?.length ?? 0, 'comments');
+                            const recording_start_time = offline.recorded_program.start_time;
+                            if (stored && stored.length > 0) {
+                                // コメントリストに取得したオフラインコメントを送る
+                                let count = 0;
+                                player_store.event_emitter.emit('CommentReceived', {
+                                    is_initial_comments: true,
+                                    comments: stored.map((comment: any) => ({
+                                        id: count++,
+                                        text: comment.text,
+                                        time: comment.time ?? Utils.apply28HourClock(dayjs(recording_start_time).add(comment.playback_position, 'seconds').format('MM/DD HH:mm:ss')),
+                                        playback_position: comment.playback_position,
+                                        user_id: comment.user_id ?? 'unknown',
+                                        my_post: false,
+                                    })),
+                                });
+                                // DPlayer の API 仕様に合わせた最低限の形に変換して返す
+                                const dplayerComments = stored.map((comment: any) => ({
+                                    time: comment.playback_position,
+                                    type: 'right',
+                                    size: 'medium',
+                                    color: '#ffffff',
+                                    author: comment.user_id ?? 'unknown',
+                                    text: comment.text,
+                                }));
+                                options.success(dplayerComments as any);
                             } else {
                                 options.success([]);
                             }
                         } else {
-                            // 過去ログコメントを取得できているということは、recording_start_time は null ではないはず
-                            const recording_start_time = player_store.recorded_program.recorded_video.recording_start_time!;
-                            // コメントリストに取得した過去ログコメントを送る
-                            // コメ番は重複している可能性がないとも言い切れないので、別途連番を振る
-                            let count = 0;
-                            player_store.event_emitter.emit('CommentReceived', {
-                                is_initial_comments: true,
-                                comments: jikkyo_comments.comments.map((comment) => ({
-                                    id: count++,
-                                    text: comment.text,
-                                    time: Utils.apply28HourClock(dayjs(recording_start_time).add(comment.time, 'seconds').format('MM/DD HH:mm:ss')),
-                                    playback_position: comment.time,
-                                    user_id: comment.author,
-                                    my_post: false,
-                                })),
-                            });
-                            options.success(jikkyo_comments.comments);
+                            // オンライン視聴: 過去ログコメントを取得して返す
+                            // recorded_program.id が -1 (デフォルト値) の場合はコメント取得をスキップ
+                            if (player_store.recorded_program.id === -1) {
+                                console.log('[PlayerController] Skipping comment fetch for default recorded_program (id=-1)');
+                                options.success([]);
+                                return;
+                            }
+                            const jikkyo_comments = await Videos.fetchVideoJikkyoComments(player_store.recorded_program.id);
+                            if (jikkyo_comments.is_success === false) {
+                                // 取得に失敗した場合はコメントリストにエラーメッセージを表示する
+                                // ただし「この録画番組の過去ログコメントは存在しないか、現在取得中です。」の場合はエラー扱いしない
+                                player_store.video_comment_init_failed_message = jikkyo_comments.detail;
+                                if (jikkyo_comments.detail !== 'この録画番組の過去ログコメントは存在しないか、現在取得中です。') {
+                                    options.error(jikkyo_comments.detail);
+                                } else {
+                                    options.success([]);
+                                }
+                            } else {
+                                // 過去ログコメントを取得できているということは、recording_start_time は null ではないはず
+                                const recording_start_time = player_store.recorded_program.recorded_video.recording_start_time!;
+                                // コメントリストに取得した過去ログコメントを送る
+                                // コメ番は重複している可能性がないとも言い切れないので、別途連番を振る
+                                let count = 0;
+                                player_store.event_emitter.emit('CommentReceived', {
+                                    is_initial_comments: true,
+                                    comments: jikkyo_comments.comments.map((comment) => ({
+                                        id: count++,
+                                        text: comment.text,
+                                        time: Utils.apply28HourClock(dayjs(recording_start_time).add(comment.time, 'seconds').format('MM/DD HH:mm:ss')),
+                                        playback_position: comment.time,
+                                        user_id: comment.author,
+                                        my_post: false,
+                                    })),
+                                });
+                                options.success(jikkyo_comments.comments);
+                            }
                         }
                         // コメント表示をシーク状態に同期する
                         // ここでシークしておかないと、DPlayer の初期化直後にシークした際にシーク位置より前のコメントが一斉に描画されてしまう
@@ -556,12 +632,14 @@ class PlayerController {
                 hls: {
                     ...Hls.DefaultConfig,
                     // Web Worker を有効にする
-                    enableWorker: true,
+                    enableWorker: is_offline_video ? false : true,
                     // MediaSource が存在しない場合のみ ManagedMediaSource を利用する
                     preferManagedMediaSource: false,
                     // startPosition に視聴履歴などから求めた再生位置を渡し、ロード開始時点で正しい Media Sequence を選択させる
                     // これを指定しないと manifest 解析後に sequence=0 からフラグメント取得が始まってしまう
                     startPosition: seek_seconds,
+                    // オフライン再生時はカスタムローダーで /offline/streams を解決する
+                    loader: is_offline_video ? HlsOfflineLoader as any : (Hls as any).DefaultConfig.loader,
                     // カスタムバッファコントローラーを設定
                     // @ts-ignore
                     bufferController: CustomBufferController,
@@ -1026,8 +1104,16 @@ class PlayerController {
         // HLS プレイリストやセグメントのリクエストが行われたタイミングでも Keep-Alive が行われるが、
         // それだけではタイミング次第では十分ではないため、定期的に Keep-Alive を行う
         // Keep-Alive が行われなくなったタイミングで、サーバー側で自動的にビデオストリームの終了処理 (エンコードタスクの停止) が行われる
-        if (this.playback_mode === 'Video') {
+        if (this.playback_mode === 'Video' && usePlayerStore().offline_download === null) {
             this.video_keep_alive_interval_timer_cancel = Utils.setIntervalInWorker(async () => {
+                // オフライン視聴に切り替わった場合は Keep-Alive を停止
+                if (usePlayerStore().offline_download !== null) {
+                    if (this.video_keep_alive_interval_timer_cancel !== null) {
+                        this.video_keep_alive_interval_timer_cancel();
+                        this.video_keep_alive_interval_timer_cancel = null;
+                    }
+                    return;
+                }
                 // 画質切り替えでベース URL が変わることも想定し、あえて毎回 API URL を取得している
                 if (this.player === null) return;
                 const api_quality = PlayerUtils.extractVideoAPIQualityFromDPlayer(this.player);
@@ -1953,15 +2039,19 @@ class PlayerController {
         // 視聴履歴の最終位置を更新
         // 現在の再生位置を取得するため、プレイヤーの破棄前に実行する必要がある
         if (this.playback_mode === 'Video' && this.player && this.player.video) {
-            const history_index = settings_store.settings.watched_history.findIndex(
-                history => history.video_id === player_store.recorded_program.id
-            );
-            if (history_index !== -1) {
-                // 次再生するときにスムーズに再開できるよう、現在の再生位置の10秒前の位置を記録する
-                const current_time = this.player.video.currentTime - 10;
-                settings_store.settings.watched_history[history_index].last_playback_position = current_time;
-                settings_store.settings.watched_history[history_index].updated_at = Utils.time();
-                console.log(`\u001b[31m[PlayerController] Last playback position updated. (Video ID: ${player_store.recorded_program.id}, last_playback_position: ${current_time})`);
+            const video_id = player_store.recorded_program.id;
+            // video_id が -1 (デフォルト値) の場合は視聴履歴を更新しない
+            if (video_id !== -1) {
+                const history_index = settings_store.settings.watched_history.findIndex(
+                    history => history.video_id === video_id
+                );
+                if (history_index !== -1) {
+                    // 次再生するときにスムーズに再開できるよう、現在の再生位置の10秒前の位置を記録する
+                    const current_time = this.player.video.currentTime - 10;
+                    settings_store.settings.watched_history[history_index].last_playback_position = current_time;
+                    settings_store.settings.watched_history[history_index].updated_at = Utils.time();
+                    console.log(`\u001b[31m[PlayerController] Last playback position updated. (Video ID: ${video_id}, last_playback_position: ${current_time})`);
+                }
             }
         }
 

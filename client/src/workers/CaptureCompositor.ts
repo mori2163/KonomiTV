@@ -5,7 +5,9 @@ import { Buffer } from 'buffer';
 import * as Comlink from 'comlink';
 import * as piexif from 'piexifjs';
 
-import Utils, { dayjs } from '@/utils';
+// 注意: Worker では utils/index の集約エクスポートを参照しないこと
+import { dayjs } from '../utils/Dayjs';
+import Utils from '../utils/Utils';
 
 
 /** キャプチャに合成する際に必要なコメント情報のインターフェイス */
@@ -123,6 +125,13 @@ class CaptureCompositor implements ICaptureCompositor {
             return;
         }
 
+        // Worker 側で FontFace API / FontFaceSet が利用できない環境ではフォントのロードをスキップ
+        if (typeof FontFace === 'undefined' || typeof (self as any).fonts === 'undefined') {
+            console.warn('[CaptureCompositor] FontFace API is not available in worker context. Skipping preload.');
+            this.is_loaded_fonts = true;
+            return;
+        }
+
         // コメント描画に関しては Bold しか利用しない
         const font_faces: FontFace[] = [
             new FontFace('Open Sans', 'url(/assets/fonts/OpenSans-Bold.woff2)', {weight: 'bold'}),
@@ -133,11 +142,17 @@ class CaptureCompositor implements ICaptureCompositor {
 
         // フォントを一括ロード
         // Web Worker では document.fonts ではなく self.fonts を使う必要がある (落とし穴)
-        await Promise.all(font_faces.map((font_face) => font_face.load()));
-        for (const font_face of font_faces) {
-            self.fonts.add(font_face);
+        try {
+            await Promise.all(font_faces.map((font_face) => font_face.load()));
+            for (const font_face of font_faces) {
+                (self as any).fonts.add(font_face);
+            }
+        } catch (error) {
+            console.warn('[CaptureCompositor] Failed to load fonts in worker.', error);
+        } finally {
+            // 失敗時にも無限リトライを避けるためロード済み扱いにする
+            this.is_loaded_fonts = true;
         }
-        this.is_loaded_fonts = true;
     }
 
 
@@ -451,5 +466,10 @@ class CaptureCompositor implements ICaptureCompositor {
     }
 }
 
-// Comlink にクラスをエクスポート
-Comlink.expose(CaptureCompositor);
+// Comlink に Worker API をエクスポート
+Comlink.expose({
+    // フォントの事前ロード API
+    loadFonts: CaptureCompositor.loadFonts.bind(CaptureCompositor),
+    // インスタンス生成 API
+    create: (options: ICaptureCompositorOptions) => new CaptureCompositor(options),
+});

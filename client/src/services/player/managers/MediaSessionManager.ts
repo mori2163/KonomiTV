@@ -62,6 +62,10 @@ class MediaSessionManager implements PlayerManager {
         const artwork = (this.playback_mode === 'Live') ? [
             {src: '/assets/images/icons/icon-maskable-192px.png', sizes: '192x192', type: 'image/png'},
             {src: '/assets/images/icons/icon-maskable-512px.png', sizes: '512x512', type: 'image/png'},
+        ] : (player_store.offline_download !== null || player_store.recorded_program.id === -1) ? [
+            // オフライン視聴時または recorded_program.id が -1 (デフォルト値) の場合は KonomiTV のアイコンを使用
+            {src: '/assets/images/icons/icon-maskable-192px.png', sizes: '192x192', type: 'image/png'},
+            {src: '/assets/images/icons/icon-maskable-512px.png', sizes: '512x512', type: 'image/png'},
         ] : [
             {src: `${Utils.api_base_url}/videos/${player_store.recorded_program.id}/thumbnail`, sizes: '480x270', type: 'image/webp'},
         ];

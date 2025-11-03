@@ -10,6 +10,11 @@
             <Icon icon="fluent:movies-and-tv-20-regular" width="30px" />
             <span class="mt-1">ビデオをみる</span>
         </v-btn>
+        <v-btn class="bottom-navigation-button" to="/offline/"
+            :class="{'v-btn--active': $route.path.startsWith('/offline')}">
+            <Icon icon="fluent:arrow-download-24-regular" width="30px" />
+            <span class="mt-1">オフライン</span>
+        </v-btn>
         <v-btn class="bottom-navigation-button" to="/reservations/"
             :class="{'v-btn--active': $route.path.startsWith('/reservations')}">
             <Icon icon="fluent:timer-16-regular" width="30px" />

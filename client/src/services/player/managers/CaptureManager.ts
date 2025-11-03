@@ -91,7 +91,11 @@ class CaptureManager implements PlayerManager {
         this.comment_capture_button.addEventListener('click', () => this.captureAndSave(true));
 
         // 事前に CaptureCompositor 側でフォントをロードしておく
-        await CaptureCompositorProxy.loadFonts();
+        try {
+            await CaptureCompositorProxy.loadFonts();
+        } catch (error) {
+            console.warn('[CaptureManager] Failed to load fonts for capture in worker.', error);
+        }
 
         console.log('[CaptureManager] Initialized.');
     }
@@ -398,7 +402,7 @@ class CaptureManager implements PlayerManager {
         // 第二引数に (第一引数内のオブジェクトに含まれる) 移譲する Transferable オブジェクトを渡す
         console.log('\u001b[36m[CaptureManager] Composite start:');
         const capture_compositor_start_time = Utils.time();
-        const capture_compositor = await new CaptureCompositorProxy(Comlink.transfer({
+        const capture_compositor = await CaptureCompositorProxy.create(Comlink.transfer({
             mode: settings_store.settings.capture_caption_mode,
             capture: capture_image_bitmap,
             caption: caption_image_bitmap,

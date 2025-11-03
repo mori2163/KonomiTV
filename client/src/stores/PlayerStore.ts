@@ -2,8 +2,10 @@
 import mitt from 'mitt';
 import { defineStore } from 'pinia';
 
-import { ITweetCapture } from '@/components/Watch/Panel/Twitter.vue';
-import { ICommentData } from '@/services/player/managers/LiveCommentManager';
+import type { ITweetCapture } from '@/components/Watch/Panel/Twitter.vue';
+import type { OfflineDownloadMetadata } from '@/offline/types';
+import type { ICommentData } from '@/services/player/managers/LiveCommentManager';
+
 import { IRecordedProgram, IRecordedProgramDefault } from '@/services/Videos';
 import useSettingsStore from '@/stores/SettingsStore';
 
@@ -74,6 +76,10 @@ const usePlayerStore = defineStore('player', {
         // 現在視聴中の録画番組の情報
         // 視聴中の録画番組がない場合は IRecordedProgramDefault を設定すべき (初期値も IRecordedProgramDefault にしている)
         recorded_program: IRecordedProgramDefault as IRecordedProgram,
+
+        // オフライン視聴: 現在のオフラインダウンロードメタデータ
+        // オフライン視聴中でなければ null
+        offline_download: null as OfflineDownloadMetadata | null,
 
         // 仮想キーボードが表示されているか
         // 既定で表示されていない想定
@@ -204,9 +210,14 @@ const usePlayerStore = defineStore('player', {
          * startWatching() / stopWatching() で呼び出される
          */
         reset(): void {
+            // オフライン視聴用の offline_download はリセット対象外
+            // Offline/Watch.vue の beforeCreate() で設定されるため、reset() で消さないようにする
+            const preserved_offline_download = this.offline_download;
+            const preserved_recorded_program = (this.offline_download !== null) ? this.recorded_program : IRecordedProgramDefault;
+
             this.is_watching = false;
             this.is_player_initialized = false;
-            this.recorded_program = IRecordedProgramDefault;
+            this.recorded_program = preserved_recorded_program;
             this.is_virtual_keyboard_display = false;
             this.is_fullscreen = false;
             this.is_document_pip = false;
@@ -239,6 +250,7 @@ const usePlayerStore = defineStore('player', {
             this.twitter_captures = [];
             this.twitter_zoom_capture_modal = false;
             this.twitter_zoom_capture = null;
+            this.offline_download = preserved_offline_download;
         }
     }
 });
