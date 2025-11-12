@@ -21,9 +21,26 @@
                         </div>
                     </div>
                     <div class="timetable-header__date-control">
-                        <v-btn @click="timetableStore.setPreviousDate" class="mr-2">前日</v-btn>
-                        <h2 class="mx-4 date-display">{{ formattedDate }}</h2>
-                        <v-btn @click="timetableStore.setNextDate" class="ml-2">翌日</v-btn>
+                        <v-btn @click="timetableStore.setPreviousDate" class="mr-2" icon="mdi-chevron-left" variant="text" size="large">
+                            <v-icon>mdi-chevron-left</v-icon>
+                            <v-tooltip activator="parent" location="bottom">前日</v-tooltip>
+                        </v-btn>
+                        <v-menu v-model="is_date_menu_open" :close-on-content-click="false">
+                            <template v-slot:activator="{ props }">
+                                <h2 v-bind="props" class="mx-4 date-display date-display--clickable">{{ formattedDate }}</h2>
+                            </template>
+                            <v-date-picker
+                                v-model="picker_date"
+                                @update:model-value="onDatePickerChange"
+                                :max="maxSelectableDate"
+                                header="日付を選択"
+                                show-adjacent-months
+                            ></v-date-picker>
+                        </v-menu>
+                        <v-btn @click="timetableStore.setNextDate" class="ml-2" icon="mdi-chevron-right" variant="text" size="large">
+                            <v-icon>mdi-chevron-right</v-icon>
+                            <v-tooltip activator="parent" location="bottom">翌日</v-tooltip>
+                        </v-btn>
                         <v-btn @click="timetableStore.setCurrentDate" class="ml-4">今日</v-btn>
                     </div>
                 </div>
@@ -154,6 +171,30 @@ const onClickChannelType = (type: 'ALL' | ChannelType, index: number) => {
     timetableStore.setChannelType(type);
     active_tab_index.value = index;
 };
+
+// 日付ピッカー関連
+const is_date_menu_open = ref(false);
+const picker_date = ref(new Date());
+
+// ピッカーで選択可能な最大日付（今日から7日後まで）
+const maxSelectableDate = computed(() => {
+    const max = new Date();
+    max.setDate(max.getDate() + 7);
+    return max;
+});
+
+// 日付ピッカーの値が変更されたとき
+const onDatePickerChange = (date: Date | null) => {
+    if (date) {
+        timetableStore.setDate(date);
+        is_date_menu_open.value = false;
+    }
+};
+
+// current_dateの変化をピッカーに反映
+watch(() => timetableStore.current_date, (new_date) => {
+    picker_date.value = new Date(new_date);
+});
 
 // ジャンルごとに色分け
 const genre_colors: { [key: string]: { background: string; text: string } } = {
@@ -416,6 +457,17 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
             }
             @include smartphone-vertical {
                 font-size: 18px;
+            }
+            
+            &--clickable {
+                cursor: pointer;
+                padding: 8px 16px;
+                border-radius: 4px;
+                transition: background-color 0.2s;
+                
+                &:hover {
+                    background-color: rgba(var(--v-theme-primary), 0.1);
+                }
             }
         }
     }

@@ -19,6 +19,8 @@ export const useTimetableStore = defineStore('timetable', {
         reserved_program_ids: [] as string[],
         // 番組IDから録画予約IDへのマップ (削除時に必要) - オブジェクトとして保持
         program_id_to_reservation_id: {} as Record<string, number>,
+        // 最後にリクエストした日付を保持（競合状態の回避用）
+        _last_requested_date: null as Date | null,
     }),
     getters: {
         /**
@@ -75,15 +77,31 @@ export const useTimetableStore = defineStore('timetable', {
             const end_time = new Date(start_time);
             end_time.setDate(end_time.getDate() + 1);
 
+            // リクエストした日付を記録
+            const requested_date = new Date(this.current_date);
+            this._last_requested_date = requested_date;
+
             try {
                 // 番組表と録画予約情報を並行取得
                 const [timetable_channels] = await Promise.all([
                     Timetable.fetchTimetable(start_time, end_time),
                     this.fetchReservations(),
                 ]);
+
+                // レスポンスが返ってきた時点で、リクエストした日付と現在の日付が一致するか確認
+                // 一致しない場合は、別の日付が選択されているため、このレスポンスは破棄する
+                if (this._last_requested_date.getTime() !== requested_date.getTime()) {
+                    console.log('[TimetableStore] 日付が変更されたため、古いレスポンスを破棄します。');
+                    return;
+                }
+
                 this._timetable_channels = timetable_channels;
             } catch (error) {
                 console.error(error);
+                // エラーの場合も日付チェックを行う
+                if (this._last_requested_date.getTime() !== requested_date.getTime()) {
+                    return;
+                }
                 this._timetable_channels = null;
             } finally {
                 this.is_loading = false;
@@ -115,6 +133,15 @@ export const useTimetableStore = defineStore('timetable', {
          */
         setCurrentDate() {
             this.current_date = new Date();
+            this.fetchTimetable();
+        },
+
+        /**
+         * 表示する日付を指定した日付にする
+         * @param date 設定する日付
+         */
+        setDate(date: Date) {
+            this.current_date = new Date(date);
             this.fetchTimetable();
         },
 
