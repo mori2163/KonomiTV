@@ -21,6 +21,9 @@ export const useTimetableStore = defineStore('timetable', {
         program_id_to_reservation_id: {} as Record<string, number>,
         // 最後にリクエストした日付を保持（競合状態の回避用）
         _last_requested_date: null as Date | null,
+        // EPG 操作機能の利用可否
+        can_update_epg: false,
+        can_reload_epg: false,
     }),
     getters: {
         /**
@@ -37,6 +40,17 @@ export const useTimetableStore = defineStore('timetable', {
         }
     },
     actions: {
+        /**
+         * EPG 機能の利用可否を取得する
+         */
+        async fetchEPGCapabilities() {
+            const capabilities = await Timetable.getEPGCapabilities();
+            if (capabilities) {
+                this.can_update_epg = capabilities.can_update_epg;
+                this.can_reload_epg = capabilities.can_reload_epg;
+            }
+        },
+
         /**
          * 録画予約情報を取得して、予約されている番組IDのセットを更新する
          */

@@ -2,9 +2,10 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app import schemas
+from app.config import Config
 from app.models.Channel import Channel
 from app.models.Program import Program
 
@@ -55,6 +56,29 @@ async def Timetable(
     return timetable
 
 
+@router.get(
+    '/epg-capabilities',
+    summary='EPG 機能の利用可否を取得',
+    response_model=dict[str, bool],
+)
+async def GetEPGCapabilitiesAPI():
+    """
+    EPG 取得・再読み込み機能が利用可能かどうかを返す。
+    EDCB バックエンドの場合のみ利用可能。
+    """
+
+    # 設定を読み込む
+    config = Config()
+
+    # EDCB バックエンドの場合のみ EPG 操作が可能
+    is_edcb_backend = config.general.backend == 'EDCB'
+
+    return {
+        'can_update_epg': is_edcb_backend,
+        'can_reload_epg': is_edcb_backend,
+    }
+
+
 @router.post(
     '/update-epg',
     summary='EPG（番組情報）取得 API',
@@ -63,7 +87,18 @@ async def Timetable(
 async def UpdateEPGAPI():
     """
     EPG（電子番組ガイド）の番組情報を最新状態に取得する。
+    EDCB バックエンドでのみ動作します。
     """
+
+    # 設定を読み込む
+    config = Config()
+
+    # EDCB バックエンドでない場合はエラーを返す
+    if config.general.backend != 'EDCB':
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='EPG 取得機能は EDCB バックエンドでのみ利用できます。'
+        )
 
     # EDCB の CtrlCmdUtil を取得
     from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
@@ -73,7 +108,10 @@ async def UpdateEPGAPI():
     result = await edcb.sendEpgCapNow()
 
     if result is None:
-        raise ValueError('EPGの取得に失敗しました。EDCBが起動していることを確認してください。')
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='EPGの取得に失敗しました。EDCBが起動していることを確認してください。'
+        )
     await Channel.update()
     await Program.update(multiprocess=True)
 
@@ -86,7 +124,18 @@ async def UpdateEPGAPI():
 async def ReloadEPGAPI():
     """
     EPG（電子番組ガイド）の番組情報を再読み込みする。
+    EDCB バックエンドでのみ動作します。
     """
+
+    # 設定を読み込む
+    config = Config()
+
+    # EDCB バックエンドでない場合はエラーを返す
+    if config.general.backend != 'EDCB':
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='EPG 再読み込み機能は EDCB バックエンドでのみ利用できます。'
+        )
 
     # EDCB の CtrlCmdUtil を取得
     from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
@@ -96,7 +145,10 @@ async def ReloadEPGAPI():
     result = await edcb.sendReloadEpg()
 
     if not result:
-        raise ValueError('EPGの再読み込みに失敗しました。EDCBが起動していることを確認してください。')
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='EPGの再読み込みに失敗しました。EDCBが起動していることを確認してください。'
+        )
 
     # チャンネル情報とともに番組情報も更新する
     await Channel.update()

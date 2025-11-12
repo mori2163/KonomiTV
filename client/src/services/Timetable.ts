@@ -37,6 +37,22 @@ class Timetable {
     }
 
     /**
+     * EPG 機能の利用可否を取得する
+     * @returns EPG 機能の利用可否
+     */
+    static async getEPGCapabilities(): Promise<{can_update_epg: boolean, can_reload_epg: boolean} | null> {
+        const response = await APIClient.get<{can_update_epg: boolean, can_reload_epg: boolean}>('/timetable/epg-capabilities');
+
+        // エラー処理
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, 'EPG 機能の情報を取得できませんでした。');
+            return null;
+        }
+
+        return response.data;
+    }
+
+    /**
      * EPG（番組情報）を取得する
      * @returns 更新が成功したかどうか
      */

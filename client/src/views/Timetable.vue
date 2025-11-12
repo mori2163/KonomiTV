@@ -103,8 +103,9 @@
         </main>
 
         <!-- EPG操作ボタン（浮動表示） -->
-        <div class="epg-controls-floating">
+        <div v-if="timetableStore.can_update_epg || timetableStore.can_reload_epg" class="epg-controls-floating">
             <v-btn
+                v-if="timetableStore.can_update_epg"
                 @click="updateEPG"
                 :loading="timetableStore.is_loading"
                 :disabled="timetableStore.is_loading"
@@ -117,6 +118,7 @@
                 <span>EPG取得</span>
             </v-btn>
             <v-btn
+                v-if="timetableStore.can_reload_epg"
                 @click="reloadEPG"
                 :loading="timetableStore.is_loading"
                 :disabled="timetableStore.is_loading"
@@ -392,6 +394,7 @@ const reloadEPG = async () => {
 
 onMounted(() => {
     timetableStore.fetchTimetable();
+    timetableStore.fetchEPGCapabilities();
 });
 
 const is_initial_load = ref(true);
