@@ -20,6 +20,31 @@
                             <div class="channels-tab__highlight"></div>
                         </div>
                     </div>
+                    <div class="timetable-header__search-bar">
+                        <v-text-field
+                            v-model="search_query"
+                            @keyup.enter="searchPrograms"
+                            placeholder="番組を検索..."
+                            prepend-inner-icon="mdi-magnify"
+                            clearable
+                            hide-details
+                            density="compact"
+                            variant="outlined"
+                            class="search-input"
+                        >
+                            <template v-slot:append-inner>
+                                <v-btn
+                                    @click="searchPrograms"
+                                    :loading="is_searching"
+                                    icon
+                                    variant="text"
+                                    size="small"
+                                >
+                                    <v-icon>mdi-arrow-right</v-icon>
+                                </v-btn>
+                            </template>
+                        </v-text-field>
+                    </div>
                     <div class="timetable-header__date-control">
                         <v-btn @click="timetableStore.setPreviousDate" class="mr-2" icon="mdi-chevron-left" variant="text" size="large">
                             <v-icon>mdi-chevron-left</v-icon>
@@ -141,6 +166,52 @@
             @reserve="reserveProgram"
             @remove="deleteReservation"
         />
+
+        <!-- 番組検索結果ダイアログ -->
+        <v-dialog v-model="is_search_dialog_open" max-width="800px" scrollable>
+            <v-card>
+                <v-card-title class="d-flex align-center">
+                    <v-icon class="mr-2">mdi-magnify</v-icon>
+                    検索結果: "{{ search_query }}"
+                    <v-spacer></v-spacer>
+                    <v-btn icon @click="is_search_dialog_open = false">
+                        <v-icon>mdi-close</v-icon>
+                    </v-btn>
+                </v-card-title>
+                <v-divider></v-divider>
+                <v-card-text style="max-height: 600px;">
+                    <div v-if="is_searching" class="text-center py-8">
+                        <v-progress-circular indeterminate size="64"></v-progress-circular>
+                        <p class="mt-4">検索中...</p>
+                    </div>
+                    <div v-else-if="search_results.length === 0" class="text-center py-8">
+                        <v-icon size="64" color="grey">mdi-information-outline</v-icon>
+                        <p class="mt-4">検索結果が見つかりませんでした。</p>
+                    </div>
+                    <v-list v-else>
+                        <v-list-item
+                            v-for="program in search_results"
+                            :key="program.id"
+                            @click="showSearchResult(program)"
+                            class="search-result-item"
+                        >
+                            <template v-slot:prepend>
+                                <v-avatar color="primary" size="40">
+                                    <span class="text-caption">{{ formatTime(program.start_time).substring(0, 5) }}</span>
+                                </v-avatar>
+                            </template>
+                            <v-list-item-title>{{ program.title }}</v-list-item-title>
+                            <v-list-item-subtitle>
+                                {{ program.channel.name }} - {{ formatTime(program.start_time) }} ~ {{ formatTime(program.end_time) }}
+                            </v-list-item-subtitle>
+                            <v-list-item-subtitle v-if="program.description" class="mt-1">
+                                {{ truncateText(program.description, 80) }}
+                            </v-list-item-subtitle>
+                        </v-list-item>
+                    </v-list>
+                </v-card-text>
+            </v-card>
+        </v-dialog>
     </div>
 </template>
 
@@ -154,6 +225,7 @@ import ProgramDetailDrawer from '@/components/Timetable/ProgramDetailDrawer.vue'
 import { ChannelType } from '@/services/Channels';
 import { IProgram } from '@/services/Programs';
 import Reservations, { IRecordSettings } from '@/services/Reservations';
+import Timetable, { IProgramSearchResult } from '@/services/Timetable';
 import { useSnackbarsStore } from '@/stores/SnackbarsStore';
 import { useTimetableStore } from '@/stores/TimetableStore';
 
@@ -197,6 +269,52 @@ const onDatePickerChange = (date: Date | null) => {
 watch(() => timetableStore.current_date, (new_date) => {
     picker_date.value = new Date(new_date);
 });
+
+// 番組検索機能
+const search_query = ref('');
+const is_searching = ref(false);
+const is_search_dialog_open = ref(false);
+const search_results = ref<IProgramSearchResult[]>([]);
+
+const searchPrograms = async () => {
+    if (!search_query.value || search_query.value.trim() === '') {
+        snackbarsStore.show('error', '検索キーワードを入力してください。');
+        return;
+    }
+
+    is_searching.value = true;
+    is_search_dialog_open.value = true;
+    
+    try {
+        // 現在選択中のチャンネルタイプと日付範囲で検索
+        const start_time = new Date(timetableStore.current_date);
+        start_time.setHours(4, 0, 0, 0);
+        const end_time = new Date(start_time);
+        end_time.setDate(end_time.getDate() + 7); // 7日分検索
+
+        const channel_type = timetableStore.selected_channel_type === 'ALL' ? undefined : 
+            (timetableStore.selected_channel_type as 'GR' | 'BS' | 'CS');
+        const results = await Timetable.searchPrograms(search_query.value, channel_type, start_time, end_time, 50);
+        
+        if (results) {
+            search_results.value = results;
+        } else {
+            search_results.value = [];
+        }
+    } catch (error) {
+        console.error('番組検索エラー:', error);
+        snackbarsStore.show('error', '番組の検索に失敗しました。');
+        search_results.value = [];
+    } finally {
+        is_searching.value = false;
+    }
+};
+
+const showSearchResult = (program: IProgramSearchResult) => {
+    is_search_dialog_open.value = false;
+    selected_program.value = program;
+    is_panel_shown.value = true;
+};
 
 // ジャンルごとに色分け
 const genre_colors: { [key: string]: { background: string; text: string } } = {
@@ -447,6 +565,27 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     padding-top: 5px;
     background: rgb(var(--v-theme-background));
     z-index: 10;
+
+    &__search-bar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 16px;
+        border-bottom: 1px solid rgb(var(--v-theme-background-lighten-2));
+
+        .search-input {
+            max-width: 600px;
+            width: 100%;
+        }
+
+        @include smartphone-vertical {
+            padding: 8px 12px;
+            
+            .search-input {
+                max-width: 100%;
+            }
+        }
+    }
 
     &__date-control {
         display: flex;
@@ -742,6 +881,15 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
             width: 140px;
             font-size: 0.95em;
         }
+    }
+}
+
+.search-result-item {
+    cursor: pointer;
+    transition: background-color 0.2s;
+
+    &:hover {
+        background-color: rgba(var(--v-theme-primary), 0.1);
     }
 }
 

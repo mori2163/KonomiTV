@@ -611,6 +611,66 @@ class TimetableChannel(BaseModel):
     class Config:
         from_attributes = True
 
+
+class ProgramSearchResult(BaseModel):
+    """ 番組検索結果を表す Pydantic モデル """
+    id: str
+    channel_id: str
+    channel: Channel
+    network_id: int
+    service_id: int
+    event_id: int
+    title: str
+    description: str
+    detail: dict[str, str]
+    start_time: datetime
+    end_time: datetime
+    duration: float
+    is_free: bool
+    genres: list[Genre]
+    video_type: str | None
+    video_codec: str | None
+    video_resolution: str | None
+    primary_audio_type: str
+    primary_audio_language: str
+    primary_audio_sampling_rate: str
+    secondary_audio_type: str | None
+    secondary_audio_language: str | None
+    secondary_audio_sampling_rate: str | None
+
+    @classmethod
+    def from_program(cls, program: ProgramModel) -> 'ProgramSearchResult':
+        """ Program モデルから ProgramSearchResult を生成する """
+        return cls(
+            id=program.id,
+            channel_id=program.channel_id,
+            channel=Channel.from_orm(program.channel),
+            network_id=program.network_id,
+            service_id=program.service_id,
+            event_id=program.event_id,
+            title=program.title,
+            description=program.description,
+            detail=program.detail,
+            start_time=program.start_time,
+            end_time=program.end_time,
+            duration=program.duration,
+            is_free=program.is_free,
+            genres=program.genres,
+            video_type=program.video_type,
+            video_codec=program.video_codec,
+            video_resolution=program.video_resolution,
+            primary_audio_type=program.primary_audio_type,
+            primary_audio_language=program.primary_audio_language,
+            primary_audio_sampling_rate=program.primary_audio_sampling_rate,
+            secondary_audio_type=program.secondary_audio_type,
+            secondary_audio_language=program.secondary_audio_language,
+            secondary_audio_sampling_rate=program.secondary_audio_sampling_rate,
+        )
+
+    class Config:
+        from_attributes = True
+
+
 # ***** TSReplace エンコード *****
 
 class TSReplaceManualEncodingRequest(BaseModel):

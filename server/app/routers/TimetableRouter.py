@@ -1,8 +1,10 @@
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
+from tortoise.expressions import Q
 
 from app import schemas
 from app.config import Config
@@ -54,6 +56,60 @@ async def Timetable(
         ))
 
     return timetable
+
+
+@router.get(
+    '/search',
+    summary='番組検索 API',
+    response_description='検索条件に一致する番組の情報のリスト。',
+    response_model=list[schemas.ProgramSearchResult],
+)
+async def ProgramSearchAPI(
+    query: Annotated[str, Query(description='検索キーワード。title または description のいずれかに部分一致する番組を検索する。')] = '',
+    channel_type: Annotated[Literal['ALL', 'GR', 'BS', 'CS'] | None, Query(description='チャンネルタイプでフィルタリング (ALL/GR/BS/CS)。')] = None,
+    start_time: Annotated[datetime | None, Query(description='検索範囲の開始時刻。指定しない場合は現在時刻から検索。')] = None,
+    end_time: Annotated[datetime | None, Query(description='検索範囲の終了時刻。指定しない場合は開始時刻から7日後まで検索。')] = None,
+    limit: Annotated[int, Query(description='取得する番組数の上限。', ge=1, le=100)] = 50,
+):
+    """
+    指定されたキーワードで番組を検索する。<br>
+    キーワードは title または description のいずれかに部分一致する番組を検索する。<br>
+    半角または全角スペースで区切ることで、複数のキーワードによる AND 検索が可能。<br>
+    検索結果は放送開始時刻の昇順で返される。
+    """
+
+    # 検索範囲の時刻設定
+    if start_time is None:
+        start_time_jst = datetime.now(ZoneInfo('Asia/Tokyo'))
+    else:
+        start_time_jst = start_time.astimezone(ZoneInfo('Asia/Tokyo'))
+    
+    if end_time is None:
+        end_time_jst = start_time_jst.replace(day=start_time_jst.day + 7)
+    else:
+        end_time_jst = end_time.astimezone(ZoneInfo('Asia/Tokyo'))
+
+    # キーワードを分割（半角・全角スペースで分割）
+    import re
+    keywords = re.split(r'[\s　]+', query.strip())
+    keywords = [k for k in keywords if k]  # 空文字列を除外
+
+    # クエリ条件の構築
+    query_conditions = Q(start_time__gte=start_time_jst, end_time__lte=end_time_jst)
+    
+    # キーワード検索条件（AND 検索）
+    for keyword in keywords:
+        keyword_condition = Q(title__icontains=keyword) | Q(description__icontains=keyword)
+        query_conditions &= keyword_condition
+
+    # チャンネルタイプでフィルタリング
+    if channel_type and channel_type != 'ALL':
+        query_conditions &= Q(channel__type=channel_type)
+
+    # 番組を検索
+    programs = await Program.filter(query_conditions).prefetch_related('channel').order_by('start_time').limit(limit)
+
+    return [schemas.ProgramSearchResult.from_program(program) for program in programs]
 
 
 @router.get(

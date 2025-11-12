@@ -11,6 +11,13 @@ export interface ITimetableChannel {
     programs: IProgram[];
 }
 
+/**
+ * 番組検索結果を表すインターフェース
+ */
+export interface IProgramSearchResult extends IProgram {
+    channel: IChannel;
+}
+
 class Timetable {
 
     /**
@@ -82,6 +89,38 @@ class Timetable {
         }
 
         return true;
+    }
+
+    /**
+     * 番組を検索する
+     * @param query 検索キーワード
+     * @param channel_type チャンネルタイプ
+     * @param start_time 検索範囲の開始時刻
+     * @param end_time 検索範囲の終了時刻
+     * @param limit 取得する番組数の上限
+     * @returns 検索結果の番組リスト
+     */
+    static async searchPrograms(
+        query: string,
+        channel_type?: 'ALL' | 'GR' | 'BS' | 'CS',
+        start_time?: Date,
+        end_time?: Date,
+        limit: number = 50
+    ): Promise<IProgramSearchResult[] | null> {
+        const params: Record<string, any> = { query, limit };
+        if (channel_type) params.channel_type = channel_type;
+        if (start_time) params.start_time = start_time.toISOString();
+        if (end_time) params.end_time = end_time.toISOString();
+
+        const response = await APIClient.get<IProgramSearchResult[]>('/timetable/search', { params });
+
+        // エラー処理
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, '番組の検索に失敗しました。');
+            return null;
+        }
+
+        return response.data;
     }
 }
 
