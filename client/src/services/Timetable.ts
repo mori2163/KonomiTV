@@ -1,7 +1,7 @@
 
 import APIClient from './APIClient';
 import { IChannel } from './Channels';
-import { IProgram } from './Programs';
+import { IProgram, IPrograms } from './Programs';
 
 /**
  * 番組表のチャンネル情報を表すインターフェース
@@ -12,6 +12,50 @@ export interface ITimetableChannel {
 }
 
 class Timetable {
+
+    /**
+     * 番組検索 API のパラメータ
+     */
+    static async searchPrograms(options: {
+        keyword: string;
+        titleOnly?: boolean;
+        isFreeOnly?: boolean;
+        channelIds?: string[];
+        startTime?: Date;
+        endTime?: Date;
+        limit?: number;
+        offset?: number;
+    }): Promise<IPrograms | null> {
+        const params = new URLSearchParams();
+        params.set('keyword', options.keyword);
+        params.set('title_only', String(options.titleOnly ?? false));
+        params.set('is_free_only', String(options.isFreeOnly ?? false));
+        params.set('limit', String(options.limit ?? 200));
+        params.set('offset', String(options.offset ?? 0));
+
+        if (options.startTime) {
+            params.set('start_time', options.startTime.toISOString());
+        }
+        if (options.endTime) {
+            params.set('end_time', options.endTime.toISOString());
+        }
+        if (options.channelIds && options.channelIds.length > 0) {
+            for (const channelId of options.channelIds) {
+                params.append('channel_ids', channelId);
+            }
+        }
+
+        const response = await APIClient.get<IPrograms>('/timetable/search', {
+            params,
+        });
+
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, '番組の検索に失敗しました。');
+            return null;
+        }
+
+        return response.data;
+    }
 
     /**
      * 番組表データを取得する

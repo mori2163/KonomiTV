@@ -2,9 +2,11 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
+from tortoise.expressions import Q
 
 from app import schemas
+from app.config import Config
 from app.models.Channel import Channel
 from app.models.Program import Program
 
@@ -39,17 +41,27 @@ async def Timetable(
         programs__end_time__gt=start_time_jst,
     ).distinct().order_by('channel_number')
 
-    # 各チャンネルに紐づく番組情報を取得
-    timetable: list[schemas.TimetableChannel] = []
-    for channel in channels:
+    channel_id_list = [channel.id for channel in channels]
+
+    # 対象チャンネルの番組情報を一括で取得し、チャンネルごとにグルーピングする
+    programs: list[Program] = []
+    if channel_id_list:
         programs = await Program.filter(
-            channel_id=channel.id,
+            channel_id__in=channel_id_list,
             start_time__lt=end_time_jst,
             end_time__gt=start_time_jst,
-        ).order_by('start_time')
+        ).order_by('channel_id', 'start_time')
+
+    programs_by_channel: dict[str, list[Program]] = {}
+    for program in programs:
+        programs_by_channel.setdefault(program.channel_id, []).append(program)
+
+    timetable: list[schemas.TimetableChannel] = []
+    for channel in channels:
+        channel_programs = programs_by_channel.get(channel.id, [])
         timetable.append(schemas.TimetableChannel(
             channel=schemas.Channel.from_orm(channel),
-            programs=[schemas.Program.from_orm(program) for program in programs],
+            programs=[schemas.Program.from_orm(program) for program in channel_programs],
         ))
 
     return timetable
@@ -124,4 +136,62 @@ async def ReloadEPGAPI():
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Unsupported backend configuration')
 
+@router.get(
+    '/search',
+    summary='番組表検索 API',
+    response_model=schemas.Programs,
+)
+async def TimetableSearchAPI(
+    keyword: str = Query(..., min_length=1, description='検索キーワード'),
+    title_only: bool = Query(False, description='番組名のみを検索対象にする'),
+    is_free_only: bool = Query(False, description='無料番組のみを対象にする'),
+    channel_ids: list[str] = Query(default_factory=list, description='検索対象のチャンネルID'),
+    start_time: datetime | None = Query(None, description='検索対象の開始時刻'),
+    end_time: datetime | None = Query(None, description='検索対象の終了時刻'),
+    limit: int = Query(200, ge=1, le=500, description='取得する件数'),
+    offset: int = Query(0, ge=0, description='スキップする件数'),
+):
+    """
+    指定条件に一致する番組を検索する。
+    """
+
+    keyword = keyword.strip()
+    if keyword == '':
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Keyword must not be empty')
+
+    if start_time and end_time and start_time > end_time:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='start_time must be earlier than end_time')
+
+    start_time_jst = start_time.astimezone(ZoneInfo('Asia/Tokyo')) if start_time else None
+    end_time_jst = end_time.astimezone(ZoneInfo('Asia/Tokyo')) if end_time else None
+
+    base_query = Program.filter()
+
+    if start_time_jst:
+        # 番組終了時刻が開始時刻より後のものを対象にする
+        base_query = base_query.filter(end_time__gt=start_time_jst)
+    if end_time_jst:
+        # 番組開始時刻が終了時刻より前のものを対象にする
+        base_query = base_query.filter(start_time__lt=end_time_jst)
+
+    if channel_ids:
+        base_query = base_query.filter(channel_id__in=channel_ids)
+
+    if is_free_only:
+        base_query = base_query.filter(is_free=True)
+
+    if title_only:
+        filtered_query = base_query.filter(title__icontains=keyword)
+    else:
+        filtered_query = base_query.filter(
+            Q(title__icontains=keyword) | Q(description__icontains=keyword),
+        )
+
+    filtered_query = filtered_query.order_by('start_time')
+
+    total = await filtered_query.count()
+    program_models = await filtered_query.offset(offset).limit(limit).all()
+
+    programs = [schemas.Program.from_orm(program) for program in program_models]
+    return schemas.Programs(total=total, programs=programs)
 

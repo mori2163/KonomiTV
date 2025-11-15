@@ -54,7 +54,7 @@ const search_placeholder = computed(() => {
 const getSearchPath = () => {
     return route.path.startsWith('/videos') || route.path.startsWith('/mylist') || route.path.startsWith('/watched-history')
         ? '/videos/search'
-        : '/tv/search';
+        : '/timetable/search';
 };
 
 const handleKeyDown = (event: KeyboardEvent) => {

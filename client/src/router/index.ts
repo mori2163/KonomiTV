@@ -35,6 +35,11 @@ const router = createRouter({
             component: () => import('@/views/Timetable.vue'),
         },
         {
+            path: '/timetable/search',
+            name: 'Timetable Search',
+            component: () => import('@/views/Timetable/Search.vue'),
+        },
+        {
             path: '/videos/',
             name: 'Videos Home',
             component: () => import('@/views/Videos/Home.vue'),
