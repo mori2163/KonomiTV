@@ -7,24 +7,73 @@
                 <SPHeaderBar />
                 <!-- ヘッダー: チャンネルタブ & 日付操作 -->
                 <div class="timetable-header">
-                    <div class="channels-tab">
-                        <div class="channels-tab__buttons" :style="{
-                            '--tab-length': channel_types.length,
-                            '--active-tab-index': active_tab_index,
-                        }">
-                            <v-btn variant="flat" class="channels-tab__button"
-                                v-for="(type, index) in channel_types" :key="type.id"
-                                @click="onClickChannelType(type.id, index)">
-                                {{type.name}}
-                            </v-btn>
-                            <div class="channels-tab__highlight"></div>
+                        <div class="channels-tab">
+                            <div class="channels-tab__buttons" :style="{
+                                '--tab-length': channel_types.length,
+                                '--active-tab-index': active_tab_index,
+                            }">
+                                <v-btn variant="flat" class="channels-tab__button"
+                                    v-for="type in channel_types" :key="type.id"
+                                    @click="onClickChannelType(type.id)">
+                                    {{type.name}}
+                                </v-btn>
+                                <div class="channels-tab__highlight"></div>
                         </div>
                     </div>
                     <div class="timetable-header__date-control">
-                        <v-btn @click="timetableStore.setPreviousDate" class="mr-2">前日</v-btn>
-                        <h2 class="mx-4 date-display">{{ formattedDate }}</h2>
-                        <v-btn @click="timetableStore.setNextDate" class="ml-2">翌日</v-btn>
-                        <v-btn @click="timetableStore.setCurrentDate" class="ml-4">今日</v-btn>
+                        <v-btn
+                            class="date-nav-btn"
+                            variant="text"
+                            icon
+                            @click="timetableStore.setPreviousDate"
+                            aria-label="前の日付へ"
+                        >
+                            <v-icon icon="mdi-chevron-left" />
+                        </v-btn>
+
+                        <v-menu
+                            v-model="is_date_picker_open"
+                            :close-on-content-click="false"
+                            :offset="[0, 12]"
+                            transition="scale-transition"
+                            @update:model-value="onDatePickerOpen"
+                        >
+                            <template #activator="{ props }">
+                                <v-btn
+                                    v-bind="props"
+                                    class="date-display-btn"
+                                    variant="text"
+                                >
+                                    <h2 class="date-display__text">{{ formattedDate }}</h2>
+                                </v-btn>
+                            </template>
+                            <v-card class="date-picker-card" elevation="6">
+                                <v-date-picker
+                                    v-model="date_picker_value"
+                                    show-adjacent-months
+                                />
+                                <div class="date-picker-actions">
+                                    <v-btn variant="text" @click="jumpToTodayFromPicker">今日に移動</v-btn>
+                                    <v-spacer />
+                                    <v-btn variant="text" @click="is_date_picker_open = false">キャンセル</v-btn>
+                                    <v-btn color="primary" variant="flat" @click="applySelectedDate">決定</v-btn>
+                                </div>
+                            </v-card>
+                        </v-menu>
+
+                        <v-btn
+                            class="date-nav-btn"
+                            variant="text"
+                            icon
+                            @click="timetableStore.setNextDate"
+                            aria-label="次の日付へ"
+                        >
+                            <v-icon icon="mdi-chevron-right" />
+                        </v-btn>
+
+                        <v-btn class="today-btn" variant="tonal" @click="timetableStore.setCurrentDate">
+                            今日
+                        </v-btn>
                     </div>
                 </div>
 
@@ -150,9 +199,13 @@ const channel_types: {id: 'ALL' | ChannelType, name: string}[] = [
 
 const active_tab_index = ref(0);
 
-const onClickChannelType = (type: 'ALL' | ChannelType, index: number) => {
+const syncActiveTabIndex = () => {
+    const currentIndex = channel_types.findIndex(channel_type => channel_type.id === timetableStore.selected_channel_type);
+    active_tab_index.value = currentIndex === -1 ? 0 : currentIndex;
+};
+
+const onClickChannelType = (type: 'ALL' | ChannelType) => {
     timetableStore.setChannelType(type);
-    active_tab_index.value = index;
 };
 
 // ジャンルごとに色分け
@@ -190,6 +243,45 @@ const formattedDate = computed(() => {
     const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][date.getDay()];
     return `${year}年${month}月${day}日 (${dayOfWeek})`;
 });
+
+const date_picker_value = ref<Date | null>(timetableStore.current_date);
+const is_date_picker_open = ref(false);
+
+const onDatePickerOpen = (isOpen: boolean) => {
+    if (isOpen) {
+        // カレンダーを開く際に現在の日付をセット
+        date_picker_value.value = timetableStore.current_date;
+    }
+};
+
+const applySelectedDate = () => {
+    const value = date_picker_value.value;
+    if (!value) {
+        return;
+    }
+    const selectedDate = new Date(
+        value.getFullYear(),
+        value.getMonth(),
+        value.getDate(),
+        0,
+        0,
+        0,
+        0,
+    );
+    timetableStore.setDate(selectedDate);
+    nextTick(() => {
+        is_date_picker_open.value = false;
+    });
+};
+
+const jumpToTodayFromPicker = () => {
+    const today = new Date();
+    date_picker_value.value = today;
+    timetableStore.setCurrentDate();
+    nextTick(() => {
+        is_date_picker_open.value = false;
+    });
+};
 
 const formatTime = (time: string) => {
     const date = new Date(time);
@@ -334,7 +426,7 @@ const updateEPG = async () => {
         await timetableStore.updateEPG();
         snackbarsStore.show('success', 'EPG 取得を開始しました。');
     } catch (error) {
-        snackbarsStore.show('error', 'EPG 取得に失敗しました。EDCBが起動していることを確認してください。');
+        snackbarsStore.show('error', 'EPG 取得に失敗しました。サーバーの設定とステータスを確認してください。');
         console.error('EPG 取得エラー:', error);
     }
 };
@@ -344,14 +436,22 @@ const reloadEPG = async () => {
         await timetableStore.reloadEPG();
         snackbarsStore.show('success', 'EPG を再読み込みしました。');
     } catch (error) {
-        snackbarsStore.show('error', 'EPG の再読み込みに失敗しました。EDCBが起動していることを確認してください。');
+        snackbarsStore.show('error', 'EPG の再読み込みに失敗しました。サーバーの設定とステータスを確認してください。');
         console.error('EPG再読み込みエラー:', error);
     }
 };
 
 onMounted(() => {
-    timetableStore.fetchTimetable();
+    void timetableStore.fetchTimetable();
 });
+
+watch(() => timetableStore.current_date, (newDate) => {
+    date_picker_value.value = newDate;
+});
+
+watch(() => timetableStore.selected_channel_type, () => {
+    syncActiveTabIndex();
+}, { immediate: true });
 
 const is_initial_load = ref(true);
 watch(() => timetableStore.timetable_channels, (new_channels) => {
@@ -404,21 +504,91 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
     background: rgb(var(--v-theme-background));
     z-index: 10;
 
+    &__top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 0;
+        flex-wrap: wrap;
+
+        @include smartphone-vertical {
+            flex-direction: column;
+            align-items: stretch;
+
+            .channels-tab {
+                width: 100%;
+            }
+        }
+    }
+
     &__date-control {
         display: flex;
         align-items: center;
         justify-content: center;
+        flex-wrap: wrap;
+        gap: 12px;
         padding: 12px 0;
         border-bottom: 1px solid rgb(var(--v-theme-background-lighten-2));
-        .date-display {
-            @include smartphone-horizontal {
-                font-size: 20px;
-            }
-            @include smartphone-vertical {
-                font-size: 18px;
-            }
+        @include smartphone-vertical {
+            gap: 4px;
+            padding: 8px 4px;
         }
     }
+}
+
+.date-nav-btn {
+    min-width: 44px;
+    height: 44px;
+    @include smartphone-vertical {
+        min-width: 40px;
+        height: 40px;
+    }
+}
+
+.date-display-btn {
+    min-width: 220px;
+    text-transform: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 16px;
+
+    @include smartphone-vertical {
+        min-width: 0;
+        flex: 1;
+        padding: 8px 12px;
+    }
+}
+
+.date-display__text {
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.date-display__hint {
+    font-size: 12px;
+    color: rgb(var(--v-theme-text-darken-1));
+}
+
+.today-btn {
+    text-transform: none;
+    @include smartphone-vertical {
+        min-width: 0;
+        padding: 0 12px;
+    }
+}
+
+.date-picker-card {
+    padding: 12px;
+}
+
+.date-picker-actions {
+    display: flex;
+    align-items: center;
+    margin-top: 4px;
 }
 
 .channels-tab {
@@ -689,5 +859,7 @@ watch(() => timetableStore.timetable_channels, (new_channels) => {
         }
     }
 }
+
+// 検索専用ページに移行したため、ここには検索スタイルを持たせない
 
 </style>

@@ -65,17 +65,28 @@ async def UpdateEPGAPI():
     EPG（電子番組ガイド）の番組情報を最新状態に取得する。
     """
 
-    # EDCB の CtrlCmdUtil を取得
-    from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
-    edcb = CtrlCmdUtil()
+    config = Config()
 
-    # EPG 獲得を開始
-    result = await edcb.sendEpgCapNow()
+    if config.general.backend == 'EDCB':
+        # EDCB の CtrlCmdUtil を取得
+        from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
+        edcb = CtrlCmdUtil()
 
-    if result is None:
-        raise ValueError('EPGの取得に失敗しました。EDCBが起動していることを確認してください。')
-    await Channel.update()
-    await Program.update(multiprocess=True)
+        # EPG 獲得を開始
+        result = await edcb.sendEpgCapNow()
+
+        if result is None:
+            raise ValueError('EPGの取得に失敗しました。EDCBが起動していることを確認してください。')
+        await Channel.update()
+        await Program.update(multiprocess=True)
+
+    elif config.general.backend == 'Mirakurun':
+        # Mirakurun / EPGStation 構成では、Mirakurun から番組情報を再取得する
+        await Channel.update()
+        await Program.update(multiprocess=True)
+
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Unsupported backend configuration')
 
 
 @router.post(
@@ -88,16 +99,29 @@ async def ReloadEPGAPI():
     EPG（電子番組ガイド）の番組情報を再読み込みする。
     """
 
-    # EDCB の CtrlCmdUtil を取得
-    from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
-    edcb = CtrlCmdUtil()
+    config = Config()
 
-    # EPG 再読み込みを開始
-    result = await edcb.sendReloadEpg()
+    if config.general.backend == 'EDCB':
+        # EDCB の CtrlCmdUtil を取得
+        from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
+        edcb = CtrlCmdUtil()
 
-    if not result:
-        raise ValueError('EPGの再読み込みに失敗しました。EDCBが起動していることを確認してください。')
+        # EPG 再読み込みを開始
+        result = await edcb.sendReloadEpg()
 
-    # チャンネル情報とともに番組情報も更新する
-    await Channel.update()
-    await Program.update(multiprocess=True)
+        if not result:
+            raise ValueError('EPGの再読み込みに失敗しました。EDCBが起動していることを確認してください。')
+
+        # チャンネル情報とともに番組情報も更新する
+        await Channel.update()
+        await Program.update(multiprocess=True)
+
+    elif config.general.backend == 'Mirakurun':
+        # Mirakurun / EPGStation 構成では Channel / Program を再同期するのみ
+        await Channel.update()
+        await Program.update(multiprocess=True)
+
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Unsupported backend configuration')
+
+

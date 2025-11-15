@@ -13,14 +13,24 @@ export const useTimetableStore = defineStore('timetable', {
         current_date: new Date(),
         // 現在選択中のチャンネルタイプ
         selected_channel_type: 'ALL' as 'ALL' | ChannelType,
-        // ロード中フラグ
-        is_loading: false,
+        // 番組表データ取得中フラグ
+        is_fetching_timetable: false,
+        // EPG 更新処理中フラグ
+        is_epg_operating: false,
+        // 最新のフェッチリクエストを識別するトークン
+        _active_fetch_token: 0,
         // 録画予約されている番組IDの配列
         reserved_program_ids: [] as string[],
         // 番組IDから録画予約IDへのマップ (削除時に必要) - オブジェクトとして保持
         program_id_to_reservation_id: {} as Record<string, number>,
     }),
     getters: {
+        /**
+         * ローディング状態
+         */
+        is_loading(state): boolean {
+            return state.is_fetching_timetable || state.is_epg_operating;
+        },
         /**
          * 表示用にフィルタリングされた番組表のデータ
          */
@@ -66,8 +76,9 @@ export const useTimetableStore = defineStore('timetable', {
          * 番組表のデータを取得・更新する
          */
         async fetchTimetable() {
-            if (this.is_loading) return;
-            this.is_loading = true;
+            const fetch_token = Date.now();
+            this._active_fetch_token = fetch_token;
+            this.is_fetching_timetable = true;
 
             // 表示する期間を計算 (今日の 04:00:00 から 24時間)
             const start_time = new Date(this.current_date);
@@ -81,12 +92,20 @@ export const useTimetableStore = defineStore('timetable', {
                     Timetable.fetchTimetable(start_time, end_time),
                     this.fetchReservations(),
                 ]);
+                if (this._active_fetch_token !== fetch_token) {
+                    return;
+                }
                 this._timetable_channels = timetable_channels;
             } catch (error) {
                 console.error(error);
+                if (this._active_fetch_token !== fetch_token) {
+                    return;
+                }
                 this._timetable_channels = null;
             } finally {
-                this.is_loading = false;
+                if (this._active_fetch_token === fetch_token) {
+                    this.is_fetching_timetable = false;
+                }
             }
         },
 
@@ -96,8 +115,7 @@ export const useTimetableStore = defineStore('timetable', {
         setPreviousDate() {
             const newDate = new Date(this.current_date);
             newDate.setDate(newDate.getDate() - 1);
-            this.current_date = newDate;
-            this.fetchTimetable();
+            this.setDate(newDate);
         },
 
         /**
@@ -106,16 +124,35 @@ export const useTimetableStore = defineStore('timetable', {
         setNextDate() {
             const newDate = new Date(this.current_date);
             newDate.setDate(newDate.getDate() + 1);
-            this.current_date = newDate;
-            this.fetchTimetable();
+            this.setDate(newDate);
         },
 
         /**
          * 表示する日付を今日にする
          */
         setCurrentDate() {
-            this.current_date = new Date();
-            this.fetchTimetable();
+            this.setDate(new Date(), {force: true});
+        },
+
+        /**
+         * 指定した日付の番組表を表示する
+         * @param date 設定する日付
+         * @param options force: 同一日付でも取得し直すか
+         */
+        setDate(date: Date, options: {force?: boolean} = {}) {
+            const normalized = new Date(date);
+            normalized.setHours(0, 0, 0, 0);
+
+            const currentNormalized = new Date(this.current_date);
+            currentNormalized.setHours(0, 0, 0, 0);
+
+            const isSameDay = normalized.getTime() === currentNormalized.getTime();
+
+            this.current_date = normalized;
+
+            if (!isSameDay || options.force === true) {
+                void this.fetchTimetable();
+            }
         },
 
         /**
@@ -130,8 +167,8 @@ export const useTimetableStore = defineStore('timetable', {
          * EPG（番組情報）を取得する
          */
         async updateEPG() {
-            if (this.is_loading) return;
-            this.is_loading = true;
+            if (this.is_epg_operating) return;
+            this.is_epg_operating = true;
 
             try {
                 const success = await Timetable.updateEPG();
@@ -145,7 +182,7 @@ export const useTimetableStore = defineStore('timetable', {
                 // エラーを上位に投げ直す
                 throw error;
             } finally {
-                this.is_loading = false;
+                this.is_epg_operating = false;
             }
         },
 
@@ -153,8 +190,8 @@ export const useTimetableStore = defineStore('timetable', {
          * EPG（番組情報）を再読み込みする
          */
         async reloadEPG() {
-            if (this.is_loading) return;
-            this.is_loading = true;
+            if (this.is_epg_operating) return;
+            this.is_epg_operating = true;
 
             try {
                 const success = await Timetable.reloadEPG();
@@ -168,7 +205,7 @@ export const useTimetableStore = defineStore('timetable', {
                 // エラーを上位に投げ直す
                 throw error;
             } finally {
-                this.is_loading = false;
+                this.is_epg_operating = false;
             }
         }
     }
