@@ -12,7 +12,7 @@ FROM ubuntu:22.04 AS thirdparty-downloader
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ダウンロード・展開に必要なパッケージのインストール
-RUN apt-get update && apt-get install -y --no-install-recommends aria2 ca-certificates unzip xz-utils
+RUN apt-get update && apt-get install -y --no-install-recommends aria2 ca-certificates unzip xz-utils wget
 
 # サードパーティーライブラリをダウンロード
 ## サードパーティーライブラリは変更が少ないので、先にダウンロード処理を実行してビルドキャッシュを効かせる
@@ -89,6 +89,10 @@ RUN apt-get update && \
     echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] https://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list && \
     # リポジトリを更新し、この時点で利用可能なパッケージをアップグレード
     apt-get update && apt-get upgrade -y && \
+    # tsreplace のインストール
+    wget https://github.com/rigaya/tsreplace/releases/download/${TSREPLACE_VERSION}/tsreplace_${TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb && \
+    apt-get install -y ./tsreplace_${TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb && \
+    rm tsreplace_${TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb && \
     # 必要なパッケージをインストール
     apt-get install -y --no-install-recommends \
         # フォント関連のライブラリ
@@ -96,9 +100,6 @@ RUN apt-get update && \
         # Intel GPU 関連のライブラリ
         intel-media-va-driver-non-free intel-opencl-icd libigfxcmrt7 libmfx1 libmfxgen1 libva-drm2 libva-x11-2 ocl-icd-opencl-dev \
         amf-amdgpu-pro libamdenc-amdgpu-pro libdrm2-amdgpu vulkan-amdgpu-pro rocm-opencl-runtime opencl-legacy-amdgpu-pro-icd && \
-    wget https://github.com/rigaya/tsreplace/releases/download/${TSREPLACE_VERSION}/tsreplace_${TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb && \
-    apt-get install -y ./tsreplace_${TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb && \
-    rm tsreplace_${TSREPLACE_VERSION}_Ubuntu22.04_amd64.deb && \
         # NVIDIA GPU 関連のライブラリ
         cuda-nvrtc-12-8 libnpp-12-8 \
         # AMD GPU 関連のライブラリ
