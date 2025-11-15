@@ -116,10 +116,13 @@ def main():
         print(Padding(table, (1, 2, 0, 2)))
 
     ShowPanel([
-        '01. KonomiTV をインストールするときは 1 を、アップデートするときは 2 を、',
-        '    アンインストールするときは 3 を入力してください。',
-        '    開発版 (4,5) には master ブランチの最新コミットが反映されています。',
-        '    安定動作は保証されておらずサポートもありませんので、ご了承の上ご利用ください。',
+        f'01. この PC 上に KonomiTV (version {TARGET_VERSION}) を[bold]新規インストール[/bold]するには [bold cyan]1[/bold cyan] を、',
+        f'    この PC 上の KonomiTV を version {TARGET_VERSION} へ[bold]アップデート[/bold]するには [bold cyan]2[/bold cyan] を、',
+        '    この PC 上の KonomiTV を[bold]アンインストール[/bold]するには [bold cyan]3[/bold cyan] を入力してください。',
+        '',
+        '    master ブランチの最新コミットが反映されている[bold]開発版をインストール[/bold]するには [bold cyan]4[/bold cyan] を、',
+        '    [bold]開発版へアップデート[/bold]するには [bold cyan]5[/bold cyan] を入力してください。',
+        '    なお、開発版の安定動作は保証されていないため、予めご了承の上ご利用ください。',
     ], padding=(1, 2, 1, 2))
 
     install_type = CustomPrompt.ask('フォーク版をインストールしますか？(y/n)', default='y', choices=['y', 'n'])

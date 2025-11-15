@@ -9,7 +9,6 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi_utils.tasks import repeat_every
 
 from app import logging, schemas
 from app.config import Config, LoadConfig
@@ -22,7 +21,6 @@ from app.constants import (
 from app.metadata.RecordedScanTask import RecordedScanTask
 from app.models.Channel import Channel
 from app.models.Program import Program
-from app.models.TwitterAccount import TwitterAccount
 from app.routers import (
     CapturesRouter,
     ChannelsRouter,
@@ -48,6 +46,7 @@ from app.streams.LiveStream import LiveStream
 from app.utils.edcb.EDCBTuner import EDCBTuner
 from app.utils.epgstation.EPGStationUtil import EPGStationUtil
 from discord_main import start_discord_bot, stop_discord_bot
+from app.utils.FastAPITaskUtil import repeat_every
 
 
 # もし Config() の実行時に AssertionError が発生した場合は、LoadConfig() を実行してサーバー設定データをロードする
@@ -327,10 +326,7 @@ async def Startup():
 
     # 番組情報を更新
     await Program.update()
-
-    # 登録されている Twitter アカウントの情報を更新
-    await TwitterAccount.updateAccountsInformation()
-
+    
     # EPGStation への接続を確認（レコーダーが EPGStation の場合のみ）
     if CONFIG.general.recorder == 'EPGStation':
         async with EPGStationUtil() as epgstation:
@@ -376,12 +372,6 @@ async def UpdateChannelAndProgram():
 @repeat_every(seconds=0.5 * 60, wait_first=0.5 * 60, logger=logging.logger)
 async def UpdateChannelJikkyoStatus():
     await Channel.updateJikkyoStatus()
-
-# 1時間に1回、登録されている Twitter アカウントの情報を更新する
-@app.on_event('startup')
-@repeat_every(seconds=60 * 60, wait_first=60 * 60, logger=logging.logger)
-async def UpdateTwitterAccountInformation():
-    await TwitterAccount.updateAccountsInformation()
 
 # サーバーの終了時に実行する
 cleanup = False

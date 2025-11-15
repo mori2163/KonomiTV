@@ -378,9 +378,10 @@ class LiveEncodingTask:
             options.append('--vpp-deband')
         ## H.265/HEVC では HW エンコーダーが対応している場合は 10bit でエンコードし、さらにバンディング耐性を高める
         ## (VCEEncC は 10bit 対応の機種かを判定できず、rkmppenc は 10bit エンコード自体に非対応のため設定しない)
+        ## TODO: 思ったより 10bit HEVC デコードに対応してない Android タブレットが多そうなので個別調整できるようになるまで無効化
         ## ref: https://github.com/tsukumijima/KonomiTV/pull/164#issuecomment-3368738859
-        if QUALITY[quality].is_hevc is True and (encoder_type == 'QSVEncC' or encoder_type == 'NVEncC'):
-            options.append('--output-depth 10 --fallback-bitdepth')
+        # if QUALITY[quality].is_hevc is True and (encoder_type == 'QSVEncC' or encoder_type == 'NVEncC'):
+        #     options.append('--output-depth 10 --fallback-bitdepth')
 
         ## 最大 GOP 長 (秒)
         ## 30fps なら ×30 、 60fps なら ×60 された値が --gop-len で使われる
@@ -724,7 +725,7 @@ class LiveEncodingTask:
 
             # チューナーを起動する
             # アンロック状態のチューナーインスタンスがあれば、自動的にそのチューナーが再利用される
-            logging.debug_simple(f'[Live: {self.live_stream.live_stream_id}] EDCB NetworkTV ID: {self.live_stream.tuner.getEDCBNetworkTVID()}')
+            logging.debug(f'[Live: {self.live_stream.live_stream_id}] EDCB NetworkTV ID: {self.live_stream.tuner.getEDCBNetworkTVID()}')
             self.live_stream.setStatus('Standby', 'チューナーを起動しています…')
             is_tuner_opened = await self.live_stream.tuner.open()
 
@@ -1051,7 +1052,7 @@ class LiveEncodingTask:
                     # ストリーム関連のログを表示
                     ## エンコーダーのログ出力が有効なら、ストリーム関連に限らずすべてのログを出力する
                     if 'Stream #0:' in line or CONFIG.general.debug_encoder is True:
-                        logging.debug_simple(f'[Live: {self.live_stream.live_stream_id}] [{ENCODER_TYPE}] ' + line)
+                        logging.debug(f'[Live: {self.live_stream.live_stream_id}] [{ENCODER_TYPE}] ' + line)
 
                     # エンコーダーのログ出力が有効なら、エンコーダーのログファイルに書き込む
                     if CONFIG.general.debug_encoder is True and encoder_log is not None:

@@ -348,7 +348,7 @@ class TSInfoAnalyzer:
                         pass
 
             except Exception as ex:
-                logging.warning(f'{self.recorded_video.file_path}: Failed to analyze TOT from TS.', exc_info=ex)
+                logging.warning(f'{self.recorded_video.file_path}: Failed to analyze TOT from TS:', exc_info=ex)
                 return None
 
             return None
@@ -593,7 +593,7 @@ class TSInfoAnalyzer:
                         # 破損したイベントをスキップ
                         corrupted_events += 1
                         if corrupted_events <= 20:  # 20個までは許容
-                            logging.debug_simple(f'{self.recorded_video.file_path}: Skipped corrupted event #{corrupted_events}:', exc_info=ex)
+                            logging.debug(f'{self.recorded_video.file_path}: Skipped corrupted event #{corrupted_events}:', exc_info=ex)
                             continue
                         else:
                             # 破損イベントが多すぎる場合は諦める

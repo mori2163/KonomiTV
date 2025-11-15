@@ -792,7 +792,7 @@ class RecordedScanTask:
                     if (existing_recorded_video_summary.file_created_at == file_created_at and
                         existing_recorded_video_summary.file_modified_at == file_modified_at and
                         existing_recorded_video_summary.file_size == file_size):
-                        # logging.debug_simple(f'{file_path}: File metadata unchanged, skipping...')
+                        # logging.debug(f'{file_path}: File metadata unchanged, skipping...')
                         return
 
                 # 現在録画中とマークされているファイルの処理
@@ -877,9 +877,8 @@ class RecordedScanTask:
 
                 # 60秒未満のファイルは録画失敗または切り抜きとみなしてスキップ
                 # 録画中だがまだ60秒に満たない場合、今後のファイル変更イベント発火時に60秒を超えていれば録画中ファイルとして処理される
-                if (recorded_program.recorded_video.duration < self.MINIMUM_RECORDING_SECONDS and
-                    force_allow_recent is False):
-                    logging.debug_simple(f'{file_path}: This file is too short. (duration {recorded_program.recorded_video.duration:.1f}s < {self.MINIMUM_RECORDING_SECONDS}s) Skipped.')
+                if recorded_program.recorded_video.duration < self.MINIMUM_RECORDING_SECONDS:
+                    logging.debug(f'{file_path}: This file is too short. (duration {recorded_program.recorded_video.duration:.1f}s < {self.MINIMUM_RECORDING_SECONDS}s) Skipped.')
                     return
 
                 # ついで録画フラグを付与
@@ -908,13 +907,20 @@ class RecordedScanTask:
                     if existing_is_tsuide == analyzed_is_tsuide:
                         return
 
-                # 録画中/完了の状態決定
-                ## 停止直後の強制解析時は、たとえ mtime が新しくても Recorded とみなす
-                if force_allow_recent is True:
-                    recorded_program.recorded_video.status = 'Recorded'
-                    if file_path not in self._background_tasks:
-                        task = asyncio.create_task(self.__runBackgroundAnalysis(recorded_program))
-                        self._background_tasks[file_path] = task
+                # 録画中のファイルとして処理
+                ## 他ドライブからファイルコピー中のファイルも、実際の録画処理より高速に書き込まれるだけで随時書き込まれることに変わりはないので、
+                ## 録画中として判断されることがある（その場合、ファイルコピーが完了した段階で「録画完了」扱いとなる）
+                if is_recording or (now - file_modified_at).total_seconds() < self.RECORDING_COMPLETE_SECONDS:
+                    # status を Recording に設定
+                    recorded_program.recorded_video.status = 'Recording'
+                    # 状態を更新
+                    self._recording_files[file_path] = FileRecordingInfo(
+                        last_modified = file_modified_at,
+                        last_checked = now,
+                        file_size = file_size,
+                        mtime_continuous_start_at = file_modified_at,  # 初回は必ず mtime_continuous_start_at を設定
+                    )
+                    logging.debug(f'{file_path}: This file is recording or copying. (duration {recorded_program.recorded_video.duration:.1f}s >= {self.MINIMUM_RECORDING_SECONDS}s)')
                 else:
                     ## 他ドライブからファイルコピー中のファイルも、実際の録画処理より高速に書き込まれるだけで随時書き込まれることに変わりはないので、
                     ## 録画中として判断されることがある（その場合、ファイルコピーが完了した段階で「録画完了」扱いとなる）
@@ -990,7 +996,7 @@ class RecordedScanTask:
         try:
             return await file_path.resolve()
         except (OSError, RuntimeError) as ex:
-            logging.warning(f'{file_path}: Failed to resolve symlink. Using original path.', exc_info=ex)
+            logging.warning(f'{file_path}: Failed to resolve symlink. Using original path:', exc_info=ex)
             return file_path
 
 
@@ -1398,18 +1404,18 @@ class RecordedScanTask:
                 if file_size != last_size:
                     mtime_continuous_start_at = None
                     if not throttle_event:
-                        logging.debug_simple(f'{file_path}: File size changed.')
+                        logging.debug(f'{file_path}: File size changed.')
                 # mtime が変化している場合は継続更新判定を更新
                 elif last_modified > recording_info.last_modified:
                     if mtime_continuous_start_at is None:
                         mtime_continuous_start_at = last_modified
                         if not throttle_event:
-                            logging.debug_simple(f'{file_path}: File modified time changed.')
+                            logging.debug(f'{file_path}: File modified time changed.')
                     else:
                         continuous_duration = (now - mtime_continuous_start_at).total_seconds()
                         if continuous_duration >= self.CONTINUOUS_UPDATE_THRESHOLD_SECONDS:
                             if not throttle_event:
-                                logging.debug_simple(f'{file_path}: Still recording. (continuous mtime updates for {continuous_duration:.1f} seconds)')
+                                logging.debug(f'{file_path}: Still recording. (continuous mtime updates for {continuous_duration:.1f} seconds)')
 
                 # 状態を更新
                 recording_info.last_modified = last_modified

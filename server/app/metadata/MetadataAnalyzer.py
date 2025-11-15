@@ -147,7 +147,7 @@ class FFprobeResult(BaseModel):
                 try:
                     video_streams.append(stream)
                 except Exception as ex:
-                    logging.warning(f'Invalid video stream data: {ex}')
+                    logging.warning('Invalid video stream data:', exc_info=ex)
         return video_streams
 
     def getAudioStreams(self) -> list[FFprobeAudioStream]:
@@ -159,7 +159,7 @@ class FFprobeResult(BaseModel):
                 try:
                     audio_streams.append(stream)
                 except Exception as ex:
-                    logging.warning(f'Invalid audio stream data: {ex}')
+                    logging.warning('Invalid audio stream data:', exc_info=ex)
         return audio_streams
 
 class FFprobeSampleResult(BaseModel):
@@ -175,7 +175,7 @@ class FFprobeSampleResult(BaseModel):
                 try:
                     video_streams.append(stream)
                 except Exception as ex:
-                    logging.warning(f'Invalid video stream data: {ex}')
+                    logging.warning('Invalid video stream data:', exc_info=ex)
         return video_streams
 
     def getAudioStreams(self) -> list[FFprobeAudioStream]:
@@ -187,7 +187,7 @@ class FFprobeSampleResult(BaseModel):
                 try:
                     audio_streams.append(stream)
                 except Exception as ex:
-                    logging.warning(f'Invalid audio stream data: {ex}')
+                    logging.warning('Invalid audio stream data:', exc_info=ex)
         return audio_streams
 
 
@@ -278,7 +278,7 @@ class MetadataAnalyzer:
         if result is None:
             return None
         full_probe, sample_probe, end_ts_offset = result
-        logging.debug_simple(f'{self.recorded_file_path}: FFprobe analysis completed.')
+        logging.debug(f'{self.recorded_file_path}: FFprobe analysis completed.')
 
         # MPEG-TS の TS パケットサイズが 188 以外であれば弾く（BDAV 等は非対応）
         if full_probe.format.format_name == 'mpegts':
@@ -293,7 +293,7 @@ class MetadataAnalyzer:
                     logging.warning(f'{self.recorded_file_path}: Unsupported TS packet size detected: {first_bad} bytes.')
                     return None
             except Exception as ex:
-                logging.warning(f'{self.recorded_file_path}: Failed to validate ts_packetsize.', exc_info=ex)
+                logging.warning(f'{self.recorded_file_path}: Failed to validate ts_packetsize:', exc_info=ex)
 
         # メディア情報から録画ファイルのメタデータを取得
         # 全般（コンテナ情報）
@@ -523,7 +523,7 @@ class MetadataAnalyzer:
             analyzer = TSInfoAnalyzer(recorded_video, end_ts_offset=end_ts_offset)
             recorded_program = analyzer.analyze()  # 取得失敗時は None が返る
             if recorded_program is not None:
-                logging.debug_simple(f'{self.recorded_file_path}: MPEG-TS SDT/EIT analysis completed.')
+                logging.debug(f'{self.recorded_file_path}: MPEG-TS SDT/EIT analysis completed.')
                 # 取得成功時は録画開始時刻と録画終了時刻も解析する
                 recording_time = analyzer.analyzeRecordingTime()
                 if recording_time is not None:
@@ -541,7 +541,7 @@ class MetadataAnalyzer:
             analyzer = TSInfoAnalyzer(recorded_video)
             recorded_program = analyzer.analyze()  # 取得失敗時は None が返る
             if recorded_program is not None:
-                logging.debug_simple(f'{self.recorded_file_path}: {container_format} Service/Event analysis completed.')
+                logging.debug(f'{self.recorded_file_path}: {container_format} Service/Event analysis completed.')
                 # 取得成功時は録画開始時刻と録画終了時刻も解析する
                 recording_time = analyzer.analyzeRecordingTime()
                 if recording_time is not None:
@@ -777,7 +777,7 @@ class MetadataAnalyzer:
                 # --- 再生時間の算出 ---
                 # 先頭と末尾の PCR 値から再生時間（秒）を算出する
                 duration = last_timestamp - first_timestamp
-                logging.debug_simple(f'{self.recorded_file_path}: Duration calculated: {duration} seconds.')
+                logging.debug(f'{self.recorded_file_path}: Duration calculated: {duration} seconds.')
 
                 return (duration, valid_data_end)
 
@@ -816,7 +816,7 @@ class MetadataAnalyzer:
         try:
             full_probe = FFprobeResult(**full_json)
         except Exception as ex:
-            logging.warning(f'{self.recorded_file_path}: Failed to parse full ffprobe result.', exc_info=ex)
+            logging.warning(f'{self.recorded_file_path}: Failed to parse full ffprobe result:', exc_info=ex)
             return None
 
         # FFprobe から再生時間を取得できない場合のフォールバック処理
@@ -828,7 +828,7 @@ class MetadataAnalyzer:
                 duration, _ = duration_result
                 # FFprobe の結果を更新
                 full_probe.format.duration = str(duration)
-                logging.debug_simple(f'{self.recorded_file_path}: Duration fallback completed: {duration} seconds.')
+                logging.debug(f'{self.recorded_file_path}: Duration fallback completed: {duration} seconds.')
             else:
                 # 再生時間を算出できなかった (ファイルが破損しているなど)
                 logging.warning(f'{self.recorded_file_path}: Duration is missing and fallback failed.')
@@ -881,7 +881,7 @@ class MetadataAnalyzer:
                 # MPEG-TS 形式でない場合は部分解析はせず、全体解析の結果をそのまま設定
                 sample_json = full_json
         except Exception as ex:
-            logging.warning(f'{self.recorded_file_path}: Failed to analyze sample via ffprobe.', exc_info=ex)
+            logging.warning(f'{self.recorded_file_path}: Failed to analyze sample via ffprobe:', exc_info=ex)
             return None
 
         if sample_json is None:
@@ -890,7 +890,7 @@ class MetadataAnalyzer:
         try:
             sample_probe = FFprobeSampleResult(**sample_json)
         except Exception as ex:
-            logging.warning(f'{self.recorded_file_path}: Failed to parse sample ffprobe result.', exc_info=ex)
+            logging.warning(f'{self.recorded_file_path}: Failed to parse sample ffprobe result:', exc_info=ex)
             return None
 
         # 解析処理中に calculateTSFileDuration() を実行した場合は、有効な TS データの終了位置も一緒に返す
@@ -926,7 +926,7 @@ class MetadataAnalyzer:
                 return None
             return cast(dict[str, Any], json.loads(proc.stdout.decode('utf-8')))
         except Exception as ex:
-            logging.warning(f'{self.recorded_file_path}: Failed to run ffprobe.', exc_info=ex)
+            logging.warning(f'{self.recorded_file_path}: Failed to run ffprobe:', exc_info=ex)
             return None
 
 
