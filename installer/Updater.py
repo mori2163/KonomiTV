@@ -333,6 +333,39 @@ def Updater(version: str, install_fork: bool) -> None:
             if 'upload_folder' in config_dict['capture']:
                 config_dict['capture']['upload_folders'] = [config_dict['capture']['upload_folder']]
                 del config_dict['capture']['upload_folder']
+            if 'recorder' not in config_dict['general']:
+                config_dict['general']['recorder'] = config_dict['general'].get('backend', 'EDCB')
+            # EPGStation URL が設定されていない場合のデフォルト値
+            if 'epgstation_url' not in config_dict['general']:
+                config_dict['general']['epgstation_url'] = 'http://127.0.0.1:8888/'
+            # Discord 連携設定が存在しない場合のデフォルト値
+            if 'discord' not in config_dict:
+                config_dict['discord'] = {
+                    'enabled': False,
+                    'token': '0',
+                    'notify_server_start': False,
+                    'notify_server_stop': False,
+                    'notify_recording_start': False,
+                    'notify_recording_end': False,
+                }
+            # TSReplace エンコード設定が存在しない場合のデフォルト値
+            if 'tsreplace_encoding' not in config_dict:
+                config_dict['tsreplace_encoding'] = {
+                    'auto_encoding_enabled': False,
+                    'auto_encoding_codec': 'h264',
+                    'auto_encoding_encoder': 'hardware',
+                }
+            # 既存の tsreplace_encoding に新しいフィールドがない場合のデフォルト値
+            if 'auto_encoding_codec' not in config_dict.get('tsreplace_encoding', {}):
+                config_dict['tsreplace_encoding']['auto_encoding_codec'] = 'h264'
+            if 'auto_encoding_encoder' not in config_dict.get('tsreplace_encoding', {}):
+                config_dict['tsreplace_encoding']['auto_encoding_encoder'] = 'hardware'
+            if 'hardware_encoder_type' not in config_dict.get('tsreplace_encoding', {}):
+                config_dict['tsreplace_encoding']['hardware_encoder_type'] = 'intel'
+            if 'delete_original_after_encoding' not in config_dict.get('tsreplace_encoding', {}):
+                config_dict['tsreplace_encoding']['delete_original_after_encoding'] = False
+            if 'max_concurrent_encodings' not in config_dict.get('tsreplace_encoding', {}):
+                config_dict['tsreplace_encoding']['max_concurrent_encodings'] = 1
 
         # サーバーのリッスンポートの設定値を取得
         server_port = cast(int, config_dict['server']['port'])

@@ -270,6 +270,79 @@ def Installer(version: str, install_fork: bool) -> None:
             # すべてのバリデーションを通過したのでループを抜ける
             break
 
+    # ***** 利用するレコーダー（録画管理システム） *****
+
+    table_recorder = CreateTable()
+    table_recorder.add_column('05. 利用するレコーダーを EDCB・EPGStation から選んで入力してください。')
+    table_recorder.add_row('レコーダーは録画管理に利用されます。')
+    table_recorder.add_row('EDCB を選択すると、EDCB による録画管理を行います。')
+    table_recorder.add_row('EPGStation を選択すると、EPGStation による録画管理を行います。')
+    table_recorder.add_row('EPGStation をレコーダーとして使用する場合、バックエンドは Mirakurun である必要があります。')
+    print(Padding(table_recorder, (1, 2, 1, 2)))
+
+    # 利用するレコーダーを取得
+    ## backend が EDCB の場合 → recorder も EDCB 固定
+    ## backend が Mirakurun の場合 → recorder は EDCB または EPGStation を選択可能
+    if backend == 'EDCB':
+        recorder: Literal['EDCB', 'EPGStation'] = 'EDCB'
+    else:
+        recorder = cast(
+            Literal['EDCB', 'EPGStation'],
+            CustomPrompt.ask('利用するレコーダー', default='EPGStation', choices=['EDCB', 'EPGStation']),
+        )
+
+    # ***** EPGStation の HTTP API の URL *****
+
+    epgstation_url: str = ''
+    if recorder == 'EPGStation':
+
+        table_epg = CreateTable()
+        table_epg.add_column('05-1. EPGStation の HTTP API の URL を入力してください（オプション）。')
+        table_epg.add_row('http://192.168.1.11:8888/ のような形式の URL で指定します。')
+        table_epg.add_row('EPGStation と同じ PC に KonomiTV をインストールしようとしている場合は、')
+        table_epg.add_row('http://127.0.0.1:8888/ と入力してください。')
+        table_epg.add_row('設定しない場合は、何も入力せずに Enter キーを押してください。')
+        print(Padding(table_epg, (1, 2, 1, 2)))
+
+        while True:
+
+            # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
+            epgstation_url_input = CustomPrompt.ask('EPGStation の HTTP API の URL', default='')
+
+            # 空入力の場合はスキップ
+            if epgstation_url_input == '':
+                epgstation_url = ''
+                break
+
+            ## 末尾のスラッシュは常に付与する
+            epgstation_url = epgstation_url_input.rstrip('/') + '/'
+            ## localhost を 127.0.0.1 に置き換え (localhost だと一部 Windows 環境で接続が遅くなる)
+            epgstation_url = epgstation_url.replace('localhost', '127.0.0.1')
+
+            # バリデーション
+            ## 試しにリクエストを送り、200 (OK) が返ってきたときだけ有効な URL とみなす
+            try:
+                response = requests.get(f'{epgstation_url.rstrip("/")}/api/version', timeout=20)
+            except Exception:
+                print(Padding(str(
+                    f'[red]EPGStation ({epgstation_url}) にアクセスできませんでした。\n'
+                    'EPGStation が起動していないか、URL を間違えている可能性があります。',
+                ), (0, 2, 0, 2)))
+                continue
+            try:
+                response_json = response.json()
+                if response.status_code != 200 or response_json.get('version') is None:
+                    raise ValueError()
+            except Exception:
+                print(Padding(str(
+                    f'[red]{epgstation_url} は EPGStation の URL ではありません。\n'
+                    'EPGStation の URL を間違えている可能性があります。',
+                ), (0, 2, 0, 2)))
+                continue
+
+            # すべてのバリデーションを通過したのでループを抜ける
+            break
+
     # ***** 利用するエンコーダー *****
 
     # PC に接続されている GPU の型番を取得し、そこから QSVEncC / NVEncC / VCEEncC の利用可否を大まかに判断する
@@ -360,9 +433,9 @@ def Installer(version: str, install_fork: bool) -> None:
 
     table_05 = CreateTable()
     if is_arm_device is False:
-        table_05.add_column('05. 利用するエンコーダーを FFmpeg・QSVEncC・NVEncC・VCEEncC から選んで入力してください。')
+        table_05.add_column('06. 利用するエンコーダーを FFmpeg・QSVEncC・NVEncC・VCEEncC から選んで入力してください。')
     else:
-        table_05.add_column('05. 利用するエンコーダーを FFmpeg・rkmppenc から選んで入力してください。')
+        table_05.add_column('06. 利用するエンコーダーを FFmpeg・rkmppenc から選んで入力してください。')
     table_05.add_row('FFmpeg はソフトウェアエンコーダーです。')
     table_05.add_row('すべての PC で利用できますが、CPU に多大な負荷がかかり、パフォーマンスが悪いです。')
     if is_arm_device is False:
@@ -394,7 +467,7 @@ def Installer(version: str, install_fork: bool) -> None:
     # ***** 録画済み番組の保存先フォルダのパス *****
 
     table_06 = CreateTable()
-    table_06.add_column('06. 録画済み番組の保存先フォルダを入力してください。')
+    table_06.add_column('07. 録画済み番組の保存先フォルダを入力してください。')
     if platform_type == 'Windows':
         table_06.add_row('入力例: E:\\TV-Record')
     elif platform_type == 'Linux' or platform_type == 'Linux-Docker':
@@ -440,7 +513,7 @@ def Installer(version: str, install_fork: bool) -> None:
     # ***** アップロードしたキャプチャ画像の保存先フォルダのパス *****
 
     table_07 = CreateTable()
-    table_07.add_column('07. アップロードしたキャプチャ画像の保存先フォルダのパスを入力してください。')
+    table_07.add_column('08. アップロードしたキャプチャ画像の保存先フォルダのパスを入力してください。')
     table_07.add_row('クライアントの [キャプチャの保存先] 設定で [KonomiTV サーバーにアップロード] または')
     table_07.add_row('[ブラウザでのダウンロードと、KonomiTV サーバーへのアップロードを両方行う] を選択したときに利用されます。')
     if platform_type == 'Windows':
@@ -486,10 +559,10 @@ def Installer(version: str, install_fork: bool) -> None:
         print(Padding(f'[green]現在指定されているキャプチャ画像の保存先フォルダ: {", ".join(capture_upload_folders)}', (0, 2, 0, 2)))
 
     # ***** Discord連携に必要なトークン *****
+
     table_08 = CreateTable()
-    table_08.add_column('08. Discord 連携を有効にしますか？')
+    table_08.add_column('09. Discord 連携を有効にしますか？')
     table_08.add_row('別途 Discord Bot の作成と、作成した Bot を Discord サーバーに招待する必要があります。')
-    table_08.add_row('詳しくは [bright_blue]https://github.com/mori2163/KonomiTV/wiki/Discord[/bright_blue] をご覧ください。')
     print(Padding(table_08, (1, 2, 1, 2)))
 
     # Discord 連携を有効にするか
@@ -498,7 +571,7 @@ def Installer(version: str, install_fork: bool) -> None:
 
     if is_discord_integration_enabled:
         table_08_1 = CreateTable()
-        table_08_1.add_column('08-1. Discord Bot Token を入力してください。')
+        table_08_1.add_column('09-1. Discord Bot Token を入力してください。')
         table_08_1.add_row('Discord Developer Portal で作成した Bot のトークンを入力します。')
         print(Padding(table_08_1, (1, 2, 1, 2)))
         while True:
@@ -506,6 +579,151 @@ def Installer(version: str, install_fork: bool) -> None:
             if discord_bot_token:
                 break
             print(Padding('[red]Discord Bot Token を入力してください。', (0, 2, 0, 2)))
+
+    # ***** 自動エンコード機能の有効化 *****
+
+    table_09 = CreateTable()
+    table_09.add_column('10. 自動エンコード機能を有効にしますか？')
+    table_09.add_row('録画完了後に自動的にエンコードを開始する機能です。')
+    table_09.add_row('TSReplace エンコーダーを使用します。')
+    if platform_type != 'Linux-Docker':
+        table_09.add_row('[yellow]注意: Docker 以外の環境では、TSReplace を手動でインストールする必要があります。[/yellow]')
+        table_09.add_row('[yellow]https://github.com/rigaya/tsreplace からダウンロードし、[/yellow]')
+        table_09.add_row('[yellow]tsreplace.exe を server/thirdparty/tsreplace/ フォルダに配置してください。[/yellow]')
+    print(Padding(table_09, (1, 2, 1, 2)))
+
+    # 自動エンコード機能を有効にするか
+    is_auto_encoding_enabled = bool(CustomConfirm.ask('自動エンコード機能を有効にする', default=False))
+
+    # 自動エンコードのコーデック設定
+    auto_encoding_codec: Literal['h264', 'hevc'] = 'h264'
+    auto_encoding_encoder: Literal['software', 'hardware'] = 'hardware'
+    hardware_encoder_type: Literal['intel', 'nvidia', 'amd'] = 'intel'
+    delete_original_after_encoding: bool = False
+    max_concurrent_encodings: int = 1
+
+    if is_auto_encoding_enabled:
+        table_09_1 = CreateTable()
+        table_09_1.add_column('10-1. 自動エンコードのコーデックを選択してください。')
+        table_09_1.add_row('h264: 互換性が高く、多くのデバイスで再生可能')
+        table_09_1.add_row('hevc: 高圧縮率でファイルサイズが半分程度に小さくなるが、一部デバイスでは再生できない場合がある')
+        print(Padding(table_09_1, (1, 2, 1, 2)))
+
+        auto_encoding_codec = cast(
+            Literal['h264', 'hevc'],
+            CustomPrompt.ask('コーデック', default='h264', choices=['h264', 'hevc']),
+        )
+
+        table_09_2 = CreateTable()
+        table_09_2.add_column('10-2. 自動エンコードのエンコーダー種類を選択してください。')
+        table_09_2.add_row('hardware: GPU を使用した高速エンコード（推奨）')
+        table_09_2.add_row('software: CPU を使用したエンコード（低速）')
+        print(Padding(table_09_2, (1, 2, 1, 2)))
+
+        auto_encoding_encoder = cast(
+            Literal['software', 'hardware'],
+            CustomPrompt.ask('エンコーダー種類', default='hardware', choices=['software', 'hardware']),
+        )
+
+        # ハードウェアエンコーダーを選択した場合、利用可能な GPU に応じて選択肢を提示
+        if auto_encoding_encoder == 'hardware':
+            # 利用可能なハードウェアエンコーダーの種類を判定
+            available_hw_encoders: list[str] = []
+            default_hw_encoder = 'intel'
+            intel_qsv_status = '❌利用できません'
+            nvidia_nvenc_status = '❌利用できません'
+            amd_vce_status = '❌利用できません'
+
+            # GPU 名から利用可能なエンコーダーを判定
+            for gpu_name in gpu_names:
+                if 'Intel' in gpu_name:
+                    intel_qsv_status = f'✅利用できます ({gpu_name})'
+                    if 'intel' not in available_hw_encoders:
+                        available_hw_encoders.append('intel')
+                        default_hw_encoder = 'intel'
+                elif 'NVIDIA' in gpu_name or 'Geforce' in gpu_name:
+                    nvidia_nvenc_status = f'✅利用できます ({gpu_name})'
+                    if 'nvidia' not in available_hw_encoders:
+                        available_hw_encoders.append('nvidia')
+                        if default_hw_encoder == 'intel':
+                            default_hw_encoder = 'nvidia'
+                elif 'AMD' in gpu_name or 'Radeon' in gpu_name:
+                    amd_vce_status = f'✅利用できます ({gpu_name})'
+                    if 'amd' not in available_hw_encoders:
+                        available_hw_encoders.append('amd')
+                        if default_hw_encoder == 'intel':
+                            default_hw_encoder = 'amd'
+
+            # 利用可能なエンコーダーが1つ以上ある場合のみ選択肢を表示
+            if len(available_hw_encoders) > 0:
+                table_09_2_1 = CreateTable()
+                table_09_2_1.add_column('10-2-1. 使用するハードウェアエンコーダーの種類を選択してください。')
+                table_09_2_1.add_row('intel : Intel QSV (Quick Sync Video) で使用可能')
+                table_09_2_1.add_row('nvidia: NVIDIA NVENC で使用可能')
+                table_09_2_1.add_row('amd   : AMD VCE (Video Coding Engine) で使用可能')
+                table_09_2_1.add_row(CreateRule())
+                table_09_2_1.add_row(RemoveEmojiIfLegacyTerminal(f'QSVEncC: {intel_qsv_status}'))
+                table_09_2_1.add_row(RemoveEmojiIfLegacyTerminal(f'NVEncC : {nvidia_nvenc_status}'))
+                table_09_2_1.add_row(RemoveEmojiIfLegacyTerminal(f'VCEEncC: {amd_vce_status}'))
+                print(Padding(table_09_2_1, (1, 2, 1, 2)))
+
+                hardware_encoder_type = cast(
+                    Literal['intel', 'nvidia', 'amd'],
+                    CustomPrompt.ask('ハードウェアエンコーダーの種類', default=default_hw_encoder, choices=available_hw_encoders),
+                )
+            else:
+                # GPU が検出されなかった場合、ソフトウェアエンコーダーへの切り替えを確認
+                while True:
+                    print(Padding('[yellow]GPU が検出されませんでした。[/yellow]', (0, 2, 0, 2)))
+                    fallback_to_software = bool(CustomConfirm.ask('ソフトウェアエンコーダーに切り替えますか？', default=True))
+                    if fallback_to_software:
+                        auto_encoding_encoder = 'software'
+                        print(Padding('[green]ソフトウェアエンコーダーを使用します。[/green]', (0, 2, 0, 2)))
+                        break
+                    else:
+                        # もう一度ハードウェアエンコーダーの選択に戻る
+                        table_09_2_retry = CreateTable()
+                        table_09_2_retry.add_column('10-2. エンコーダーの種類を選択してください。')
+                        table_09_2_retry.add_row('software: ソフトウェアエンコーダー（x264/x265）')
+                        table_09_2_retry.add_row('hardware: ハードウェアエンコーダー（QSV/NVENC/VCE）')
+                        table_09_2_retry.add_row('[yellow]注意: GPU が検出されていないため、ハードウェアエンコーダーは利用できない可能性があります。[/yellow]')
+                        print(Padding(table_09_2_retry, (1, 2, 1, 2)))
+
+                        auto_encoding_encoder = cast(
+                            Literal['software', 'hardware'],
+                            CustomPrompt.ask('エンコーダー種類', default='software', choices=['software', 'hardware']),
+                        )
+
+                        if auto_encoding_encoder == 'software':
+                            break
+                        # hardware を選択した場合はループを継続して再度 GPU 検出チェックを行う
+
+        table_09_3 = CreateTable()
+        table_09_3.add_column('10-3. エンコード完了後に元ファイルを削除しますか？')
+        table_09_3.add_row('元の録画ファイル（TS ファイル）を削除し、エンコード済みファイルのみを残します。')
+        table_09_3.add_row('[yellow]注意: 元ファイルを削除すると、元に戻すことはできません。[/yellow]')
+        print(Padding(table_09_3, (1, 2, 1, 2)))
+
+        delete_original_after_encoding = bool(CustomConfirm.ask('元ファイルを削除する', default=False))
+
+        table_09_4 = CreateTable()
+        table_09_4.add_column('10-4. 最大同時エンコード数を入力してください。')
+        table_09_4.add_row('同時に実行可能なエンコードタスクの数です。')
+        table_09_4.add_row('CPU/GPU の性能に応じて調整してください。')
+        table_09_4.add_row('推奨値: 1～3（ハードウェアエンコーダー使用時）')
+        print(Padding(table_09_4, (1, 2, 1, 2)))
+
+        while True:
+            max_concurrent_encodings_str = CustomPrompt.ask('最大同時エンコード数', default='1')
+            try:
+                max_concurrent_encodings = int(max_concurrent_encodings_str)
+                if max_concurrent_encodings < 1:
+                    print(Padding('[red]1 以上の数値を入力してください。[/red]', (0, 2, 0, 2)))
+                    continue
+                break
+            except ValueError:
+                print(Padding('[red]数値を入力してください。[/red]', (0, 2, 0, 2)))
+
     # ***** ソースコードのダウンロード *****
 
     # Git コマンドがインストールされているかどうか
@@ -613,17 +831,26 @@ def Installer(version: str, install_fork: bool) -> None:
             config_dict = dict(ruamel.yaml.YAML().load(file))
 
         # サーバー設定データの一部を事前に取得しておいた値で置き換え
-        ## インストーラーで置換するのはバックエンドや EDCB / Mirakurun の URL など、サーバーの起動に不可欠な値のみ
+        ## インストーラーで置換するのはバックエンドや EDCB / Mirakurun / EPGStation の URL など、サーバーの起動に不可欠な値のみ
         config_dict['general']['backend'] = backend
+        config_dict['general']['recorder'] = recorder
         if backend == 'EDCB':
             config_dict['general']['edcb_url'] = edcb_url
         elif backend == 'Mirakurun':
             config_dict['general']['mirakurun_url'] = mirakurun_url
+        if recorder == 'EPGStation':
+            config_dict['general']['epgstation_url'] = epgstation_url
         config_dict['general']['encoder'] = encoder
         config_dict['server']['port'] = server_port
         config_dict['video']['recorded_folders'] = recorded_folders
         config_dict['capture']['upload_folders'] = capture_upload_folders
         config_dict['discord']['token'] = discord_bot_token
+        config_dict['tsreplace_encoding']['auto_encoding_enabled'] = is_auto_encoding_enabled
+        config_dict['tsreplace_encoding']['auto_encoding_codec'] = auto_encoding_codec
+        config_dict['tsreplace_encoding']['auto_encoding_encoder'] = auto_encoding_encoder
+        config_dict['tsreplace_encoding']['hardware_encoder_type'] = hardware_encoder_type
+        config_dict['tsreplace_encoding']['delete_original_after_encoding'] = delete_original_after_encoding
+        config_dict['tsreplace_encoding']['max_concurrent_encodings'] = max_concurrent_encodings
 
         # サーバー設定データを保存
         SaveConfig(install_path / 'config.yaml', config_dict)
@@ -1041,7 +1268,7 @@ def Installer(version: str, install_fork: bool) -> None:
         ).stdout.strip()
 
         table_09 = CreateTable()
-        table_09.add_column('09. KonomiTV の Windows サービスの実行ユーザー名を入力してください。')
+        table_09.add_column('10. KonomiTV の Windows サービスの実行ユーザー名を入力してください。')
         table_09.add_row('KonomiTV の Windows サービスを一般ユーザーの権限で起動するために利用します。')
         table_09.add_row('ほかのユーザー権限で実行したい場合は、そのユーザー名を入力してください。')
         table_09.add_row(f'Enter キーを押すと、現在ログオン中のユーザー ({current_user_name_default}) が利用されます。')
@@ -1051,7 +1278,7 @@ def Installer(version: str, install_fork: bool) -> None:
         current_user_name: str = CustomPrompt.ask('KonomiTV の Windows サービスの実行ユーザー名', default=current_user_name_default)
 
         table_10 = CreateTable()
-        table_10.add_column(f'10. ユーザー ({current_user_name}) のパスワードを入力してください。')
+        table_10.add_column(f'11. ユーザー ({current_user_name}) のパスワードを入力してください。')
         table_10.add_row('KonomiTV の Windows サービスを一般ユーザーの権限で起動するために利用します。')
         table_10.add_row('入力されたパスワードがそれ以外の用途に利用されることはありません。')
         table_10.add_row('間違ったパスワードを入力すると、KonomiTV が起動できなくなります。')
