@@ -12,7 +12,7 @@ FROM ubuntu:22.04 AS thirdparty-downloader
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ダウンロード・展開に必要なパッケージのインストール
-RUN apt-get update && apt-get install -y --no-install-recommends aria2 ca-certificates unzip xz-utils wget
+RUN apt-get update && apt-get install -y --no-install-recommends aria2 ca-certificates unzip xz-utils
 
 # サードパーティーライブラリをダウンロード
 ## サードパーティーライブラリは変更が少ないので、先にダウンロード処理を実行してビルドキャッシュを効かせる
@@ -75,7 +75,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ## ref: https://github.com/rigaya/VCEEnc/blob/master/Install.ja.md
 RUN apt-get update && \
     # リポジトリ追加に必要な最低限のパッケージをインストール
-    apt-get install -y --no-install-recommends ca-certificates curl git gpg tzdata && \
+    apt-get install -y --no-install-recommends ca-certificates curl git gpg tzdata wget && \
     # Intel GPU リポジトリ
     curl -fsSL https://repositories.intel.com/gpu/intel-graphics.key | gpg --yes --dearmor --output /usr/share/keyrings/intel-graphics-keyring.gpg && \
     echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics-keyring.gpg] https://repositories.intel.com/gpu/ubuntu jammy unified' > /etc/apt/sources.list.d/intel-gpu-jammy.list && \
@@ -99,7 +99,6 @@ RUN apt-get update && \
         libfontconfig1 libfreetype6 libfribidi0 \
         # Intel GPU 関連のライブラリ
         intel-media-va-driver-non-free intel-opencl-icd libigfxcmrt7 libmfx1 libmfxgen1 libva-drm2 libva-x11-2 ocl-icd-opencl-dev \
-        amf-amdgpu-pro libamdenc-amdgpu-pro libdrm2-amdgpu vulkan-amdgpu-pro rocm-opencl-runtime opencl-legacy-amdgpu-pro-icd && \
         # NVIDIA GPU 関連のライブラリ
         cuda-nvrtc-12-8 libnpp-12-8 \
         # AMD GPU 関連のライブラリ
