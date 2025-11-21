@@ -45,8 +45,8 @@ from app.routers import (
 from app.streams.LiveStream import LiveStream
 from app.utils.edcb.EDCBTuner import EDCBTuner
 from app.utils.epgstation.EPGStationUtil import EPGStationUtil
-from discord_main import start_discord_bot, stop_discord_bot
 from app.utils.FastAPITaskUtil import repeat_every
+from discord_main import start_discord_bot, stop_discord_bot
 
 
 # もし Config() の実行時に AssertionError が発生した場合は、LoadConfig() を実行してサーバー設定データをロードする
@@ -326,7 +326,7 @@ async def Startup():
 
     # 番組情報を更新
     await Program.update()
-    
+
     # EPGStation への接続を確認（レコーダーが EPGStation の場合のみ）
     if CONFIG.general.recorder == 'EPGStation':
         async with EPGStationUtil() as epgstation:

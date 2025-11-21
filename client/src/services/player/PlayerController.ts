@@ -632,9 +632,11 @@ class PlayerController {
                 hls: {
                     ...Hls.DefaultConfig,
                     // Web Worker を有効にする
-                    enableWorker: is_offline_video ? false : true,
-                    // MediaSource が存在しない場合のみ ManagedMediaSource を利用する
-                    preferManagedMediaSource: false,
+                    enableWorker: true,
+                    // ManagedMediaSource が使える Safari では常に ManagedMediaSource を利用する
+                    // iPadOS Safari や macOS Safari では通常の MediaSource も使えるが、Safari のシェアは iOS ユーザーが圧倒的なので、
+                    // 動作確認上のパターンを iOS に揃えた方がバグなどの把握がしやすくなると考えられることから、ManagedMediaSource に統一する
+                    preferManagedMediaSource: true,
                     // startPosition に視聴履歴などから求めた再生位置を渡し、ロード開始時点で正しい Media Sequence を選択させる
                     // これを指定しないと manifest 解析後に sequence=0 からフラグメント取得が始まってしまう
                     startPosition: seek_seconds,
@@ -1387,24 +1389,32 @@ class PlayerController {
                 // hls.js の初期化時に startPosition を指定したことで、シーク時に常に startPosition に対応する HLS セグメントが
                 // ロードされるようになってしまうため、画質切り替えが完了する前に startPosition をデフォルト値の -1 に無理やり戻す
                 // こうすることで startPosition を指定しつつ、シーク時は従来通りシーク先のセグメントから先読みが開始されるようになる
-                const hls_plugin = this.player.plugins.hls!;  // ビデオ視聴時は常に hls.js が有効
-                const resetStartPosition = () => {
-                    hls_plugin.off(Hls.Events.FRAG_BUFFERED, resetStartPosition);
-                    hls_plugin.config.startPosition = -1;
-                    const internal_hls = hls_plugin as unknown as {
-                        streamController?: {
-                            startPosition?: number;
-                            nextLoadPosition?: number;
+                const hls_plugin = this.player.plugins.hls;
+                if (hls_plugin !== undefined) {
+                    const resetStartPosition = () => {
+                        hls_plugin.off(Hls.Events.FRAG_BUFFERED, resetStartPosition);
+                        hls_plugin.config.startPosition = -1;
+                        const internal_hls = hls_plugin as unknown as {
+                            streamController?: {
+                                startPosition?: number;
+                                nextLoadPosition?: number;
+                            };
                         };
-                    };
-                    if (internal_hls.streamController) {
-                        internal_hls.streamController.startPosition = -1;
-                        if (hls_plugin.media) {
-                            internal_hls.streamController.nextLoadPosition = hls_plugin.media.currentTime;
+                        if (internal_hls.streamController) {
+                            internal_hls.streamController.startPosition = -1;
+                            if (hls_plugin.media) {
+                                internal_hls.streamController.nextLoadPosition = hls_plugin.media.currentTime;
+                            }
                         }
-                    }
-                };
-                hls_plugin.on(Hls.Events.FRAG_BUFFERED, resetStartPosition);
+                    };
+                    hls_plugin.on(Hls.Events.FRAG_BUFFERED, resetStartPosition);
+                } else {
+                    // 実はなぜか hls.js を使わずとも Safari では普通に Native HLS 再生できてしまうようなので、警告を出しつつ何もしない
+                    // DPlayer 側の機能により、Native HLS 再生であっても字幕は表示される
+                    console.warn('\u001b[31m[PlayerController] hls.js plugin not found. (Native HLS playback may be supported on Safari.)');
+                    this.player.notice('お使いの iOS / iPadOS Safari は hls.js での再生に対応していません。代わりに Native HLS での再生を試みますが、正常に再生できない可能性があります。',
+                        undefined, undefined, '#FFA86A');
+                }
 
                 // 必ず最初はローディング状態で、背景写真を表示する
                 player_store.is_loading = true;

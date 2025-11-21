@@ -2,9 +2,7 @@ import { defineStore } from 'pinia';
 
 import type { OfflineDownloadMetadata, OfflineDownloadProgressUpdate, OfflineStorageBackend } from '@/offline/types';
 
-import Message from '@/message';
 import OfflineStorage from '@/offline/storage';
-import APIClient from '@/services/APIClient';
 
 interface ProgressState {
     [id: string]: OfflineDownloadProgressUpdate;

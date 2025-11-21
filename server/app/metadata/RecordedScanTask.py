@@ -96,6 +96,11 @@ class RecordedScanTask:
     # 継続更新を強制的に完了とする時間 (秒)
     CONTINUOUS_UPDATE_MAX_SECONDS: ClassVar[int] = 86400  # 24時間
 
+    # 既知のハッシュ衝突が発生しうる file_hash の集合
+    KNOWN_COLLISION_FILE_HASHES: ClassVar[set[str]] = {
+        'd1dd210d6b1312cb342b56d02bd5e651',
+    }
+
 
     def __new__(cls) -> RecordedScanTask:
         """
@@ -450,6 +455,41 @@ class RecordedScanTask:
                 except Exception as ex:
                     logging.error(f'{thumbnail_path}: Error deleting orphaned thumbnail file:', exc_info=ex)
 
+        # かつてのバグで RecordedVideo.file_hash が衝突している録画ファイルのメタデータを再解析する
+        ## トランザクション配下に入れることでパフォーマンスが向上する
+        ## ref: https://github.com/tsukumijima/KonomiTV/commit/92e8630f41b6440ebd10defa5fdde1489ac7376a
+        async with transactions.in_transaction():
+            collision_videos = await RecordedVideo.filter(
+                file_hash__in=list(self.KNOWN_COLLISION_FILE_HASHES),
+            ).all()
+            processed_collision_paths: set[str] = set()
+            if len(collision_videos) > 0:
+                logging.info(f'Found {len(collision_videos)} videos affected by known hash collisions. Reanalyzing...')
+                for collision_video in collision_videos:
+                    file_path_str = collision_video.file_path
+                    # 既に処理済みのファイルはスキップ
+                    if file_path_str in processed_collision_paths:
+                        continue
+                    # 録画中のファイルは今後の解析に任せる
+                    if collision_video.status == 'Recording':
+                        continue
+                    file_path = anyio.Path(file_path_str)
+                    # ファイルが存在しない場合はスキップ
+                    if not await self.isFileExists(file_path):
+                        continue
+                    try:
+                        # メタデータ再解析を実行
+                        logging.info(f'{file_path}: Reanalyzing due to known hash collision ({collision_video.file_hash}).')
+                        await self.processRecordedFile(
+                            file_path = file_path,
+                            force_update = True,
+                        )
+                        # 処理済みファイルに追加
+                        processed_collision_paths.add(file_path_str)
+                        logging.info(f'{file_path}: Reanalysis completed.')
+                    except Exception as ex:
+                        logging.error(f'{file_path}: Failed to reanalyze known hash collision file:', exc_info=ex)
+
         logging.info('Batch scan of recording folders has been completed.')
         self._is_batch_scan_running = False
 
@@ -654,8 +694,9 @@ class RecordedScanTask:
         original_path: anyio.Path | None = None,
         existing_db_recorded_videos: dict[anyio.Path, RecordedVideoSummary] | None = None,
         force_update: bool = False,
-        force_allow_recent: bool = False,
         is_tsuide: bool = False,
+        force_allow_recent: bool = False,
+        wait_background_analysis: bool = False,
     ) -> None:
         """
         指定された録画ファイルのメタデータを解析し、DB に永続化する
@@ -666,7 +707,9 @@ class RecordedScanTask:
             original_path (anyio.Path | None): シンボリックリンクなどで取得した元のファイルパス
             existing_db_recorded_videos (dict[anyio.Path, RecordedVideoSummary] | None): 既に DB に永続化されている録画ファイルパスと RecordedVideo のサマリーデータのマッピング
                 (ファイル変更イベントから呼ばれた場合、watchfiles 初期化時に取得した全レコードと今で状態が一致しているとは限らないため、None が入る)
-            force_update (bool): 既に DB に登録されている録画ファイルのメタデータを強制的に再解析するかどうか
+            force_update (bool): 既に DB に登録されている録画ファイルのメタデータを強制的に再解析するかどうか (デフォルト: False)
+            force_allow_recent (bool): mtime が新しいファイルでも強制的に解析を許可するかどうか (デフォルト: False)
+            wait_background_analysis (bool): バックグラウンド解析が完了するまで待つかどうか (デフォルト: False)
         """
 
         # ファイルパスに対応するロックを取得または作成
@@ -949,6 +992,11 @@ class RecordedScanTask:
                 await self.__saveRecordedMetadataToDB(recorded_program, existing_db_recorded_video_after_analyze)
                 logging.info(f'{file_path}: {"Updated" if existing_db_recorded_video_after_analyze else "Saved"} metadata to DB. (status: {recorded_program.recorded_video.status})')
 
+                # wait_background_analysis が True の場合のみ、バックグラウンド解析タスクが完了するまで待つ
+                # 録画番組メタデータ再解析 API では、API レスポンスの返却をもってメタデータ再解析が完全に完了したことをユーザーに伝える必要があるため
+                if wait_background_analysis is True and file_path in self._background_tasks:
+                    await self._background_tasks[file_path]
+
             except Exception as ex:
                 logging.error(f'{file_path}: Error processing file inside lock:', exc_info=ex)
             finally:
@@ -1165,6 +1213,7 @@ class RecordedScanTask:
         file_path = anyio.Path(recorded_program.recorded_video.file_path)
 
         try:
+            logging.info(f'{file_path}: Starting background analysis task...')
             # ProcessLimiter で稼働中のバックグラウンドタスクの同時実行数を CPU コア数の 50% に制限
             async with ProcessLimiter.getSemaphore('RecordedScanTask'):
                 # DriveIOLimiter で同一 HDD に対してのバックグラウンドタスクの同時実行数を原則1セッションに制限
@@ -1175,18 +1224,15 @@ class RecordedScanTask:
                         # 録画ファイルの CM 区間を検出し DB に保存
                         CMSectionsDetector(file_path, recorded_program.recorded_video.duration).detectAndSave(),
                         # シークバー用サムネイルとリスト表示用の代表サムネイルの両方を生成
-                        ## skip_tile_if_exists=True を指定し、同一内容のファイルが複数ある場合などに
-                        ## 既に生成されている時間のかかるシークバー用サムネイルを使い回し、処理時間短縮を図る
-                        ThumbnailGenerator.fromRecordedProgram(recorded_program).generateAndSave(skip_tile_if_exists=True),
+                        ThumbnailGenerator.fromRecordedProgram(recorded_program).generateAndSave(),
                     )
-
             # バックグラウンド解析完了後、自動エンコードが有効な場合は開始
             await self.__startAutoEncodingIfEnabled(recorded_program)
 
-            logging.info(f'{file_path}: Background analysis completed.')
+            logging.info(f'{file_path}: Background analysis task completed.')
 
         except Exception as ex:
-            logging.error(f'{file_path}: Error in background analysis:', exc_info=ex)
+            logging.error(f'{file_path}: Error in background analysis task:', exc_info=ex)
         finally:
             # 完了したタスクを管理対象から削除
             self._background_tasks.pop(file_path, None)
