@@ -694,9 +694,6 @@ class RecordedScanTask:
         original_path: anyio.Path | None = None,
         existing_db_recorded_videos: dict[anyio.Path, RecordedVideoSummary] | None = None,
         force_update: bool = False,
-        is_tsuide: bool = False,
-        force_allow_recent: bool = False,
-        wait_background_analysis: bool = False,
     ) -> None:
         """
         指定された録画ファイルのメタデータを解析し、DB に永続化する
@@ -707,9 +704,7 @@ class RecordedScanTask:
             original_path (anyio.Path | None): シンボリックリンクなどで取得した元のファイルパス
             existing_db_recorded_videos (dict[anyio.Path, RecordedVideoSummary] | None): 既に DB に永続化されている録画ファイルパスと RecordedVideo のサマリーデータのマッピング
                 (ファイル変更イベントから呼ばれた場合、watchfiles 初期化時に取得した全レコードと今で状態が一致しているとは限らないため、None が入る)
-            force_update (bool): 既に DB に登録されている録画ファイルのメタデータを強制的に再解析するかどうか (デフォルト: False)
-            force_allow_recent (bool): mtime が新しいファイルでも強制的に解析を許可するかどうか (デフォルト: False)
-            wait_background_analysis (bool): バックグラウンド解析が完了するまで待つかどうか (デフォルト: False)
+            force_update (bool): 既に DB に登録されている録画ファイルのメタデータを強制的に再解析するかどうか
         """
 
         # ファイルパスに対応するロックを取得または作成
@@ -1226,10 +1221,7 @@ class RecordedScanTask:
                         # シークバー用サムネイルとリスト表示用の代表サムネイルの両方を生成
                         ThumbnailGenerator.fromRecordedProgram(recorded_program).generateAndSave(),
                     )
-            # バックグラウンド解析完了後、自動エンコードが有効な場合は開始
-            await self.__startAutoEncodingIfEnabled(recorded_program)
-
-            logging.info(f'{file_path}: Background analysis task completed.')
+            logging.info(f'{file_path}: Background analysis completed.')
 
         except Exception as ex:
             logging.error(f'{file_path}: Error in background analysis task:', exc_info=ex)
