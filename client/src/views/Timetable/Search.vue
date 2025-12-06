@@ -146,8 +146,8 @@
                                     density="comfortable"
                                     class="sort-toggle"
                                 >
-                                    <v-btn value="newest">新しい順</v-btn>
-                                    <v-btn value="oldest">古い順</v-btn>
+                                    <v-btn value="oldest">降順</v-btn>
+                                    <v-btn value="newest">昇順</v-btn>
                                 </v-btn-toggle>
                             </div>
                         </div>
@@ -266,7 +266,7 @@ const breadcrumbs = [
 const query = ref('');
 const search_keyword_input = ref('');
 
-const search_sort_order = ref<'newest' | 'oldest'>('newest');
+const search_sort_order = ref<'newest' | 'oldest'>('oldest');
 const search_time_filter = ref<'all' | 'upcoming' | 'today'>('all');
 const search_selected_channels = ref<string[]>([]);
 const search_is_title_only = ref(false);

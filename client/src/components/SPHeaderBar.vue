@@ -59,7 +59,7 @@ const isVideoSection = (path: string) => {
 const getSearchPath = () => {
     return isVideoSection(route.path)
         ? '/videos/search'
-        : '/tv/search';
+        : '/timetable/search';
 };
 
 // 検索窓を開く
