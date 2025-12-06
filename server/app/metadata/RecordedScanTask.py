@@ -694,6 +694,9 @@ class RecordedScanTask:
         original_path: anyio.Path | None = None,
         existing_db_recorded_videos: dict[anyio.Path, RecordedVideoSummary] | None = None,
         force_update: bool = False,
+        force_allow_recent: bool = False,
+        is_tsuide: bool = False,
+        wait_background_analysis: bool = False,
     ) -> None:
         """
         指定された録画ファイルのメタデータを解析し、DB に永続化する
@@ -705,6 +708,9 @@ class RecordedScanTask:
             existing_db_recorded_videos (dict[anyio.Path, RecordedVideoSummary] | None): 既に DB に永続化されている録画ファイルパスと RecordedVideo のサマリーデータのマッピング
                 (ファイル変更イベントから呼ばれた場合、watchfiles 初期化時に取得した全レコードと今で状態が一致しているとは限らないため、None が入る)
             force_update (bool): 既に DB に登録されている録画ファイルのメタデータを強制的に再解析するかどうか
+            force_allow_recent (bool): mtime が新しすぎるファイルでも強制的に解析するかどうか
+            is_tsuide (bool): ついで録画かどうか
+            wait_background_analysis (bool): バックグラウンド解析タスクが完了するまで待機するかどうか
         """
 
         # ファイルパスに対応するロックを取得または作成
