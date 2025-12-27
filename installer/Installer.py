@@ -57,45 +57,44 @@ def Installer(version: str, install_fork: bool) -> None:
     # ARM デバイスかどうか
     is_arm_device = platform.machine() == 'aarch64'
 
-    # Linux: Docker がインストールされている場合、Docker + Docker Compose を使ってインストールするかを訊く
-    if platform_type == 'Linux':
+    # Docker がインストールされている場合、Docker + Docker Compose を使ってインストールするかを訊く
+    is_install_with_docker: bool = False
 
-        is_install_with_docker: bool = False
+    # Docker + Docker Compose がインストールされているかを検出
+    ## 現状 ARM 環境では Docker を使ったインストール方法はサポートしていない
+    is_docker_installed = IsDockerInstalled()
+    if is_docker_installed is True and is_arm_device is False:
+        ShowPanel([
+            f'お使いの PC には Docker と Docker Compose {"V2" if IsDockerComposeV2() else "V1"} がインストールされています。',
+            'Docker + Docker Compose を使ってインストールしますか？',
+        ], padding=(1, 2, 1, 2))
 
-        # Docker + Docker Compose がインストールされているかを検出
-        ## 現状 ARM 環境では Docker を使ったインストール方法はサポートしていない
-        is_docker_installed = IsDockerInstalled()
-        if is_docker_installed is True and is_arm_device is False:
-            ShowPanel([
-                f'お使いの PC には Docker と Docker Compose {"V2" if IsDockerComposeV2() else "V1"} がインストールされています。',
-                'Docker + Docker Compose を使ってインストールしますか？',
-            ], padding=(1, 2, 1, 2))
+        # Docker を使ってインストールするかを訊く (Y/N)
+        is_install_with_docker = bool(CustomConfirm.ask('Docker + Docker Compose でインストールする', default=True))
+        if is_install_with_docker is True:
 
-            # Docker を使ってインストールするかを訊く (Y/N)
-            is_install_with_docker = bool(CustomConfirm.ask('Docker + Docker Compose でインストールする', default=True))
-            if is_install_with_docker is True:
+            # プラットフォームタイプを Linux-Docker にセット
+            platform_type = 'Linux-Docker'
 
-                # プラットフォームタイプを Linux-Docker にセット
-                platform_type = 'Linux-Docker'
-
-                # Docker がインストールされているものの Docker サービスが停止している場合に備え、Docker サービスを起動しておく
-                ## すでに起動している場合は何も起こらない
+            # Linux の場合、Docker がインストールされているものの Docker サービスが停止している場合に備え、Docker サービスを起動しておく
+            ## すでに起動している場合は何も起こらない
+            if os.name != 'nt':
                 subprocess.run(
                     args = ['systemctl', 'start', 'docker'],
                     stdout = subprocess.DEVNULL,  # 標準出力を表示しない
                     stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
                 )
 
-        # Docker 使ってインストールしない場合、pm2 コマンドがインストールされていなければここで終了する
-        ## PM2 がインストールされていないと PM2 サービスでの自動起動ができないため
-        if is_install_with_docker is False:
-            if shutil.which('pm2') is None:
-                ShowPanel([
-                    '[yellow]KonomiTV を Docker を使わずにインストールするには PM2 が必要です。[/yellow]',
-                    'PM2 は、KonomiTV サービスのプロセスマネージャーとして利用しています。',
-                    'Node.js が導入されていれば、[cyan]sudo npm install -g pm2[/cyan] でインストールできます。',
-                ])
-                return  # 処理中断
+    # Linux: Docker 使ってインストールしない場合、pm2 コマンドがインストールされていなければここで終了する
+    ## PM2 がインストールされていないと PM2 サービスでの自動起動ができないため
+    if platform_type == 'Linux':
+        if shutil.which('pm2') is None:
+            ShowPanel([
+                '[yellow]KonomiTV を Docker を使わずにインストールするには PM2 が必要です。[/yellow]',
+                'PM2 は、KonomiTV サービスのプロセマネージャーとして利用しています。',
+                'Node.js が導入されていれば、[cyan]sudo npm install -g pm2[/cyan] でインストールできます。',
+            ])
+            return  # 処理中断
 
     # Docker Compose V2 かどうかでコマンド名を変える
     ## Docker Compose V1 は docker-compose 、V2 は docker compose という違いがある
@@ -969,18 +968,42 @@ def Installer(version: str, install_fork: bool) -> None:
             shutil.copyfile(install_path / 'docker-compose.example.yaml', install_path / 'docker-compose.yaml')
 
             # docker-compose.yaml の内容を読み込む
-            with open(install_path / 'docker-compose.yaml', encoding='utf-8') as file:
+            with open(install_path / 'docker-compose.yaml', mode='r', encoding='utf-8') as file:
                 text = file.read()
+
+            # Windows の場合、network_mode: host が使えないため、ポートマッピングを追加する
+            if os.name == 'nt':
+                # network_mode: host をコメントアウト
+                text = text.replace('network_mode: host', '# network_mode: host')
+                # ports 設定を追加
+                text = text.replace('    container_name: KonomiTV', f'    container_name: KonomiTV\n    ports:\n      - "{server_port}:{server_port}"\n      - "{server_port + 10}:{server_port + 10}"')
+                # ボリュームのマウント設定の source: '/' を source: 'C:/' (ドライブレター) に置換
+                ## 本来はインストール先のドライブレターに合わせるべきだが、一旦 C:/ にしておく
+                text = text.replace("source: '/'", f"source: '{install_path.anchor.replace('\\', '/')}'")
 
             # GPU が1個も搭載されていない特殊な環境の場合
             ## /dev/dri/ 以下のデバイスファイルが存在しないので、デバイスのマウント設定をコメントアウトしないとコンテナが起動できない
-            if Path('/dev/dri/').is_dir() is False:
+            ## Windows の場合は Docker Desktop (WSL2) 側で自動的にマウントされるか、あるいはホスト側からはパスが見えないため、
+            ## 混乱を避けるため Linux かつデバイスファイルが存在しない場合のみチェックする
+            if os.name != 'nt' and Path('/dev/dri/').is_dir() is False:
                 # デフォルト (置換元) の config.yaml の記述
                 old_text = (
                     '    devices:\n'
                     '      - \'/dev/dri/:/dev/dri/\''
                 )
                 # 置換後の config.yaml の記述
+                new_text = (
+                    '    # devices:\n'
+                    '    #   - \'/dev/dri/:/dev/dri/\''
+                )
+                text = text.replace(old_text, new_text)
+
+            # Windows の場合、devices: /dev/dri/ は使えないためコメントアウトする
+            if os.name == 'nt':
+                old_text = (
+                    '    devices:\n'
+                    '      - \'/dev/dri/:/dev/dri/\''
+                )
                 new_text = (
                     '    # devices:\n'
                     '    #   - \'/dev/dri/:/dev/dri/\''
@@ -1236,7 +1259,7 @@ def Installer(version: str, install_fork: bool) -> None:
 
     # ***** Windows: Windows Defender ファイアウォールに受信規則を追加 *****
 
-    if platform_type == 'Windows':
+    if os.name == 'nt':
 
         print(Padding('Windows Defender ファイアウォールに受信規則を追加しています…', (1, 2, 0, 2)))
         progress = CreateBasicInfiniteProgress()
@@ -1251,15 +1274,28 @@ def Installer(version: str, install_fork: bool) -> None:
             )
 
             # "プライベート" と "パブリック" で有効な受信規則を追加
-            subprocess.run(
-                args = [
-                    'netsh', 'advfirewall', 'firewall', 'add', 'rule', 'name=KonomiTV Service', 'description=KonomiTV Windows Service.',
-                    'profile=private,public', 'enable=yes', 'action=allow', 'dir=in', 'protocol=TCP',
-                    f'program={install_path / "server/thirdparty/Akebi/akebi-https-server.exe"}',
-                ],
-                stdout = subprocess.DEVNULL,  # 標準出力を表示しない
-                stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
-            )
+            if platform_type == 'Linux-Docker':
+                # Docker の場合はポートで許可
+                subprocess.run(
+                    args = [
+                        'netsh', 'advfirewall', 'firewall', 'add', 'rule', 'name=KonomiTV Service', 'description=KonomiTV Docker Service.',
+                        'profile=private,public', 'enable=yes', 'action=allow', 'dir=in', 'protocol=TCP',
+                        f'localport={server_port}',
+                    ],
+                    stdout = subprocess.DEVNULL,  # 標準出力を表示しない
+                    stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
+                )
+            else:
+                # 通常インストールの場合は実行ファイルで許可
+                subprocess.run(
+                    args = [
+                        'netsh', 'advfirewall', 'firewall', 'add', 'rule', 'name=KonomiTV Service', 'description=KonomiTV Windows Service.',
+                        'profile=private,public', 'enable=yes', 'action=allow', 'dir=in', 'protocol=TCP',
+                        f'program={install_path / "server/thirdparty/Akebi/akebi-https-server.exe"}',
+                    ],
+                    stdout = subprocess.DEVNULL,  # 標準出力を表示しない
+                    stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
+                )
 
     # ***** Windows: Windows サービスのインストール・起動 *****
 
