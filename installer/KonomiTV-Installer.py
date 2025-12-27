@@ -92,18 +92,19 @@ def main():
         ])
         return  # 処理中断
 
-    # Ubuntu 20.04 LTS / Debian 11 以降以外の Linux ディストリビューションの場合
-    ## Ubuntu 20.04 LTS / Debian 11 以降以外の Linux ディストリビューションは正式にサポートされていない旨を表示する
+    # Ubuntu 20.04 LTS / Debian 11 / Arch Linux 以降以外の Linux ディストリビューションの場合
+    ## Ubuntu 20.04 LTS / Debian 11 / Arch Linux 以降以外の Linux ディストリビューションは正式にサポートされていない旨を表示する
     ## Debian 11 の glibc バージョンは 2.31 で、Ubuntu 20.04 LTS (更新版) の glibc バージョンと同じ
     ## Linux ディストリビューションは数が多すぎるので、すべて動作確認なんてやってられない……
     if os.name != 'nt' and not (distro.id() == 'ubuntu' and int(distro.major_version()) >= 20) and \
-        not (distro.id() == 'debian' and int(distro.major_version()) >= 11):
+        not (distro.id() == 'debian' and int(distro.major_version()) >= 11) and \
+        not (distro.id() == 'arch'):
         table = CreateTable()
         table.add_column(
             f'[yellow]注意: KonomiTV は {distro.name(pretty=True)} を正式にサポートしていません。[/yellow]\n'
             '動作する可能性はありますが、動作しない場合もサポートは一切できません。\n'
             '特に glibc 2.31 未満の OS では、サードパーティーライブラリの関係で動作しません。\n'
-            '対応コストを鑑み、Ubuntu/Debian 以外のサポート予定はありません。予めご了承ください。'
+            '対応コストを鑑み、Ubuntu/Debian/Arch Linux 以外のサポート予定はありません。予めご了承ください。'
         )
         if current_arch == 'x86_64':
             table.add_row(

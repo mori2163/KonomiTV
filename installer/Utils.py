@@ -2,6 +2,7 @@
 import asyncio
 import datetime
 import os
+import shutil
 import subprocess
 import time
 from collections.abc import Callable
@@ -477,12 +478,7 @@ def IsDockerInstalled() -> bool:
     try:
 
         # Docker コマンドの存在確認
-        docker_result = subprocess.run(
-            args = ['/usr/bin/bash', '-c', 'type docker'],
-            stdout = subprocess.DEVNULL,  # 標準出力を表示しない
-            stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
-        )
-        if docker_result.returncode != 0:
+        if shutil.which('docker') is None:
             return False  # Docker がインストールされていない
 
         # Docker Compose V2 の存在確認
@@ -533,12 +529,7 @@ def IsGitInstalled() -> bool:
             return True
     ## Linux
     else:
-        result = subprocess.run(
-            args = ['/usr/bin/bash', '-c', 'type git'],
-            stdout = subprocess.DEVNULL,  # 標準出力を表示しない
-            stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
-        )
-        if result.returncode == 0:
+        if shutil.which('git') is not None:
             return True
 
     return False

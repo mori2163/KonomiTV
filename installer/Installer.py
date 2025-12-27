@@ -89,12 +89,7 @@ def Installer(version: str, install_fork: bool) -> None:
         # Docker 使ってインストールしない場合、pm2 コマンドがインストールされていなければここで終了する
         ## PM2 がインストールされていないと PM2 サービスでの自動起動ができないため
         if is_install_with_docker is False:
-            result = subprocess.run(
-                args = ['/usr/bin/bash', '-c', 'type pm2'],
-                stdout = subprocess.DEVNULL,  # 標準出力を表示しない
-                stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
-            )
-            if result.returncode != 0:
+            if shutil.which('pm2') is None:
                 ShowPanel([
                     '[yellow]KonomiTV を Docker を使わずにインストールするには PM2 が必要です。[/yellow]',
                     'PM2 は、KonomiTV サービスのプロセスマネージャーとして利用しています。',
@@ -387,11 +382,18 @@ def Installer(version: str, install_fork: bool) -> None:
     elif platform_type == 'Linux' or platform_type == 'Linux-Docker':
         # もし lshw コマンドがインストールされていなかったらインストールする
         if shutil.which('lshw') is None:
-            subprocess.run(
-                args = ['apt-get', 'install', '-y', 'lshw'],
-                stdout = subprocess.DEVNULL,  # 標準出力を表示しない
-                stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
-            )
+            if distro.id() == 'arch':
+                subprocess.run(
+                    args = ['pacman', '-S', '--noconfirm', 'lshw'],
+                    stdout = subprocess.DEVNULL,  # 標準出力を表示しない
+                    stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
+                )
+            else:
+                subprocess.run(
+                    args = ['apt-get', 'install', '-y', 'lshw'],
+                    stdout = subprocess.DEVNULL,  # 標準出力を表示しない
+                    stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
+                )
         # lshw コマンドを実行して GPU 情報を取得
         gpu_info_json = subprocess.run(
             args = ['lshw', '-class', 'display', '-json'],
@@ -1089,6 +1091,8 @@ def Installer(version: str, install_fork: bool) -> None:
                     ])
                     ShowPanel([
                         'Intel Media Driver は以下のコマンドでインストールできます。',
+                        'Arch Linux:',
+                        '[cyan]sudo pacman -S intel-media-driver libva-intel-driver intel-compute-runtime[/cyan]',
                         'Ubuntu 24.04 LTS:',
                         '[cyan]curl -fsSL https://repositories.intel.com/gpu/intel-graphics.key | sudo gpg --yes --dearmor --output /usr/share/keyrings/intel-graphics-keyring.gpg && echo \'deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics-keyring.gpg] https://repositories.intel.com/gpu/ubuntu noble unified\' | sudo tee /etc/apt/sources.list.d/intel-gpu-noble.list > /dev/null && sudo apt update && sudo apt install -y intel-media-va-driver-non-free intel-opencl-icd libigfxcmrt7 libmfx1 libmfxgen1 libva-drm2 libva-x11-2[/cyan]',
                         'Ubuntu 22.04 LTS:',
