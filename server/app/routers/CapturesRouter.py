@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, cast
 
 import puremagic
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from PIL import Image
 
@@ -29,21 +29,27 @@ router = APIRouter(
     summary = 'キャプチャ画像一覧 API',
     response_model = list[Capture],
 )
-async def CapturesListAPI():
+async def CapturesListAPI(
+    response: Response,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int | None, Query(ge=1)] = None,
+):
     """
     保存されているキャプチャ画像を年月単位で返す。
 
     Args:
-        なし
+        response (Response): レスポンスオブジェクト
+        skip (int): 取得を開始する位置
+        limit (int | None): 取得する件数
 
     Returns:
         list[Capture]: キャプチャ画像のリスト
     """
 
-    # 返却するキャプチャリスト
-    captures: list[Capture] = []
-
     # キャプチャ保存フォルダ配下のすべてのファイルを走査
+    # (ファイルパス, フォルダID) のタプルのリスト
+    capture_files: list[tuple[Path, str]] = []
+
     for upload_folder in Config().capture.upload_folders:
         upload_folder_path = Path(upload_folder)
         if not upload_folder_path.exists():
@@ -54,55 +60,74 @@ async def CapturesListAPI():
 
         for file in upload_folder_path.glob('*'):
             suffix = file.suffix.lower()
-            is_jpeg = suffix in {'.jpg', '.jpeg'}
-            if file.is_file() and (is_jpeg or suffix == '.png'):
-                # ファイル名から情報をパース
-                time = None
-                channel_name = None
-                program_title = None
+            if file.is_file() and suffix in {'.jpg', '.jpeg', '.png'}:
+                capture_files.append((file, folder_id))
 
-                # 画像のメタデータ (EXIF) から撮影日時を取得
-                if is_jpeg:
-                    try:
-                        with Image.open(file) as img:
-                            # EXIF データを取得
-                            exif_data = img.getexif()
-                            if exif_data:
-                                # DateTimeOriginal (撮影日時) タグ (36867) を探す
-                                datetime_original_str = exif_data.get(36867)
-                                if datetime_original_str and isinstance(datetime_original_str, str):
-                                    # 'YYYY:MM:DD HH:MM:SS' 形式の文字列をパース
-                                    time = datetime.strptime(datetime_original_str, '%Y:%m:%d %H:%M:%S')
-                                else:
-                                    # DateTime (ファイル変更日時) タグ (306) を探す
-                                    datetime_str = exif_data.get(306)
-                                    if datetime_str and isinstance(datetime_str, str):
-                                        time = datetime.strptime(datetime_str, '%Y:%m:%d %H:%M:%S')
-                    except Exception:
-                        # Pillow で開けない、EXIF がない、パースできないなどのエラーは無視
-                        pass
+    # ファイル名でソート (降順)
+    # ファイル名に日時が含まれているため、ファイル名でソートすれば実質的に日時順になる
+    # すべてのファイルの EXIF を読み込むのは重いため、ファイル名でのソートで代用している
+    capture_files.sort(key=lambda x: x[0].name, reverse=True)
 
-                # うまくいかなかったらファイル名から獲得
-                if time is None:
-                    # ex: Capture_20250630-183909.jpg
-                    match = re.match(r'Capture_(\d{8}-\d{6})', file.name)
-                    if match:
-                        try:
-                            time = datetime.strptime(match.group(1), '%Y%m%d-%H%M%S')
-                        except ValueError:
-                            pass
+    # 総件数をヘッダーにセット
+    response.headers['X-Total-Count'] = str(len(capture_files))
 
-                captures.append(Capture(
-                    name=file.name,
-                    size=file.stat().st_size,
-                    url=f'/captures/{folder_id}/{file.name}',
-                    time=time,
-                    program_title=program_title,
-                    channel_name=channel_name,
-                ))
+    # ページネーション
+    if limit is not None:
+        capture_files = capture_files[skip : skip + limit]
+    else:
+        capture_files = capture_files[skip:]
 
-    # ファイル名でソート
-    captures.sort(key=lambda x: x.name, reverse=True)
+    # 返却するキャプチャリスト
+    captures: list[Capture] = []
+
+    for file, folder_id in capture_files:
+        suffix = file.suffix.lower()
+        is_jpeg = suffix in {'.jpg', '.jpeg'}
+
+        # ファイル名から情報をパース
+        time = None
+        channel_name = None
+        program_title = None
+
+        # 画像のメタデータ (EXIF) から撮影日時を取得
+        if is_jpeg:
+            try:
+                with Image.open(file) as img:
+                    # EXIF データを取得
+                    exif_data = img.getexif()
+                    if exif_data:
+                        # DateTimeOriginal (撮影日時) タグ (36867) を探す
+                        datetime_original_str = exif_data.get(36867)
+                        if datetime_original_str and isinstance(datetime_original_str, str):
+                            # 'YYYY:MM:DD HH:MM:SS' 形式の文字列をパース
+                            time = datetime.strptime(datetime_original_str, '%Y:%m:%d %H:%M:%S')
+                        else:
+                            # DateTime (ファイル変更日時) タグ (306) を探す
+                            datetime_str = exif_data.get(306)
+                            if datetime_str and isinstance(datetime_str, str):
+                                time = datetime.strptime(datetime_str, '%Y:%m:%d %H:%M:%S')
+            except Exception as ex:
+                # Pillow で開けない、EXIF がない、パースできないなどのエラーは無視
+                logging.debug(f'[CapturesRouter][CapturesListAPI] Failed to get EXIF from {file.name}: {ex}')
+
+        # うまくいかなかったらファイル名から獲得
+        if time is None:
+            # ex: Capture_20250630-183909.jpg
+            match = re.match(r'Capture_(\d{8}-\d{6})', file.name)
+            if match:
+                try:
+                    time = datetime.strptime(match.group(1), '%Y%m%d-%H%M%S')
+                except ValueError as ex:
+                    logging.debug(f'[CapturesRouter][CapturesListAPI] Failed to parse time from filename {file.name}: {ex}')
+
+        captures.append(Capture(
+            name=file.name,
+            size=file.stat().st_size,
+            url=f'/captures/{folder_id}/{file.name}',
+            time=time,
+            program_title=program_title,
+            channel_name=channel_name,
+        ))
 
     return captures
 
