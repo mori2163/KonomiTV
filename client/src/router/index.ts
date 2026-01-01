@@ -134,6 +134,11 @@ const router = createRouter({
             component: () => import('@/views/Settings/Twitter.vue'),
         },
         {
+            path: '/settings/discord',
+            name: 'Settings Discord',
+            component: () => import('@/views/Settings/Discord.vue'),
+        },
+        {
             path: '/settings/server',
             name: 'Settings Server',
             component: () => import('@/views/Settings/Server.vue'),
