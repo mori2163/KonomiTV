@@ -5,8 +5,16 @@ import Message from '@/message';
 import APIClient from '@/services/APIClient';
 import Utils, { Semaphore } from '@/utils';
 
+export interface ICapture {
+    name: string;
+    size: number;
+    url: string;
+    time: string | null;
+    program_title: string | null;
+    channel_name: string | null;
+}
 
-class Captures {
+export class Captures {
 
     // 同時アップロード数の上限 & セマフォインスタンス
     private static readonly MAX_CONCURRENT_UPLOADS = 5;
@@ -96,7 +104,38 @@ class Captures {
         }
     }
 
-    // TODO: キャプチャ管理機能の実装時に API を追加する
+    /**
+     * キャプチャの一覧を取得する
+     * @returns キャプチャの一覧
+     */
+    static async fetchCaptures(): Promise<ICapture[] | null> {
+        const response = await APIClient.get<ICapture[]>('/captures');
+        if (response.type === 'success') {
+            const captures = response.data.map(capture => ({
+                ...capture,
+                url: `/api${capture.url}`,
+            }));
+            return captures;
+        }
+        return null;
+    }
+
+    /**
+     * キャプチャをサーバーから削除する
+     * @param capture_url 削除するキャプチャの URL
+     * @returns 成否
+     */
+    public static async deleteCapture(capture_url: string): Promise<boolean> {
+        const url_parts = capture_url.split('/');
+        const capture_name = url_parts.pop();
+        const folder_id = url_parts.pop();
+        const response = await APIClient.delete(`/captures/${folder_id}/${capture_name}`);
+        if (response.type === 'error') {
+            APIClient.showGenericError(response, 'キャプチャの削除に失敗しました。');
+            return false;
+        }
+        return true;
+    }
 }
 
 export default Captures;

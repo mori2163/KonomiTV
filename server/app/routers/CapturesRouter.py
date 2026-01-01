@@ -1,14 +1,20 @@
 
 import errno
+import hashlib
+import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, cast
 
 import puremagic
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import FileResponse
+from PIL import Image
 
 from app import logging
 from app.config import Config
+from app.schemas import Capture
 
 
 # ルーター
@@ -16,6 +22,164 @@ router = APIRouter(
     tags = ['Captures'],
     prefix = '/api/captures',
 )
+
+
+@router.get(
+    '',
+    summary = 'キャプチャ画像一覧 API',
+    response_model = list[Capture],
+)
+async def CapturesListAPI(
+    response: Response,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int | None, Query(ge=1)] = None,
+):
+    """
+    保存されているキャプチャ画像を年月単位で返す。
+
+    Args:
+        response (Response): レスポンスオブジェクト
+        skip (int): 取得を開始する位置
+        limit (int | None): 取得する件数
+
+    Returns:
+        list[Capture]: キャプチャ画像のリスト
+    """
+
+    # キャプチャ保存フォルダ配下のすべてのファイルを走査
+    # (ファイルパス, フォルダID) のタプルのリスト
+    capture_files: list[tuple[Path, str]] = []
+
+    for upload_folder in Config().capture.upload_folders:
+        upload_folder_path = Path(upload_folder)
+        if not upload_folder_path.exists():
+            continue
+
+        # フォルダの識別子としてパスのハッシュを使用
+        folder_id = hashlib.sha256(str(upload_folder_path.resolve()).encode('utf-8')).hexdigest()[:16]
+
+        for file in upload_folder_path.glob('*'):
+            suffix = file.suffix.lower()
+            if file.is_file() and suffix in {'.jpg', '.jpeg', '.png'}:
+                capture_files.append((file, folder_id))
+
+    # ファイル名でソート (降順)
+    # ファイル名に日時が含まれているため、ファイル名でソートすれば実質的に日時順になる
+    # すべてのファイルの EXIF を読み込むのは重いため、ファイル名でのソートで代用している
+    capture_files.sort(key=lambda x: x[0].name, reverse=True)
+
+    # 総件数をヘッダーにセット
+    response.headers['X-Total-Count'] = str(len(capture_files))
+
+    # ページネーション
+    if limit is not None:
+        capture_files = capture_files[skip : skip + limit]
+    else:
+        capture_files = capture_files[skip:]
+
+    # 返却するキャプチャリスト
+    captures: list[Capture] = []
+
+    for file, folder_id in capture_files:
+        suffix = file.suffix.lower()
+        is_jpeg = suffix in {'.jpg', '.jpeg'}
+
+        # ファイル名から情報をパース
+        time = None
+        channel_name = None
+        program_title = None
+
+        # 画像のメタデータ (EXIF) から撮影日時を取得
+        if is_jpeg:
+            try:
+                with Image.open(file) as img:
+                    # EXIF データを取得
+                    exif_data = img.getexif()
+                    if exif_data:
+                        # DateTimeOriginal (撮影日時) タグ (36867) を探す
+                        datetime_original_str = exif_data.get(36867)
+                        if datetime_original_str and isinstance(datetime_original_str, str):
+                            # 'YYYY:MM:DD HH:MM:SS' 形式の文字列をパース
+                            time = datetime.strptime(datetime_original_str, '%Y:%m:%d %H:%M:%S')
+                        else:
+                            # DateTime (ファイル変更日時) タグ (306) を探す
+                            datetime_str = exif_data.get(306)
+                            if datetime_str and isinstance(datetime_str, str):
+                                time = datetime.strptime(datetime_str, '%Y:%m:%d %H:%M:%S')
+            except Exception as ex:
+                # Pillow で開けない、EXIF がない、パースできないなどのエラーは無視
+                logging.debug(f'[CapturesRouter][CapturesListAPI] Failed to get EXIF from {file.name}: {ex}')
+
+        # うまくいかなかったらファイル名から獲得
+        if time is None:
+            # ex: Capture_20250630-183909.jpg
+            match = re.match(r'Capture_(\d{8}-\d{6})', file.name)
+            if match:
+                try:
+                    time = datetime.strptime(match.group(1), '%Y%m%d-%H%M%S')
+                except ValueError as ex:
+                    logging.debug(f'[CapturesRouter][CapturesListAPI] Failed to parse time from filename {file.name}: {ex}')
+
+        captures.append(Capture(
+            name=file.name,
+            size=file.stat().st_size,
+            url=f'/captures/{folder_id}/{file.name}',
+            time=time,
+            program_title=program_title,
+            channel_name=channel_name,
+        ))
+
+    return captures
+
+
+@router.get(
+    '/{folder_id}/{capture_name}',
+    summary = 'キャプチャ画像取得 API',
+    response_class = FileResponse,
+)
+async def CaptureGetAPI(folder_id: str, capture_name: str):
+    """
+    指定されたキャプチャ画像を取得する。
+
+    Args:
+        folder_id (str): フォルダの識別子
+        capture_name (str): キャプチャのファイル名
+
+    Returns:
+        FileResponse: キャプチャ画像
+    """
+
+    # upload_folders の中から一致する folder_id を持つフォルダを探す
+    for upload_folder in Config().capture.upload_folders:
+        upload_folder_path = Path(upload_folder).resolve()
+        current_folder_id = hashlib.sha256(str(upload_folder_path).encode('utf-8')).hexdigest()[:16]
+
+        if current_folder_id == folder_id:
+            filepath = (upload_folder_path / capture_name).resolve()
+
+            # ディレクトリトラバーサル対策のためのチェック
+            try:
+                filepath.relative_to(upload_folder_path)
+            except ValueError:
+                logging.warning(f'[CapturesRouter][CaptureGetAPI] Directory traversal attempt: {capture_name}')
+                raise HTTPException(
+                    status_code = status.HTTP_400_BAD_REQUEST,
+                    detail = 'Invalid capture name',
+                )
+
+            if filepath.exists() and filepath.is_file():
+                return FileResponse(filepath)
+            else:
+                raise HTTPException(
+                    status_code = status.HTTP_404_NOT_FOUND,
+                    detail = 'Capture not found',
+                )
+
+    # ファイルが見つからなかった場合は 404
+    raise HTTPException(
+        status_code = status.HTTP_404_NOT_FOUND,
+        detail = 'Capture not found',
+    )
 
 
 @router.post(
@@ -118,4 +282,62 @@ def CaptureUploadAPI(
     raise HTTPException(
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
         detail = 'No available folder to save the file',
+    )
+
+
+@router.delete(
+    '/{folder_id}/{capture_name}',
+    summary = 'キャプチャ画像削除 API',
+    status_code = status.HTTP_204_NO_CONTENT,
+)
+def CaptureDeleteAPI(folder_id: str, capture_name: str):
+    """
+    指定されたキャプチャ画像を削除する。
+
+    Args:
+        folder_id (str): フォルダの識別子
+        capture_name (str): キャプチャのファイル名
+
+    Returns:
+        None
+    """
+
+    # upload_folders の中から一致する folder_id を持つフォルダを探して削除
+    for upload_folder in Config().capture.upload_folders:
+        upload_folder_path = Path(upload_folder).resolve()
+        current_folder_id = hashlib.sha256(str(upload_folder_path).encode('utf-8')).hexdigest()[:16]
+
+        if current_folder_id == folder_id:
+            filepath = (upload_folder_path / capture_name).resolve()
+
+            # ディレクトリトラバーサル対策のためのチェック
+            try:
+                filepath.relative_to(upload_folder_path)
+            except ValueError:
+                logging.warning(f'[CapturesRouter][CaptureDeleteAPI] Directory traversal attempt: {capture_name}')
+                raise HTTPException(
+                    status_code = status.HTTP_400_BAD_REQUEST,
+                    detail = 'Invalid capture name',
+                )
+
+            if filepath.exists() and filepath.is_file():
+                try:
+                    filepath.unlink()
+                except Exception as ex:
+                    logging.error(f'[CapturesRouter][CaptureDeleteAPI] Failed to delete capture: {filepath}', exc_info=ex)
+                    raise HTTPException(
+                        status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail = 'Failed to delete capture',
+                    )
+                return
+            else:
+                raise HTTPException(
+                    status_code = status.HTTP_404_NOT_FOUND,
+                    detail = 'Capture not found',
+                )
+
+    # ファイルが見つからなかった場合は 404
+    raise HTTPException(
+        status_code = status.HTTP_404_NOT_FOUND,
+        detail = 'Capture not found',
     )
