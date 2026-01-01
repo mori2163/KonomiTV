@@ -57,14 +57,27 @@
                 </v-card>
             </div>
         </div>
-        <CaptureDetailDrawer v-model="is_drawer_showing" :capture="selected_capture" @delete="$emit('delete')" />
+        <CaptureDetailDrawer v-model="is_drawer_showing" :capture="selected_capture" @delete="$emit('delete')" @fullscreen="isFullscreenShowing = true" />
         <div class="capture-list__image-viewer" :class="{'capture-list__image-viewer--visible': is_drawer_showing}">
-            <v-img v-if="selected_capture" :src="selected_capture.url" cover class="capture-list__image-viewer-image"></v-img>
+            <v-img v-if="selected_capture" :src="selected_capture.url" cover class="capture-list__image-viewer-image cursor-pointer" @click="isFullscreenShowing = true"></v-img>
+        </div>
+
+        <!-- 全画面表示ビューワー -->
+        <div v-if="isFullscreenShowing && selected_capture" class="fullscreen-viewer" @click.self="isFullscreenShowing = false">
+            <img :src="selected_capture.url" class="fullscreen-viewer__image" @click="isFullscreenShowing = false">
+            <v-btn
+                class="fullscreen-viewer__close-button"
+                icon="mdi-close"
+                size="large"
+                variant="flat"
+                @click="isFullscreenShowing = false">
+            </v-btn>
         </div>
     </div>
 </template>
 <script lang="ts" setup>
-import { ref } from 'vue';
+import { ref, watch, onUnmounted } from 'vue';
+
 import CaptureDetailDrawer from '@/components/Captures/CaptureDetailDrawer.vue';
 import { ICapture } from '@/services/Captures';
 import { dayjs } from '@/utils';
@@ -97,6 +110,28 @@ defineEmits<{
 // ドロワーの表示状態
 const is_drawer_showing = ref(false);
 const selected_capture = ref<ICapture | null>(null);
+// 全画面表示の状態
+const isFullscreenShowing = ref(false);
+
+// フルスクリーン表示が開かれたら、ページ全体のスクロールを無効化する
+watch(isFullscreenShowing, (newValue) => {
+    if (newValue) {
+        document.documentElement.classList.add('v-overlay-scroll-blocked');
+    } else {
+        // ドロワーが表示されていない場合のみスクロールロックを解除
+        if (!is_drawer_showing.value) {
+            document.documentElement.classList.remove('v-overlay-scroll-blocked');
+        }
+    }
+});
+
+// コンポーネントがアンマウントされる際のクリーンアップ
+onUnmounted(() => {
+    if (isFullscreenShowing.value) {
+        document.documentElement.classList.remove('v-overlay-scroll-blocked');
+    }
+});
+
 // ドロワーを開く
 const openDrawer = (capture: ICapture) => {
     // すでに同じキャプチャでドロワーが開いている場合は閉じる
@@ -140,6 +175,7 @@ const openDrawer = (capture: ICapture) => {
         max-width: 100%;
         max-height: 100%;
         border-radius: 8px;
+        pointer-events: auto;
     }
     &__header {
         display: flex;
@@ -278,6 +314,43 @@ const openDrawer = (capture: ICapture) => {
                 color: rgb(var(--v-theme-text-darken-1));
                 font-size: 15px;
             }
+        }
+    }
+}
+
+.fullscreen-viewer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 1011; // ドロワーより手前に表示
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0px 16px;
+    cursor: zoom-out;
+    &__image {
+        max-width: 100%;
+        max-height: 100%;
+        border-radius: 4px;
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+        cursor: default;
+        @media (max-width: 600px) {
+            transform: rotate(90deg);
+            max-width: 100vh;
+            max-height: 100vw;
+        }
+    }
+    &__close-button {
+        position: absolute;
+        right: 16px;
+        bottom: 16px;
+        background-color: rgba(0, 0, 0, 0.5);
+        color: white;
+        &:hover {
+            background-color: rgba(0, 0, 0, 0.7);
         }
     }
 }

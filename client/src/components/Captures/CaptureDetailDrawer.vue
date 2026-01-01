@@ -16,7 +16,7 @@
             </v-btn>
         </div>
 
-        <v-img v-if="capture && display.smAndDown.value" :src="capture.url" aspect-ratio="1.7778" class="capture-detail-drawer__image"></v-img>
+        <v-img v-if="capture && display.smAndDown.value" :src="capture.url" aspect-ratio="1.7778" class="capture-detail-drawer__image cursor-pointer" @click="$emit('fullscreen')"></v-img>
 
         <div v-if="capture" class="capture-detail-drawer__content">
             <div class="capture-detail-drawer__property">
@@ -38,16 +38,6 @@
         </div>
 
         <div class="capture-detail-drawer__footer">
-            <v-btn
-                v-if="!display.smAndDown.value"
-                class="mb-4"
-                block
-                size="large"
-                variant="tonal"
-                @click="isFullscreenShowing = true">
-                <v-icon icon="mdi-fullscreen" class="mr-1" size="large" />
-                <span>全画面表示</span>
-            </v-btn>
             <v-btn color="secondary" block size="large" @click="downloadCapture">
                 <v-icon icon="mdi-download" class="mr-2" />
                 <span>ダウンロード</span>
@@ -57,18 +47,6 @@
                 <span>削除</span>
             </v-btn>
         </div>
-    </div>
-
-    <!-- 全画面表示ビューワー -->
-    <div v-if="isFullscreenShowing && capture" class="fullscreen-viewer" @click.self="isFullscreenShowing = false">
-        <img :src="capture.url" class="fullscreen-viewer__image" @click.stop>
-        <v-btn
-            class="fullscreen-viewer__close-button"
-            icon="mdi-close"
-            size="large"
-            variant="flat"
-            @click="isFullscreenShowing = false">
-        </v-btn>
     </div>
 
     <!-- 削除確認ダイアログ -->
@@ -119,10 +97,10 @@ const props = defineProps<{
 const emit = defineEmits<{
     (e: 'update:modelValue', value: boolean): void;
     (e: 'delete'): void;
+    (e: 'fullscreen'): void;
 }>();
 
 const display = useDisplay();
-const isFullscreenShowing = ref(false);
 const isVisible = computed({
     get: () => props.modelValue,
     set: (value) => emit('update:modelValue', value),
@@ -133,22 +111,7 @@ watch(isVisible, (newValue) => {
     if (newValue) {
         document.documentElement.classList.add('v-overlay-scroll-blocked');
     } else {
-        // フルスクリーン表示がアクティブでない場合のみスクロールロックを解除
-        if (isFullscreenShowing.value === false) {
-            document.documentElement.classList.remove('v-overlay-scroll-blocked');
-        }
-    }
-});
-
-// フルスクリーン表示が開かれたら、ページ全体のスクロールを無効化する
-watch(isFullscreenShowing, (newValue) => {
-    if (newValue) {
-        document.documentElement.classList.add('v-overlay-scroll-blocked');
-    } else {
-        // ドロワーが非表示の場合のみスクロールロックを解除
-        if (isVisible.value === false) {
-            document.documentElement.classList.remove('v-overlay-scroll-blocked');
-        }
+        document.documentElement.classList.remove('v-overlay-scroll-blocked');
     }
 });
 
@@ -339,42 +302,6 @@ const confirmDelete = async () => {
     &__footer {
         padding: 16px;
         border-top: 1px solid rgb(var(--v-theme-background-lighten-2));
-    }
-}
-.fullscreen-viewer {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.85);
-    z-index: 1011; // ドロワーより手前に表示
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    padding: 0px 16px;
-    cursor: zoom-out;
-    &__image {
-        max-width: 100%;
-        max-height: 100%;
-        border-radius: 4px;
-        box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
-        cursor: default;
-        @media (max-width: 600px) {
-            transform: rotate(90deg);
-            max-width: 100vh;
-            max-height: 100vw;
-        }
-    }
-    &__close-button {
-        position: absolute;
-        right: 16px;
-        bottom: 16px;
-        background-color: rgba(0, 0, 0, 0.5);
-        color: white;
-        &:hover {
-            background-color: rgba(0, 0, 0, 0.7);
-        }
     }
 }
 </style>
