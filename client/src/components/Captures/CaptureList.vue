@@ -237,12 +237,6 @@ const openDrawer = (capture: ICapture) => {
         background: rgb(var(--v-theme-background-lighten-1));
         padding: 16px;
         transition: padding-right 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
-        &--drawer-visible {
-            padding-right: 370px;
-            @media (max-width: 480px) {
-                padding-right: calc(100vw - 32px);
-            }
-        }
         &--loading {
             .capture-list__grid-content {
                 visibility: hidden;
