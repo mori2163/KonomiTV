@@ -11,13 +11,15 @@
             'timetable-program-cell--partial': isPartialRecording,
             'timetable-program-cell--unavailable': isUnavailableRecording,
             'timetable-program-cell--disabled': isReservationDisabled,
+            'timetable-program-cell--shopping': isShoppingProgram,
+            'timetable-program-cell--next-reserved': hasReservation && isNextReserved,
         }"
         :style="cellStyle"
         @click="onClick"
         @mouseenter="onMouseEnter"
         @mouseleave="onMouseLeave">
         <!-- ジャンルハイライト縦線 (REGZA 風) -->
-        <div class="timetable-program-cell__highlight" :style="{ background: highlightColor }"></div>
+        <div class="timetable-program-cell__highlight"></div>
         <!-- メインコンテンツ -->
         <div class="timetable-program-cell__content">
             <!-- 開始分表示 + 予約アイコン -->
@@ -60,8 +62,6 @@
 <script lang="ts" setup>
 
 import { computed, nextTick, ref, watch } from 'vue';
-
-import type { Dayjs } from 'dayjs';
 
 import { ITimeTableChannel, ITimeTableProgram } from '@/services/Programs';
 import useSettingsStore from '@/stores/SettingsStore';
@@ -121,7 +121,6 @@ function getDecoratedProgramInfo(program: ITimeTableProgram, key: 'title' | 'des
 const props = defineProps<{
     program: ITimeTableProgram;
     channel: ITimeTableChannel['channel'];
-    selectedDate: Dayjs;  // 選択された日付 (4:00起点、表示開始時刻とは異なる場合がある)
     hourHeight: number;
     channelWidth: number;
     fullChannelWidth?: number;
@@ -133,6 +132,9 @@ const props = defineProps<{
     isSelected: boolean;
     isPast: boolean;
     is36HourDisplay?: boolean;  // 36時間表示モードかどうか
+    isNextReserved?: boolean;  // 次の番組も予約されているか (border 重複回避用)
+    // ウィンドウリサイズ時に再計算をトリガーするためのカウンター (親から受け取る)
+    resizeTrigger: number;
 }>();
 
 // Emits
@@ -161,6 +163,8 @@ const RESERVATION_DISABLED_ICON = 'mdi:timer-pause-outline';
  * ホバー展開設定に関わらずホバーによる展開を無効化する
  */
 const isExpanded = computed(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const _trigger = props.resizeTrigger;
     if (Utils.isTouchDevice()) {
         return props.isSelected;
     }
@@ -203,6 +207,17 @@ const isUnavailableRecording = computed(() => {
 });
 
 /**
+ * 通販番組を目立たなく表示する対象かどうか
+ */
+const isShoppingProgram = computed(() => {
+    // 設定が無効なら対象にしない
+    if (settingsStore.settings.timetable_dim_shopping_programs === false) {
+        return false;
+    }
+    return ProgramUtils.isShoppingProgram(props.program);
+});
+
+/**
  * 予約アイコンの色
  */
 const reservationIconColor = computed(() => {
@@ -215,7 +230,7 @@ const reservationIconColor = computed(() => {
     if (isReservationDisabled.value) {
         return 'rgb(var(--v-theme-text-darken-2))';
     }
-    return 'rgb(var(--v-theme-success))';
+    return 'rgb(var(--v-theme-secondary))';
 });
 
 /**
@@ -245,15 +260,26 @@ const reservationButtonIcon = computed(() => {
 /**
  * 録画予約ボタンのラベル
  * 予約なし: 録画予約、予約あり有効: 予約を無効化、予約あり無効: 予約を有効化
+ * チャンネル幅が狭い画面では「有効化」「無効化」に短縮
  */
 const reservationButtonLabel = computed(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const _trigger = props.resizeTrigger;
     if (!hasReservation.value) {
         return '録画予約';
     }
+    // チャンネル幅が狭い画面では短縮表示
+    // - スマホ縦画面: 「標準」または「狭め」の場合
+    // - スマホ横画面・タブレット縦画面: 「狭め」の場合
+    const isNarrow = settingsStore.settings.timetable_channel_width === 'Narrow';
+    const isNotWide = settingsStore.settings.timetable_channel_width !== 'Wide';
+    const shouldShorten =
+        (Utils.isSmartphoneVertical() && isNotWide) ||
+        ((Utils.isSmartphoneHorizontal() || Utils.isTabletVertical()) && isNarrow);
     if (isReservationDisabled.value) {
-        return '予約を有効化';
+        return shouldShorten ? '有効化' : '予約を有効化';
     }
-    return '予約を無効化';
+    return shouldShorten ? '無効化' : '予約を無効化';
 });
 
 /**
@@ -267,29 +293,16 @@ const startMinute = computed(() => {
 /**
  * ジャンルのハイライト色
  */
-const genreHighlightColor = computed(() => {
+const baseHighlightColor = computed(() => {
     const genreMajor = props.program.genres?.[0]?.major;
     const colors = TimeTableUtils.getGenreColors(genreMajor, settingsStore.settings.timetable_genre_colors);
     return colors.highlight;
 });
 
 /**
- * ハイライト色 (過去番組はグレー系に統一)
- */
-const highlightColor = computed(() => {
-    if (props.isPast) {
-        return '#b0b0b0';
-    }
-    return genreHighlightColor.value;
-});
-
-/**
  * セルの背景色
  */
-const cellBackgroundColor = computed(() => {
-    if (props.isPast) {
-        return '#e6e6e6';
-    }
+const baseBackgroundColor = computed(() => {
     // 録画不可の場合は赤背景
     if (isUnavailableRecording.value) {
         return '#f8d7da';
@@ -335,9 +348,9 @@ const cellHeight = computed(() => {
     // セルの下端が番組表の下端を超える場合はクリップ
     const cellBottom = cellY.value + rawHeight;
     if (cellBottom > gridTotalHeight.value) {
-        // クリップされた高さを計算 (最小高さは確保)
-        const clippedHeight = gridTotalHeight.value - cellY.value;
-        return Math.max(clippedHeight, 20);
+        // クリップされた高さを計算 (下端を超えないようにする)
+        const clippedHeight = Math.max(0, gridTotalHeight.value - cellY.value);
+        return clippedHeight;
     }
 
     return Math.max(rawHeight, 20);  // 最小高さを確保
@@ -364,8 +377,9 @@ const cellStyle = computed(() => {
         left: `${resolvedLeft}px`,
         width: `${resolvedWidth}px`,
         minHeight: `${cellHeight.value}px`,
-        background: cellBackgroundColor.value,
         '--timetable-cell-height': `${effectiveHeight}px`,
+        '--timetable-program-base-background': baseBackgroundColor.value,
+        '--timetable-program-base-highlight': baseHighlightColor.value,
     };
 
     // 非展開時のみ高さを固定
@@ -459,6 +473,7 @@ watch(isExpanded, async (value) => {
     position: absolute;
     overflow: hidden;
     border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+    background: var(--timetable-program-base-background);
     cursor: pointer;
     transition: box-shadow 0.15s ease, z-index 0s;
     user-select: none;
@@ -494,8 +509,14 @@ watch(isExpanded, async (value) => {
         content-visibility: visible;
     }
 
-    // 過去番組 (グレーアウト)
+    // 過去番組 (ジャンル色を残しつつ控えめに表示)
     &--past {
+        background: color-mix(in srgb, var(--timetable-program-base-background) 60%, #c4c4c4 40%);
+
+        .timetable-program-cell__highlight {
+            background: color-mix(in srgb, var(--timetable-program-base-highlight) 60%, #c4c4c4 40%);
+        }
+
         .timetable-program-cell__start-minute {
             color: rgba(0, 0, 0, 0.6);
         }
@@ -509,29 +530,64 @@ watch(isExpanded, async (value) => {
         }
     }
 
+    // 通販番組を目立たなく表示
+    &--shopping {
+        background: color-mix(in srgb, var(--timetable-program-base-background) 45%, #cfcfcf 55%);
+
+        .timetable-program-cell__highlight {
+            background: color-mix(in srgb, var(--timetable-program-base-highlight) 45%, #cfcfcf 55%);
+        }
+
+        .timetable-program-cell__start-minute {
+            color: rgba(0, 0, 0, 0.6);
+        }
+
+        .timetable-program-cell__title {
+            color: rgba(0, 0, 0, 0.7);
+        }
+
+        .timetable-program-cell__description {
+            color: rgba(0, 0, 0, 0.6);
+        }
+    }
+
+    // 過去 + 通販番組はさらに控えめにする
+    &--past.timetable-program-cell--shopping {
+        background: color-mix(in srgb, var(--timetable-program-base-background) 45%, #b7b7b7 55%);
+
+        .timetable-program-cell__highlight {
+            background: color-mix(in srgb, var(--timetable-program-base-highlight) 45%, #b7b7b7 55%);
+        }
+    }
+
     // 予約あり
     &--reserved {
-        border: 2.5px dashed rgb(var(--v-theme-secondary));
+        border: 3.8px dashed rgb(var(--v-theme-secondary));
     }
 
     // 録画中
     &--recording {
-        border: 2.5px dashed rgb(var(--v-theme-secondary));
+        border: 3.8px dashed rgb(var(--v-theme-secondary));
     }
 
     // 一部のみ録画
     &--partial {
-        border: 2.5px dashed rgb(var(--v-theme-warning));
+        border: 3.8px dashed rgb(var(--v-theme-warning));
     }
 
     // 録画不可
     &--unavailable {
-        border: 2.5px dashed rgb(var(--v-theme-error));
+        border: 3.8px dashed rgb(var(--v-theme-error));
     }
 
     // 予約無効
     &--disabled {
-        border: 2.5px dashed rgb(var(--v-theme-text-darken-2));
+        border: 3.8px dashed rgb(var(--v-theme-text-darken-2));
+    }
+
+    // 次の番組も予約されている場合は border-bottom を非表示にして重複を避ける
+    &--next-reserved {
+        border-bottom: none;
     }
 
     // ジャンルハイライト縦線 (REGZA 風)
@@ -540,6 +596,7 @@ watch(isExpanded, async (value) => {
         width: 5px;
         height: auto;
         align-self: stretch;
+        background: var(--timetable-program-base-highlight);
     }
 
     // メインコンテンツ
@@ -654,6 +711,17 @@ watch(isExpanded, async (value) => {
             align-items: center;
             justify-content: center;
             gap: 4px;
+        }
+
+        @include smartphone-horizontal {
+            padding-top: 6px;
+            padding-bottom: 6px;
+            font-size: 11px;
+        }
+        @include smartphone-vertical {
+            padding-top: 6px;
+            padding-bottom: 6px;
+            font-size: 11px;
         }
     }
 }

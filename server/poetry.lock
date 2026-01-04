@@ -2,21 +2,21 @@
 
 [[package]]
 name = "aerich"
-version = "0.8.2"
+version = "0.9.1"
 description = "A database migrations tool for Tortoise ORM."
 optional = false
-python-versions = ">=3.8"
+python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "aerich-0.8.2-py3-none-any.whl", hash = "sha256:c1000cebd8525a1310a0cf0ea7d9a03cc2529413f182e90f08a6c6f4f61edcda"},
-    {file = "aerich-0.8.2.tar.gz", hash = "sha256:0ed2b15bb017785d17323329e5448b4b12fcfec08a20932626c12aa59a8378d6"},
+    {file = "aerich-0.9.1-py3-none-any.whl", hash = "sha256:6ff34a2104454d03f7473dc99e7ad51f405a909c261126a1b8a52d44ca7b4cbc"},
+    {file = "aerich-0.9.1.tar.gz", hash = "sha256:629afbef5902635c41f410dd05def984c02e05e62d8a2020210a29a4aae19001"},
 ]
 
 [package.dependencies]
 asyncclick = ">=8.1.7,<9.0.0"
 dictdiffer = ">=0.9.0,<1.0.0"
 pydantic = ">=2.0.2,<2.1.0 || >2.1.0,<2.7.0 || >2.7.0,<3.0.0"
-tortoise-orm = {version = ">=0.21.0,<1.0.0", markers = "python_version < \"4.0\""}
+tortoise-orm = ">=0.24.0,<1.0.0"
 
 [package.extras]
 asyncmy = ["asyncmy (>=0.2.9) ; python_version < \"4.0\""]
@@ -2545,14 +2545,14 @@ files = [
 
 [[package]]
 name = "pypika-tortoise"
-version = "0.3.2"
+version = "0.6.3"
 description = "Forked from pypika and streamline just for tortoise-orm"
 optional = false
-python-versions = "<4.0,>=3.8"
+python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "pypika_tortoise-0.3.2-py3-none-any.whl", hash = "sha256:c5c52bc4473fe6f3db36cf659340750246ec5dd0f980d04ae7811430e299c3a2"},
-    {file = "pypika_tortoise-0.3.2.tar.gz", hash = "sha256:f5d508e2ef00255e52ec6ac79ef889e10dbab328f218c55cd134c4d02ff9f6f4"},
+    {file = "pypika_tortoise-0.6.3-py3-none-any.whl", hash = "sha256:762e508093f4d73d3654cdde5bce8f92f8f41d999993c44d972d4f1703a663df"},
+    {file = "pypika_tortoise-0.6.3.tar.gz", hash = "sha256:6e17f00e77e78468836cb5c63eb6dc01445f83b1167e4f29f1c678949179c079"},
 ]
 
 [[package]]
@@ -3296,27 +3296,28 @@ files = [
 
 [[package]]
 name = "tortoise-orm"
-version = "0.23.0"
+version = "0.25.3"
 description = "Easy async ORM for python, built with relations in mind"
 optional = false
-python-versions = "<4.0,>=3.8"
+python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "tortoise_orm-0.23.0-py3-none-any.whl", hash = "sha256:deaabed1619ea8aab6213508dff025571a701b7f34ee534473d7bb7661aa9f4f"},
-    {file = "tortoise_orm-0.23.0.tar.gz", hash = "sha256:f25d431ef4fb521a84edad582f4b9c53dccc5abf6cfbc6f228cbece5a13952fa"},
+    {file = "tortoise_orm-0.25.3-py3-none-any.whl", hash = "sha256:3c52a53c41f4137aee9ffb3f3de01f30b52ad7767157f9bd9586a910fe839ca3"},
+    {file = "tortoise_orm-0.25.3.tar.gz", hash = "sha256:b6dedd388393624628ec46228c93df361533ceb3925986fa2d1d22debc838a7d"},
 ]
 
 [package.dependencies]
-aiosqlite = ">=0.16.0,<0.21.0"
-iso8601 = ">=2.1.0,<3.0.0"
-pypika-tortoise = ">=0.3.2,<0.4.0"
+aiosqlite = ">=0.16.0,<1.0.0"
+anyio = "*"
+iso8601 = {version = ">=2.1.0,<3.0.0", markers = "python_version < \"4.0\""}
+pypika-tortoise = ">=0.6.3,<1.0.0"
 pytz = "*"
 
 [package.extras]
 accel = ["ciso8601 ; sys_platform != \"win32\" and implementation_name == \"cpython\"", "orjson", "uvloop ; sys_platform != \"win32\" and implementation_name == \"cpython\""]
 aiomysql = ["aiomysql"]
-asyncmy = ["asyncmy (>=0.2.8,<0.3.0)"]
-asyncodbc = ["asyncodbc (>=0.1.1,<0.2.0)"]
+asyncmy = ["asyncmy (>=0.2.8,<1.0.0) ; python_version < \"4.0\""]
+asyncodbc = ["asyncodbc (>=0.1.1,<1.0.0) ; python_version < \"4.0\""]
 asyncpg = ["asyncpg"]
 psycopg = ["psycopg[binary,pool] (>=3.0.12,<4.0.0)"]
 
@@ -3364,18 +3365,18 @@ xclienttransaction = ">=1.0.0"
 
 [[package]]
 name = "typer"
-version = "0.15.4"
+version = "0.21.0"
 description = "Typer, build great CLIs. Easy to code. Based on Python type hints."
 optional = false
-python-versions = ">=3.7"
+python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "typer-0.15.4-py3-none-any.whl", hash = "sha256:eb0651654dcdea706780c466cf06d8f174405a659ffff8f163cfbfee98c0e173"},
-    {file = "typer-0.15.4.tar.gz", hash = "sha256:89507b104f9b6a0730354f27c39fae5b63ccd0c95b1ce1f1a6ba0cfd329997c3"},
+    {file = "typer-0.21.0-py3-none-any.whl", hash = "sha256:c79c01ca6b30af9fd48284058a7056ba0d3bf5cf10d0ff3d0c5b11b68c258ac6"},
+    {file = "typer-0.21.0.tar.gz", hash = "sha256:c87c0d2b6eee3b49c5c64649ec92425492c14488096dfbc8a0c2799b2f6f9c53"},
 ]
 
 [package.dependencies]
-click = ">=8.0.0,<8.2"
+click = ">=8.0.0"
 rich = ">=10.11.0"
 shellingham = ">=1.3.0"
 typing-extensions = ">=3.7.4.3"
@@ -4088,4 +4089,4 @@ websockets = ">=14.0"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.12"
-content-hash = "173215e5926ea1bf670a0515f7479009c5f762519b26747a2c00f7e1124ad279"
+content-hash = "e7bae0917ac22ed95c17856db3c9d9f60c811a65a71450eae43c8f712fb4ffaa"
