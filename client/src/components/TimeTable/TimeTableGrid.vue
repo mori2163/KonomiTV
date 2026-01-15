@@ -76,35 +76,37 @@
                                 :isNextReserved="isNextProgramReserved(channelData, program, false)"
                                 :resizeTrigger="windowResizeCounter"
                                 @click="onProgramClick(program)"
-                                @show-detail="$emit('show-program-detail', program.id, channelData, program)"
-                                @quick-reserve="$emit('quick-reserve', program.id, channelData, program)"
+                                @show-detail="$emit('show-program-detail', program.id, channelData.channel, program)"
+                                @quick-reserve="$emit('quick-reserve', program.id, channelData.channel, program)"
                             />
                         </template>
                         <!-- サブチャンネル番組 (マルチ編成) -->
                         <!-- サブチャンネルは右半分に配置 -->
                         <template v-if="hasSubchannels(channelData)">
-                            <template v-for="program in getSubchannelPrograms(channelData)" :key="program.id">
-                                <TimeTableProgramCell
-                                    v-if="isProgramVisible(program)"
-                                    :program="program"
-                                    :channel="channelData.channel"
-                                    :hourHeight="hourHeight"
-                                    :channelWidth="getProgramCellWidth(channelData, program, true)"
-                                    :fullChannelWidth="channelWidth"
-                                    :isSplit="getSplitState(channelData, program, true)"
-                                    :viewportHeight="viewportHeight"
-                                    :channelHeaderHeight="channelHeaderHeight"
-                                    :isScrollAtBottom="isScrollAtBottom"
-                                    :isSubchannel="true"
-                                    :isSelected="selectedProgramId === program.id"
-                                    :isPast="isPastProgram(program)"
-                                    :is36HourDisplay="props.is36HourDisplay"
-                                    :isNextReserved="isNextProgramReserved(channelData, program, true)"
-                                    :resizeTrigger="windowResizeCounter"
-                                    @click="onProgramClick(program)"
-                                    @show-detail="$emit('show-program-detail', program.id, channelData, program)"
-                                    @quick-reserve="$emit('quick-reserve', program.id, channelData, program)"
-                                />
+                            <template v-for="subchannel in getSubchannels(channelData)" :key="subchannel.channel.id">
+                                <template v-for="program in subchannel.programs" :key="program.id">
+                                    <TimeTableProgramCell
+                                        v-if="isProgramVisible(program)"
+                                        :program="program"
+                                        :channel="subchannel.channel"
+                                        :hourHeight="hourHeight"
+                                        :channelWidth="getProgramCellWidth(channelData, program, true)"
+                                        :fullChannelWidth="channelWidth"
+                                        :isSplit="getSplitState(channelData, program, true)"
+                                        :viewportHeight="viewportHeight"
+                                        :channelHeaderHeight="channelHeaderHeight"
+                                        :isScrollAtBottom="isScrollAtBottom"
+                                        :isSubchannel="true"
+                                        :isSelected="selectedProgramId === program.id"
+                                        :isPast="isPastProgram(program)"
+                                        :is36HourDisplay="props.is36HourDisplay"
+                                        :isNextReserved="isNextProgramReserved(channelData, program, true)"
+                                        :resizeTrigger="windowResizeCounter"
+                                        @click="onProgramClick(program)"
+                                        @show-detail="$emit('show-program-detail', program.id, subchannel.channel, program)"
+                                        @quick-reserve="$emit('quick-reserve', program.id, subchannel.channel, program)"
+                                    />
+                                </template>
                             </template>
                         </template>
                     </div>
@@ -146,7 +148,8 @@ import TimeTableChannelHeader from '@/components/TimeTable/TimeTableChannelHeade
 import TimeTableCurrentTimeLine from '@/components/TimeTable/TimeTableCurrentTimeLine.vue';
 import TimeTableProgramCell from '@/components/TimeTable/TimeTableProgramCell.vue';
 import TimeTableTimeScale from '@/components/TimeTable/TimeTableTimeScale.vue';
-import { ITimeTableChannel, ITimeTableProgram } from '@/services/Programs';
+import { IChannel } from '@/services/Channels';
+import { ITimeTableChannel, ITimeTableProgram, ITimeTableSubchannel } from '@/services/Programs';
 import useSettingsStore from '@/stores/SettingsStore';
 import useTimeTableStore from '@/stores/TimeTableStore';
 import Utils, { dayjs } from '@/utils';
@@ -164,8 +167,8 @@ const props = defineProps<{
 const emit = defineEmits<{
     (e: 'time-slot-change', hour: number): void;
     (e: 'date-display-offset-change', offset: number): void;  // 日付表示のオフセット変更 (0: 選択日, 1: 翌日)
-    (e: 'show-program-detail', program_id: string, channel_data: ITimeTableChannel, program: ITimeTableProgram): void;
-    (e: 'quick-reserve', program_id: string, channel_data: ITimeTableChannel, program: ITimeTableProgram): void;
+    (e: 'show-program-detail', program_id: string, channel: IChannel, program: ITimeTableProgram): void;
+    (e: 'quick-reserve', program_id: string, channel: IChannel, program: ITimeTableProgram): void;
     (e: 'go-to-next-day'): void;
     (e: 'go-to-previous-day'): void;
 }>();
@@ -207,19 +210,10 @@ const STICKY_BASE_PADDING = 2;
 // リサイズイベント発火時にこのカウンターをインクリメントし、computed がこの値を参照することで再計算をトリガーする
 const windowResizeCounter = ref(0);
 
-// リサイズイベントハンドラー (デバウンス処理付き)
-let resizeDebounceTimerId: number | null = null;
-const RESIZE_DEBOUNCE_MS = 100;
-function onWindowResize() {
-    // デバウンス処理: 連続したリサイズイベントを間引く
-    if (resizeDebounceTimerId !== null) {
-        clearTimeout(resizeDebounceTimerId);
-    }
-    resizeDebounceTimerId = window.setTimeout(() => {
-        windowResizeCounter.value++;
-        resizeDebounceTimerId = null;
-    }, RESIZE_DEBOUNCE_MS);
-}
+// 直近のタッチ操作時刻を保持
+// タッチとマウスが併用されるデバイスでもマウス操作を恒久的に無効化しないためのガードに使う
+const TOUCH_POINTER_GUARD_MS = 500;
+const lastTouchTimestamp = ref(0);
 
 // ドラッグスクロール用の状態
 const isDragging = ref(false);
@@ -324,12 +318,11 @@ const totalHeight = computed(() => {
  * @returns サブチャンネルが存在する場合は true
  */
 function hasSubchannels(channelData: ITimeTableChannel): boolean {
-    if (channelData.subchannel_programs === null) {
+    if (channelData.subchannels === null || channelData.subchannels.length === 0) {
         return false;
     }
     // サブチャンネルが存在し、かつ番組が1つ以上ある場合
-    const programs = Object.values(channelData.subchannel_programs).flat();
-    return programs.length > 0;
+    return channelData.subchannels.some(subchannel => subchannel.programs.length > 0);
 }
 
 /**
@@ -378,11 +371,7 @@ function getSplitState(
     if (cached !== undefined) {
         return cached;
     }
-    if (channelData.subchannel_programs === null) {
-        splitStateCache.set(cache_key, false);
-        return false;
-    }
-    const subchannel_programs = Object.values(channelData.subchannel_programs).flat();
+    const subchannel_programs = getAllSubchannelPrograms(channelData);
     if (subchannel_programs.length === 0) {
         splitStateCache.set(cache_key, false);
         return false;
@@ -459,17 +448,27 @@ function isProgramVisible(program: ITimeTableProgram): boolean {
 }
 
 /**
- * 横スクロール位置を即時反映して左カラムを固定する
+ * サブチャンネルのリストを取得
+ * @param channelData チャンネルデータ
+ * @returns サブチャンネルのリスト
  */
-/**
- * サブチャンネル番組を取得
- */
-function getSubchannelPrograms(channelData: ITimeTableChannel): ITimeTableProgram[] {
-    if (channelData.subchannel_programs === null) {
+function getSubchannels(channelData: ITimeTableChannel): ITimeTableSubchannel[] {
+    if (channelData.subchannels === null) {
         return [];
     }
-    // 全サブチャンネルの番組をフラット化して返す
-    return Object.values(channelData.subchannel_programs).flat();
+    return channelData.subchannels;
+}
+
+/**
+ * サブチャンネル番組をフラット化して取得 (分割表示判定用)
+ * @param channelData チャンネルデータ
+ * @returns 全サブチャンネルの番組をフラット化した配列
+ */
+function getAllSubchannelPrograms(channelData: ITimeTableChannel): ITimeTableProgram[] {
+    if (channelData.subchannels === null) {
+        return [];
+    }
+    return channelData.subchannels.flatMap(subchannel => subchannel.programs);
 }
 
 /**
@@ -494,7 +493,7 @@ function isNextProgramReserved(
     isSubchannel: boolean,
 ): boolean {
     // 対象の番組リストを取得
-    const programs = isSubchannel ? getSubchannelPrograms(channelData) : channelData.programs;
+    const programs = isSubchannel ? getAllSubchannelPrograms(channelData) : channelData.programs;
     // 現在の番組の終了時刻と一致する開始時刻を持つ番組を探す
     const programEndTime = dayjs(program.end_time).valueOf();
     const nextProgram = programs.find((p) => {
@@ -709,6 +708,28 @@ function updateStickyContentOffset(): void {
     });
 }
 
+// リサイズイベントハンドラー (デバウンス処理付き)
+const RESIZE_DEBOUNCE_MS = 100;
+let resizeDebounceTimerId: number | null = null;
+function onWindowResize() {
+    // デバウンス処理: 連続したリサイズイベントを間引く
+    if (resizeDebounceTimerId !== null) {
+        clearTimeout(resizeDebounceTimerId);
+    }
+    resizeDebounceTimerId = window.setTimeout(() => {
+        windowResizeCounter.value++;
+        resizeDebounceTimerId = null;
+    }, RESIZE_DEBOUNCE_MS);
+}
+
+/**
+ * タッチ操作の検知イベントハンドラ
+ * 直近の touchstart 時刻を保存して、タッチ由来の pointerdown を除外するために使う
+ */
+function onTouchStart(): void {
+    lastTouchTimestamp.value = performance.now();
+}
+
 /**
  * スクロールイベントハンドラ
  */
@@ -754,7 +775,21 @@ function onWheel(event: WheelEvent): void {
  * ポインターダウンイベントハンドラ (ドラッグスクロール開始)
  */
 function onPointerDown(event: PointerEvent): void {
-    if (event.pointerType !== 'mouse') return;
+
+    // 1. pointerType が明らかにマウスでない場合はスキップ
+    // 2. pointerType が mouse と報告されても、タッチ由来ならスキップ
+    //    - sourceCapabilities は Safari が対応していないため、一応直近の touchstart をフォールバックに使う
+    const isMousePointer = event.pointerType === 'mouse';
+    if (isMousePointer === false) {
+        return;
+    }
+    const isTouchPointerByCapabilities = (event as any).sourceCapabilities?.firesTouchEvents === true;
+    const elapsedFromLastTouch = performance.now() - lastTouchTimestamp.value;
+    const isRecentTouch = elapsedFromLastTouch <= TOUCH_POINTER_GUARD_MS;
+    if (isTouchPointerByCapabilities || isRecentTouch) {
+        return;
+    }
+
     // scrollAreaRef がない場合は何もしない
     if (scrollAreaRef.value === null) return;
 
@@ -1093,6 +1128,9 @@ onMounted(async () => {
         scrollAreaRef.value.addEventListener('wheel', onWheel, { passive: false });
     }
 
+    // 直近のタッチ操作時刻を更新 (パッシブリスナーで負荷を最小限に)
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+
     // データロード完了後に初期スクロール位置を設定
     await nextTick();
     if (scrollAreaRef.value !== null) {
@@ -1111,6 +1149,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
     // ウィンドウリサイズイベントリスナーを解除
     window.removeEventListener('resize', onWindowResize);
+    // タッチ操作の検知リスナーを解除
+    window.removeEventListener('touchstart', onTouchStart);
     // デバウンスタイマーをクリア
     if (resizeDebounceTimerId !== null) {
         clearTimeout(resizeDebounceTimerId);
@@ -1204,11 +1244,15 @@ watch(() => timetableStore.display_start_time, (value) => {
         // これにより、横方向のスクロールが正常に動作する
         overscroll-behavior: auto !important;
 
-        // PC (マウス操作可能なデバイス) では JavaScript によるドラッグスクロールを有効化
-        @media (hover: hover) {
-            // ブラウザのデフォルトタッチ動作を無効化して JS でスクロールを制御
+        // 「マウスなどの精密なポインタ」があり、かつ「ホバー可能」な場合のみ JS スクロールを適用
+        @media (hover: hover) and (pointer: fine) {
             touch-action: none !important;
             cursor: grab;
+        }
+
+        // タッチ操作が利用できる環境ではブラウザのネイティブスクロールを優先
+        @media (any-pointer: coarse) {
+            touch-action: pan-x pan-y !important;
         }
 
         // タッチデバイス (スマホ・タブレット) ではネイティブスクロールを使用

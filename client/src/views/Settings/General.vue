@@ -31,6 +31,7 @@
                 <Icon icon="fluent:calendar-ltr-16-regular" height="19px" />
                 <span class="ml-1">番組表の表示設定を開く</span>
             </v-btn>
+            <v-divider class="mt-6"></v-divider>
             <div class="settings__item settings__item--switch">
                 <label class="settings__item-heading" for="show_player_background_image">プレイヤーの読み込み中に背景写真を表示する</label>
                 <label class="settings__item-label" for="show_player_background_image">
@@ -61,6 +62,7 @@
                     v-model="settingsStore.settings.tv_channel_selection_requires_alt_key">
                 </v-switch>
             </div>
+            <v-divider class="mt-6"></v-divider>
             <div class="settings__item settings__item--switch">
                 <label class="settings__item-heading" for="use_28hour_clock">時刻を 28 時間表記で表示する</label>
                 <label class="settings__item-label" for="use_28hour_clock">
@@ -69,6 +71,16 @@
                 </label>
                 <v-switch class="settings__item-switch" color="primary" id="use_28hour_clock" hide-details
                     v-model="settingsStore.settings.use_28hour_clock">
+                </v-switch>
+            </div>
+            <div class="settings__item settings__item--switch">
+                <label class="settings__item-heading" for="show_original_broadcast_time_during_playback">録画番組の再生中に元の放送時刻を表示する</label>
+                <label class="settings__item-label" for="show_original_broadcast_time_during_playback">
+                    オンにすると、録画番組の再生中に現在時刻ではなく、元の放送時刻を再生位置に合わせて表示します。デフォルトはオフです。<br>
+                    元の放送時刻が表示されているときは、タイムシフト再生中であることを示すアイコンが時刻の左側に表示されます。<br>
+                </label>
+                <v-switch class="settings__item-switch" color="primary" id="show_original_broadcast_time_during_playback" hide-details
+                    v-model="settingsStore.settings.show_original_broadcast_time_during_playback">
                 </v-switch>
             </div>
             <v-divider class="mt-6"></v-divider>
@@ -101,6 +113,18 @@
                     :density="is_form_dense ? 'compact' : 'default'"
                     :items="video_panel_active_tab" v-model="settingsStore.settings.video_panel_active_tab">
                 </v-select>
+            </div>
+            <div class="settings__item">
+                <div class="settings__item-heading">視聴履歴の保持件数</div>
+                <div class="settings__item-label">
+                    録画番組の視聴履歴を何件まで保持するかを設定します。デフォルトは 50 件です。<br>
+                    この値を超えると、最も古い視聴履歴から自動的に削除されます。<br>
+                </div>
+                <v-text-field class="settings__item-form" color="primary" variant="outlined" hide-details
+                    type="number" min="1" suffix="件"
+                    :density="is_form_dense ? 'compact' : 'default'"
+                    v-model.number="settingsStore.settings.video_watched_history_max_count">
+                </v-text-field>
             </div>
             <v-divider class="mt-6"></v-divider>
             <div class="settings__item">

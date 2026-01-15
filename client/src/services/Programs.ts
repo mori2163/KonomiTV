@@ -139,9 +139,16 @@ export interface ITimeTableDateRange {
 export interface ITimeTableChannel {
     channel: IChannel;
     programs: ITimeTableProgram[];
-    // サブチャンネル番組: チャンネル ID (NID32736-SID1024 形式) をキーとしてサブチャンネルの番組リストを保持
-    // 8時間ルールで独立列として表示されないサブチャンネルの番組情報が入る
-    subchannel_programs: { [channel_id: string]: ITimeTableProgram[] } | null;
+    // サブチャンネルのリスト (8時間ルールで独立列として表示されないサブチャンネルのみ)
+    subchannels: ITimeTableSubchannel[] | null;
+}
+
+/**
+ * 番組表向けのサブチャンネル情報
+ */
+export interface ITimeTableSubchannel {
+    channel: IChannel;
+    programs: ITimeTableProgram[];
 }
 
 /**
@@ -177,7 +184,7 @@ class Programs {
         if (response.type === 'error') {
             switch (response.data.detail) {
                 case 'This API is only available when the backend is EDCB':
-                    APIClient.showGenericError(response, 'この機能は EDCB バックエンド利用時のみ使用できます。');
+                    APIClient.showGenericError(response, '番組検索機能は EDCB バックエンド選択時のみ利用できます。');
                     break;
                 default:
                     APIClient.showGenericError(response, '番組情報の検索に失敗しました。');

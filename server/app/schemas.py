@@ -10,6 +10,13 @@ from pydantic import BaseModel, Field, RootModel, computed_field
 from tortoise.contrib.pydantic import PydanticModel
 from typing_extensions import TypedDict
 
+from app.utils.TSInformation import TerrestrialRegion
+
+
+# 以下に定義する型定義は、必ず以下の例のように、「親モデル」->「子モデル」の順に記述すること！
+# from __future__ import annotations をインポートしているので前方参照について気にする必要はない
+## 悪い例: ThumbnailImageInfo -> ThumbnailTileInfo -> ThumbnailInfo -> KeyFrame -> CMSection -> RecordedVideo
+## 良い例: RecordedVideo -> KeyFrame -> CMSection -> ThumbnailInfo -> ThumbnailImageInfo -> ThumbnailTileInfo
 
 # モデルとモデルに関連する API レスポンスの構造を表す Pydantic モデル
 ## この Pydantic モデルに含まれていないカラムは、API レスポンス返却時に自動で除外される (パスワードなど)
@@ -29,6 +36,10 @@ class Channel(PydanticModel):
     channel_number: str
     type: Literal['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K']
     name: str
+    # terrestrial_regions: network_id から算出した地デジチャンネルの地域名のリスト (デバッグ用)
+    # 広域放送局の場合は複数の地域名が含まれる
+    # 地デジ以外のチャンネルまたは地域が特定できない場合は None
+    terrestrial_regions: list[TerrestrialRegion] | None = None
     jikkyo_force: int | None = None
     is_subchannel: bool = False
     is_radiochannel: bool = False
@@ -102,11 +113,16 @@ class TimeTableChannel(BaseModel):
     channel: Channel
     # 番組リスト
     programs: list[TimeTableProgram]
-    # サブチャンネルの番組リスト (8時間ルールに該当しないサブチャンネルのみ)
-    ## キーはチャンネル ID (NID32736-SID1024 形式)、値はサブチャンネルの番組リスト
-    ## 8時間ルール: 同一 TS 内のサブチャンネルが1日あたり8時間以上放送されている場合、
-    ## そのサブチャンネルは独立したチャンネル列として表示される (この場合、このフィールドには含まれない)
-    subchannel_programs: dict[str, list[TimeTableProgram]] | None = None
+    # サブチャンネルのリスト (8時間ルールに該当しないサブチャンネルのみ)
+    ## 同一 TS 内のサブチャンネルが1日あたり8時間以上放送されている場合、
+    ## そのサブチャンネルは独立したチャンネル列として表示され、このフィールドには含まれない
+    subchannels: list[TimeTableSubchannel] | None = None
+
+class TimeTableSubchannel(BaseModel):
+    # サブチャンネルのチャンネル情報
+    channel: Channel
+    # サブチャンネルの番組リスト
+    programs: list[TimeTableProgram]
 
 class TimeTableProgram(Program):
     # 予約情報 (EDCB バックエンド時かつ予約がある場合のみ設定)
@@ -152,6 +168,7 @@ class RecordedVideo(PydanticModel):
     # key_frames はデータ量が多いため、キーフレーム情報を取得できているかを表す has_key_frames のみ返す
     has_key_frames: bool = False
     cm_sections: list[CMSection] | None = None
+    thumbnail_info: ThumbnailInfo | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -162,6 +179,27 @@ class KeyFrame(TypedDict):
 class CMSection(TypedDict):
     start_time: float
     end_time: float
+
+class ThumbnailInfo(TypedDict):
+    version: int
+    representative: ThumbnailImageInfo
+    tile: ThumbnailTileInfo
+
+class ThumbnailImageInfo(TypedDict):
+    format: Literal['WebP']
+    width: int
+    height: int
+
+class ThumbnailTileInfo(TypedDict):
+    format: Literal['WebP']
+    image_width: int
+    image_height: int
+    tile_width: int
+    tile_height: int
+    total_tiles: int
+    column_count: int
+    row_count: int
+    interval_sec: float
 
 # ***** 録画番組 *****
 

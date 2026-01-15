@@ -42,9 +42,6 @@ class PlayerController {
     // 4 秒程度の遅延を許容する
     private static readonly LIVE_PLAYBACK_BUFFER_SECONDS = 4.0;
 
-    // 視聴履歴の最大件数
-    private static readonly WATCHED_HISTORY_MAX_COUNT = 50;
-
     // 何秒視聴したら視聴履歴に追加するかの閾値 (秒)
     private static readonly WATCHED_HISTORY_THRESHOLD_SECONDS = 30;
 
@@ -396,13 +393,20 @@ class PlayerController {
                         // 画質プロファイルに記載の画質ではなく、指定された（前回再生時の）画質を使ってレジュームする
                         default_quality = options.default_quality;
                     }
+                    const tile_info = player_store.recorded_program.recorded_video.thumbnail_info?.tile ?? null;
                     return {
                         quality: qualities,
                         defaultQuality: default_quality,
-                        thumbnails: {
+                        thumbnails: tile_info !== null ? {
+                            url: `${Utils.api_base_url}/videos/${player_store.recorded_program.id}/thumbnail/tiled`,
+                            interval: tile_info.interval_sec,
+                            width: tile_info.tile_width,
+                            height: tile_info.tile_height,
+                            columnCount: tile_info.column_count,
+                        } : {
                             url: `${Utils.api_base_url}/videos/${player_store.recorded_program.id}/thumbnail/tiled`,
                             interval: (() => {
-                                // 以下のロジックは server/app/metadata/ThumbnailGenerator.py のものと同一
+                                // 以下のロジックは server/app/metadata/ThumbnailGenerator.py の旧仕様と同一
                                 // 録画番組の長さ (分単位で切り捨て)
                                 const duration_min = Math.floor(player_store.recorded_program.recorded_video.duration / 60);
                                 // 基準となる動画の長さ (30分)
@@ -1462,7 +1466,7 @@ class PlayerController {
                 // まだ視聴履歴に存在しない場合のみ追加
                 if (history_index === -1) {
                     // 視聴履歴が最大件数に達している場合は、最も古い履歴を削除
-                    if (settings_store.settings.watched_history.length >= PlayerController.WATCHED_HISTORY_MAX_COUNT) {
+                    if (settings_store.settings.watched_history.length >= settings_store.settings.video_watched_history_max_count) {
                         // 最も古い created_at のタイムスタンプを持つ履歴のインデックスを探す
                         const oldest_index = settings_store.settings.watched_history.reduce((oldest_idx, current, idx, arr) => {
                             return current.created_at < arr[oldest_idx].created_at ? idx : oldest_idx;

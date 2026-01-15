@@ -66,7 +66,7 @@ def Installer(version: str) -> None:
         is_docker_installed = IsDockerInstalled()
         if is_docker_installed is True and is_arm_device is False:
             ShowPanel([
-                f'お使いの PC には Docker と Docker Compose {"V2" if IsDockerComposeV2() else "V1"} がインストールされています。',
+                f'お使いの PC には Docker と Docker Compose {"V2 以降" if IsDockerComposeV2() else "V1"} がインストールされています。',
                 'Docker + Docker Compose を使ってインストールしますか？',
             ], padding=(1, 2, 1, 2))
 
@@ -966,7 +966,7 @@ def Installer(version: str) -> None:
                 ShowPanel([
                     'RK3588/RK3588S 向けの Mali GPU Driver は、以下のコマンドでインストールできます。',
                     'インストール完了後は、システムの再起動が必要です。',
-                    '[cyan]curl -LO https://github.com/tsukumijima/libmali-rockchip/releases/download/v1.9-1-55611b0/libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb && sudo apt install -y ./libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb && rm libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb && curl -LO https://github.com/tsukumijima/rockchip-multimedia-config/releases/download/v1.0.2-1/rockchip-multimedia-config_1.0.2-1_all.deb && sudo apt install -y ./rockchip-multimedia-config_1.0.2-1_all.deb && rm rockchip-multimedia-config_1.0.2-1_all.deb[/cyan]',
+                    '[cyan]curl -LO https://github.com/tsukumijima/libmali-rockchip/releases/download/v1.9-1-3238416/libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb && sudo apt install -y ./libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb && rm libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb && curl -LO https://github.com/tsukumijima/rockchip-multimedia-config/releases/download/v1.0.2-1/rockchip-multimedia-config_1.0.2-1_all.deb && sudo apt install -y ./rockchip-multimedia-config_1.0.2-1_all.deb && rm rockchip-multimedia-config_1.0.2-1_all.deb[/cyan]',
                 ], padding=(0, 2, 0, 2))
                 ShowPanel([
                     'rkmppenc のログ:\n' + result.stdout.strip(),

@@ -310,12 +310,20 @@ class RecordedScanTask:
 
         # 現在登録されている全ての RecordedVideo レコードをキャッシュ
         ## 重複削除処理で保持すると判断されたレコードのみを使う
-        existing_db_recorded_videos = {}
+        existing_db_recorded_videos: dict[anyio.Path, RecordedVideoSummary] = {}
         for video in videos_to_keep:
             # 既存レコードのファイルパスもシンボリックリンクを解決して正規化する
             canonical_path = await self.resolveRecordedPath(anyio.Path(video.file_path))
             video.file_path = str(canonical_path)
             existing_db_recorded_videos[anyio.Path(video.file_path)] = video
+
+        # スキャン対象から除外するフォルダ
+        # 空文字列は全パスにマッチしてしまうため除外する
+        exclude_scan_paths = [
+            self.__normalizePathForPrefixMatch(pattern)
+            for pattern in self.config.video.exclude_scan_paths
+            if type(pattern) is str and pattern.strip() != ''
+        ]
 
         # 各録画フォルダをスキャン
         logging.info('Scanning recorded folders...')
@@ -326,10 +334,19 @@ class RecordedScanTask:
                     # Mac の metadata ファイルをスキップ
                     if file_path.name.startswith('._'):
                         continue
+                    # 除外パターンのチェック（シンボリックリンク解決前）
+                    original_path_str = str(file_path)
+                    original_path_for_match = self.__normalizePathForPrefixMatch(original_path_str)
+                    if any(original_path_for_match.startswith(pattern) for pattern in exclude_scan_paths) is True:
+                        continue
                     # シンボリックリンクを含むパスは実体に解決して処理する
                     canonical_path = await self.resolveRecordedPath(file_path)
-                    original_path_str = str(file_path)
                     canonical_path_str = str(canonical_path)
+                    # 除外パターンのチェック（シンボリックリンク解決後）
+                    # 空文字列は全パスにマッチしてしまうため除外する
+                    canonical_path_for_match = self.__normalizePathForPrefixMatch(canonical_path_str)
+                    if any(canonical_path_for_match.startswith(pattern) for pattern in exclude_scan_paths) is True:
+                        continue
                     # シンボリックリンクのマッピングを更新する
                     await self.__updateSymlinkMapping(original_path_str, canonical_path_str)
                     if await canonical_path.is_dir():
@@ -384,10 +401,12 @@ class RecordedScanTask:
                     # .git から始まるファイルは無視
                     if thumbnail_path.name.startswith('.git'):
                         continue
+                    # ディレクトリは無視
+                    if await thumbnail_path.is_dir():
+                        continue
 
                     # ファイル名からハッシュを抽出
                     ## ファイル名は "{hash}.webp" または "{hash}_tile.webp" の形式
-                    ## JPEG フォールバックの場合は ".jpg" の可能性もある
                     file_name = thumbnail_path.stem
                     if file_name.endswith('_tile'):
                         file_hash = file_name[:-5]  # "_tile" を除去
@@ -401,23 +420,31 @@ class RecordedScanTask:
                 except Exception as ex:
                     logging.error(f'{thumbnail_path}: Error deleting orphaned thumbnail file:', exc_info=ex)
 
+        # サムネイル情報のマイグレーションを実行
+        await self.__migrateThumbnailInfo()
+
         # かつてのバグで RecordedVideo.file_hash が衝突している録画ファイルのメタデータを再解析する
         ## トランザクション配下に入れることでパフォーマンスが向上する
+        ## メモリ使用量を抑えるため、key_frames などの大きなフィールドは取得せず、必要最低限のフィールドのみを取得する
         ## ref: https://github.com/tsukumijima/KonomiTV/commit/92e8630f41b6440ebd10defa5fdde1489ac7376a
         async with transactions.in_transaction():
-            collision_videos = await RecordedVideo.filter(
+            collision_video_rows = await RecordedVideo.filter(
                 file_hash__in=list(self.KNOWN_COLLISION_FILE_HASHES),
-            ).all()
+            ).values(
+                'status',
+                'file_path',
+                'file_hash',
+            )
             processed_collision_paths: set[str] = set()
-            if len(collision_videos) > 0:
-                logging.info(f'Found {len(collision_videos)} videos affected by known hash collisions. Reanalyzing...')
-                for collision_video in collision_videos:
-                    file_path_str = collision_video.file_path
+            if len(collision_video_rows) > 0:
+                logging.info(f'Found {len(collision_video_rows)} videos affected by known hash collisions. Reanalyzing...')
+                for collision_video_row in collision_video_rows:
+                    file_path_str = collision_video_row['file_path']
                     # 既に処理済みのファイルはスキップ
                     if file_path_str in processed_collision_paths:
                         continue
                     # 録画中のファイルは今後の解析に任せる
-                    if collision_video.status == 'Recording':
+                    if collision_video_row['status'] == 'Recording':
                         continue
                     file_path = anyio.Path(file_path_str)
                     # ファイルが存在しない場合はスキップ
@@ -425,7 +452,7 @@ class RecordedScanTask:
                         continue
                     try:
                         # メタデータ再解析を実行
-                        logging.info(f'{file_path}: Reanalyzing due to known hash collision ({collision_video.file_hash}).')
+                        logging.info(f'{file_path}: Reanalyzing due to known hash collision ({collision_video_row["file_hash"]}).')
                         await self.processRecordedFile(
                             file_path = file_path,
                             force_update = True,
@@ -720,6 +747,22 @@ class RecordedScanTask:
             return file_path
 
 
+    @staticmethod
+    def __normalizePathForPrefixMatch(path_str: str) -> str:
+        """
+        パス区切り文字を統一し、前方一致の比較を安定させる。
+
+        Args:
+            path_str (str): 正規化対象のパス文字列
+
+        Returns:
+            str: パス区切り文字を / に統一した文字列
+        """
+
+        # Windows ではパス区切り文字として / と \\ の両方が使えるため、比較前に / に統一する
+        return path_str.replace('\\', '/')
+
+
     async def __updateSymlinkMapping(self, original_path_str: str | None, canonical_path_str: str) -> None:
         """
         シンボリックリンクの元パスと実体パスのマッピングを管理する。
@@ -882,6 +925,98 @@ class RecordedScanTask:
             self._background_tasks.pop(file_path, None)
 
 
+    async def __migrateThumbnailInfo(self) -> None:
+        """
+        サムネイル情報 (thumbnail_info) が未保存の録画に対して、サムネイル情報の移行・補完を行う
+
+        このメソッドは runBatchScan() から呼び出され、以下の処理を行う:
+        - RecordedVideo.thumbnail_info が None のレコードを対象にサムネイル情報を移行
+        - 既存のサムネイルタイル画像が存在する場合は旧仕様 (480x270, 34列) から新仕様 (192x108, 85列) に変換
+        - サムネイルが存在しない場合は新規に生成
+
+        新仕様ではタイルサイズを小さくすることで、ファイルサイズを削減しつつシークバーでの表示品質を維持している
+        旧仕様のタイル画像は backup フォルダにバックアップされる (MIGRATION_BACKUP_ENABLED が True の場合)
+        """
+
+        logging.info('Starting thumbnail metadata migration...')
+
+        # サムネイルフォルダが存在しない場合はマイグレーション不要
+        thumbnails_dir = anyio.Path(str(THUMBNAILS_DIR))
+        if not await thumbnails_dir.is_dir():
+            logging.info('Thumbnail directory does not exist. Skipping thumbnail metadata migration.')
+            return
+
+        # thumbnail_info が未設定の録画済みファイルを一括取得
+        ## マイグレーション処理では RecordedVideo の情報のみで十分なため、RecordedProgram は取得しない
+        ## メモリ使用量を抑えるため、key_frames などの大きなフィールドは取得せず、必要最低限のフィールドのみを取得する
+        target_video_rows = await RecordedVideo.filter(status='Recorded', thumbnail_info=None).values(
+            'id',
+            'file_path',
+            'file_hash',
+            'duration',
+            'recorded_program_id',
+        )
+        if len(target_video_rows) == 0:
+            logging.info('No videos require thumbnail metadata migration.')
+            return
+
+        logging.info(
+            f'Thumbnail metadata migration target count: {len(target_video_rows)} '
+            f'(backup_enabled: {ThumbnailGenerator.MIGRATION_BACKUP_ENABLED}).'
+        )
+
+        # 各録画ファイルに対してサムネイル情報を移行
+        for index, video_row in enumerate(target_video_rows, start=1):
+            file_path = anyio.Path(video_row['file_path'])
+
+            # 録画ファイルが存在しない場合はスキップ (削除済みなど)
+            if not await self.isFileExists(file_path):
+                logging.warning(f'{file_path}: Recording file not found. Skipping thumbnail metadata migration. ({index}/{len(target_video_rows)})')
+                continue
+
+            # 既存のサムネイルファイルのパスを構築
+            tile_path = thumbnails_dir / f'{video_row["file_hash"]}_tile.webp'
+            thumbnail_path = thumbnails_dir / f'{video_row["file_hash"]}.webp'
+
+            try:
+                logging.info(f'{file_path}: Thumbnail migration started. ({index}/{len(target_video_rows)})')
+
+                # 同時実行数を制限しつつサムネイル処理を実行
+                async with ProcessLimiter.getSemaphore('ThumbnailMigration'):
+                    async with DriveIOLimiter.getSemaphore(file_path):
+                        # タイル画像と代表サムネイルの両方が存在する場合は既存タイルを新仕様に変換
+                        if await tile_path.is_file() and await thumbnail_path.is_file():
+                            generator = ThumbnailGenerator.forMigration(
+                                file_path = video_row['file_path'],
+                                file_hash = video_row['file_hash'],
+                                duration_sec = video_row['duration'],
+                            )
+                            await generator.migrateFromLegacyTile()
+                        # サムネイルが存在しない場合は新規生成する
+                        ## 新規生成を行うには RecordedProgram が必要なため、ここで随時取得する
+                        else:
+                            logging.info(f'{file_path}: Missing thumbnails. Regenerating with new settings. ({index}/{len(target_video_rows)})')
+                            recorded_program = await RecordedProgram.get_or_none(
+                                id=video_row['recorded_program_id'],
+                            ).select_related('recorded_video', 'channel')
+                            if recorded_program is None:
+                                logging.warning(f'{file_path}: RecordedProgram not found. Skipping thumbnail regeneration. ({index}/{len(target_video_rows)})')
+                                continue
+                            recorded_program_schema = schemas.RecordedProgram.model_validate(recorded_program, from_attributes=True)
+                            generator = ThumbnailGenerator.fromRecordedProgram(recorded_program_schema)
+                            await generator.generateAndSave()
+
+                logging.info(f'{file_path}: Thumbnail migration finished. ({index}/{len(target_video_rows)})')
+            except Exception as ex:
+                logging.error(f'{file_path}: Failed to migrate thumbnail metadata:', exc_info=ex)
+
+            # イベントループが他のタスクを処理できるよう定期的に制御を返す
+            if index % 20 == 0:
+                await asyncio.sleep(0)
+
+        logging.info('Thumbnail metadata migration completed.')
+
+
     async def watchRecordedFolders(self) -> None:
         """
         録画フォルダ以下のファイルシステム変更の監視を開始し、変更があれば随時メタデータを解析後、DB に永続化する
@@ -891,6 +1026,14 @@ class RecordedScanTask:
 
         # 監視対象のディレクトリを設定
         watch_paths = [str(path) for path in self.recorded_folders]
+
+        # スキャン対象から除外するフォルダ
+        # 空文字列は全パスにマッチしてしまうため除外する
+        exclude_scan_paths = [
+            self.__normalizePathForPrefixMatch(pattern)
+            for pattern in self.config.video.exclude_scan_paths
+            if type(pattern) is str and pattern.strip() != ''
+        ]
 
         # 録画完了チェック用のタスク
         completion_check_task = asyncio.create_task(self.__checkRecordingCompletion())
@@ -910,8 +1053,20 @@ class RecordedScanTask:
                     # Mac の metadata ファイルをスキップ
                     if file_path.name.startswith('._'):
                         continue
+                    # 除外パターンのチェック（シンボリックリンク解決前）
+                    # 空文字列は全パスにマッチしてしまうため除外する
+                    original_path_str = str(file_path)
+                    original_path_for_match = self.__normalizePathForPrefixMatch(original_path_str)
+                    if any(original_path_for_match.startswith(pattern) for pattern in exclude_scan_paths) is True:
+                        continue
                     # シンボリックリンクを含むパスは実体に解決して処理する
                     canonical_path = await self.resolveRecordedPath(file_path)
+                    # 除外パターンのチェック（シンボリックリンク解決後）
+                    # 空文字列は全パスにマッチしてしまうため除外する
+                    canonical_path_str = str(canonical_path)
+                    canonical_path_for_match = self.__normalizePathForPrefixMatch(canonical_path_str)
+                    if any(canonical_path_for_match.startswith(pattern) for pattern in exclude_scan_paths) is True:
+                        continue
                     if await canonical_path.is_dir():
                         continue
                     # 対象拡張子のファイル以外は無視

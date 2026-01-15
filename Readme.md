@@ -1,7 +1,8 @@
 
-# <img width="350" src="https://user-images.githubusercontent.com/39271166/134050201-8110f076-a939-4b62-8c86-7beaa3d4728c.png" alt="KonomiTV">　<!-- omit in toc -->
+# <img width="350" src="https://user-images.githubusercontent.com/39271166/134050201-8110f076-a939-4b62-8c86-7beaa3d4728c.png" alt="KonomiTV Logo">　<!-- omit in toc -->
 
-<img width="100%" src="https://github.com/user-attachments/assets/6971f354-0418-4305-bf6d-b061142ffec6"><br>
+<img width="100%" src="https://github.com/user-attachments/assets/6971f354-0418-4305-bf6d-b061142ffec6">
+<video controls src="https://github.com/user-attachments/assets/ee0b6df0-3bb0-40da-99f4-798437aa2f9c"></video>
 
 **いろいろな場所とデバイスでテレビと録画を快適に見れる、モダンな Web ベースのソフトウェアです。**
 
@@ -11,15 +12,16 @@
 計画はかなり壮大ですが、2025年10月時点ではおもに以下の機能のみ実装されています。
 
 - **「テレビをみる」**: 高画質/低遅延なリアルタイム視聴に対応し、ニコニコ実況や Twitter のコメントとともに番組を楽しめる、デバイスを選ばない快適な視聴体験
-- **「ビデオをみる」**: 動画配信サービスのような洗練された UI と、当時の盛り上がりを追体験できるコメント再生機能を備えた、録画番組をゆったりと楽しめる視聴体験 **[🎉NEW!]**
+- **「ビデオをみる」**: 動画配信サービスのような洗練された UI と、当時の盛り上がりを追体験できるコメント再生機能を備えた、録画番組をゆったりと楽しめる視聴体験
+- **「番組表」**: 読みやすく色分けされたデザインと軽快な動作で、気になる番組を見つけたら1クリックで録画予約できる **[🎉NEW!]**
 - **「録画予約」**: 予約した番組の番組情報や放送時間を一目で把握でき、リアタイ視聴をサポート **[🎉NEW!]**
-- **「マイリスト」**: 気になる録画番組をさっと登録して、ゆっくり観たいときに思い出せる、あなたのための視聴リスト **[🎉NEW!]**
-- **「視聴履歴」**: 録画番組の視聴状況を自動で追跡し、途中で中断した場合も前回の続きから再開して、あなたの番組鑑賞をサポート **[🎉NEW!]**
-- **「KonomiTV アカウント」**:  外出先のスマホでも自宅の PC でも、いつでもどこでも同じ設定で使える
+- **「マイリスト」**: 気になる録画番組をさっと登録して、ゆっくり観たいときに思い出せる、あなたのための視聴リスト
+- **「視聴履歴」**: 録画番組の視聴状況を自動で追跡し、途中で中断した場合も前回の続きから再開して、あなたの番組鑑賞をサポート
+- **「KonomiTV アカウント」**:  外出先のスマホでも自宅の PC でも、いつでもどこでも同じマイリスト・視聴履歴・設定を共有できる
 - **「クライアント設定」**: KonomiTV のクライアントアプリ (PWA) の細かな設定が可能な設定画面
 - **「サーバー設定」**: KonomiTV サーバーの動作環境や配信設定をカスタマイズできる設定画面
 
-今後もより快適な視聴体験を実現すべく、「番組表」「録画予約管理（EDCB 連携）」「録画番組の自動エンコード」「キャプチャ画像の管理」など、さらに便利で使いやすい機能を順次追加していく予定です。
+今後もより快適な視聴体験を実現すべく、「番組検索」「キーワード自動予約条件の管理」「録画番組の自動エンコード」「キャプチャ画像の管理」など、さらに便利で使いやすい機能を順次追加していく予定です。
 
 ## 目次 <!-- omit in toc -->
 - [設計思想](#設計思想)
@@ -101,7 +103,7 @@
 それでも私が頑張れば私を含めたユーザーの視聴体験が向上するわけで、必要な犠牲かなと思っています。
 
 <img width="100%" src="https://github.com/user-attachments/assets/933956b2-acd5-45c5-8226-c857d12f2a2a"><br>
-<img width="100%" src="https://github.com/user-attachments/assets/feb4661b-dcd5-4137-99b5-cb2f2024e9fb"><br>
+<img width="100%" src="https://github.com/user-attachments/assets/831cba8a-27e1-4f52-8856-0e0b8fef4ae1"><br>
 
 ## 動作環境
 
@@ -171,10 +173,12 @@
 
 ## 備考・注意事項
 
-- **まだ開発中の β 版です。当初よりかなり安定してきましたが、まだ完璧に保証ができる状態ではありません。**
+- **まだ開発中の β 版です。当初よりかなり安定してきましたが、まだ完璧に動作保証ができる状態ではありません。**
   - **KonomiTV 0.12.0 以降では、構想から4年の歳月を経て録画番組の再生機能が実装されました！🎉🎊**  
     - **ライブ視聴・録画再生の両方で TVRemotePlus の完全上位互換となっています。** TVRemotePlus はすでに開発を終了しているため、移行をお勧めします。
   - L字画面のクロップなどの細かな設定も含め、TVRemotePlus よりも大幅に改善されているはずです。
+- **録画予約機能・番組検索機能は EDCB バックエンドを前提に設計されています。Mirakurun バックエンドや EPGStation には対応していません。**
+  - 詳細は [こちらのツイート](https://x.com/TVRemotePlus/status/2006499142198243457) にて説明しています。
 - **スマートフォンでは、最低限 iPhone SE2 (4.7インチ) 以上の画面サイズが必要です。**
   - 快適に利用するには、画面サイズが 6.1 インチ以上の端末をおすすめします。
   - iPhone 5s (4インチ) サイズの端末には原則対応しておらず、画面が大幅に崩れます。
@@ -378,10 +382,14 @@ sudo reboot
 
 ```bash
 # Mali GPU Driver のインストール (RK3588/RK3588S 向け)
+## --vpp-yadif などの OpenCL フィルタの利用に必要
+## Debian 11 Bullseye Core イメージにはデフォルトではインストールされていない
 ## 他の Rockchip SoC の Mali GPU Driver は https://github.com/tsukumijima/libmali-rockchip/releases から入手できる
 ## RK3588/RK3588S の場合、g610-g6p0 より g610-g13p0 の方が高速に動作する
-wget https://github.com/tsukumijima/libmali-rockchip/releases/download/v1.9-1-55611b0/libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb
-sudo apt install -y ./libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb
+## 2026年1月追記: v1.9-1-3238416 よりも後のバージョンは glibc 2.34 でビルドされているため、
+## glibc 2.31 を持つ Debian 11 Bullseye では v1.9-1-3238416 までしかインストールできない (!!!)
+wget https://github.com/tsukumijima/libmali-rockchip/releases/download/v1.9-1-3238416/libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb
+sudo apt install -y --allow-downgrades ./libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb
 rm libmali-valhall-g610-g13p0-wayland-gbm_1.9-1_arm64.deb
 
 # rockchip-multimedia-config のインストール
@@ -556,7 +564,7 @@ Docker Compose は V1 と V2 の両方に対応していますが、できれば
 <img width="100%" src="https://user-images.githubusercontent.com/39271166/201463450-96bb686e-c5bb-493d-b907-57b5f51ac986.png"><br>
 
 ```bash
-curl -LO https://github.com/tsukumijima/KonomiTV/releases/download/v0.12.0/KonomiTV-Installer.elf
+curl -LO https://github.com/tsukumijima/KonomiTV/releases/download/v0.13.0/KonomiTV-Installer.elf
 chmod a+x KonomiTV-Installer.elf
 ./KonomiTV-Installer.elf
 ```

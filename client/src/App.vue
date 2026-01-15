@@ -89,6 +89,31 @@ html {
         position: static !important;
         overflow: hidden !important;
     }
+
+    // 番組表のジャンルハイライトカラー (REGZA 風)
+    // TimeTable.vue と TimeTableSettings.vue 共通で使う
+    --timetable-genre-highlight-white: #ffffff;
+    --timetable-genre-background-white: #f8f8f8;
+    --timetable-genre-highlight-pink: #f50094;
+    --timetable-genre-background-pink: #f6eaef;
+    --timetable-genre-highlight-red: #e1512d;
+    --timetable-genre-background-red: #ffecec;
+    --timetable-genre-highlight-orange: #ff9800;
+    --timetable-genre-background-orange: #fff3e0;
+    --timetable-genre-highlight-yellow: #ffeb3b;
+    --timetable-genre-background-yellow: #fffde7;
+    --timetable-genre-highlight-lime: #8bc34a;
+    --timetable-genre-background-lime: #f1f8e9;
+    --timetable-genre-highlight-teal: #009688;
+    --timetable-genre-background-teal: #e0f2f1;
+    --timetable-genre-highlight-cyan: #03a9f4;
+    --timetable-genre-background-cyan: #e1f5fe;
+    --timetable-genre-highlight-blue: #4e7ac1;
+    --timetable-genre-background-blue: #eff3fb;
+    --timetable-genre-highlight-ochre: #c59a2f;
+    --timetable-genre-background-ochre: #fdf5e2;
+    --timetable-genre-highlight-brown: #a3421f;
+    --timetable-genre-background-brown: #fff2eb;
 }
 
 // アプリケーションのルート
@@ -282,6 +307,14 @@ body .route-container {
     color: rgb(var(--v-theme-text));
     background: rgb(var(--v-theme-primary));
     font-size: 0.94em;
+
+    // Safari でのみ display: inline に変更
+    // Safari では -webkit-line-clamp と inline-flex/inline-block の組み合わせで
+    // 省略が不要なテキストでも ... が表示されるレンダリングバグが発生するため
+    @supports (hanging-punctuation: first) and (font: -apple-system-body) and (-webkit-appearance: none) {
+        display: inline;
+        padding-bottom: 0.045em;
+    }
 }
 
 // スマホ縦画面 (幅が 600px 以下の端末) のみ表示する <br> タグ
