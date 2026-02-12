@@ -10,9 +10,12 @@ from tortoise import transactions
 
 from app import logging, schemas
 from app.config import Config
+from app.constants import JST
 from app.models.Channel import Channel
 from app.models.Program import Program
+from app.utils import NormalizeToJSTDatetime
 from app.utils.edcb import (
+    EventInfo,
     RecFileSetInfoRequired,
     RecSettingData,
     RecSettingDataRequired,
@@ -37,7 +40,12 @@ _bitrate_ini_cache: dict[str, int] | None = None
 _bitrate_ini_cache_timestamp: float | None = None
 
 
-async def DecodeEDCBReserveData(reserve_data: ReserveDataRequired, channels: list[Channel] | None = None, programs: dict[tuple[int, int, int], Program] | None = None) -> schemas.Reservation:
+async def DecodeEDCBReserveData(
+    reserve_data: ReserveDataRequired,
+    channels: list[Channel] | None = None,
+    programs: dict[tuple[int, int, int], Program] | None = None,
+    is_recording_in_progress: bool = False,
+) -> schemas.Reservation:
     """
     EDCB の ReserveData オブジェクトを schemas.Reservation オブジェクトに変換する
 
@@ -45,6 +53,7 @@ async def DecodeEDCBReserveData(reserve_data: ReserveDataRequired, channels: lis
         reserve_data (ReserveDataRequired): EDCB の ReserveData オブジェクト
         channels (list[Channel] | None): あらかじめ全てのチャンネル情報を取得しておく場合はそのリスト、そうでない場合は None
         programs (dict[tuple[int, int, int], Program] | None): あらかじめ取得しておいた番組情報の辞書 (network_id, service_id, event_id) -> Program
+        is_recording_in_progress (bool): 録画中かどうか
 
     Returns:
         schemas.Reservation: schemas.Reservation オブジェクト
@@ -307,11 +316,6 @@ async def DecodeEDCBReserveData(reserve_data: ReserveDataRequired, channels: lis
         program.end_time = end_time
         program.duration = duration
 
-    # 録画予約が現在進行中かどうか
-    ## CtrlCmdUtil.sendGetRecFilePath() で「録画中かつ視聴予約でない予約の録画ファイルパス」が返ってくる場合は True、それ以外は False
-    ## 歴史的経緯でこう取得することになっているらしい
-    is_recording_in_progress: bool = type(await CtrlCmdUtil().sendGetRecFilePath(reserve_id)) is str
-
     # 実際に録画可能かどうか: 全編録画可能 / チューナー不足のため部分的にのみ録画可能 (一部録画できない) / チューナー不足のため全編録画不可能
     # ref: https://github.com/xtne6f/EDCB/blob/work-plus-s-240212/Common/CommonDef.h#L32-L34
     # ref: https://github.com/xtne6f/EDCB/blob/work-plus-s-240212/Common/StructDef.h#L62
@@ -462,7 +466,8 @@ def DecodeEDCBRecSettingData(rec_settings_data: RecSettingDataRequired) -> schem
     is_exact_recording_enabled: bool = rec_settings_data['pittari_flag']
 
     # 録画対象のチャンネルにワンセグ放送が含まれる場合、ワンセグ放送を別ファイルに同時録画するかどうか
-    ## partial_rec_flag が 2 の時はワンセグ放送だけを出力できるそうだが、EpgTimer の UI ですら設定できない隠し機能のため無視する
+    ## partial_rec_flag が 2 の時はワンセグ放送だけを出力できるが、EpgTimer 標準 UI でも設定経路がなく、
+    ## KonomiTV でも UI 設計上 0/1 のみを扱う方針のため、2 は非対応とする
     is_oneseg_separate_output_enabled: bool = rec_settings_data['partial_rec_flag'] == 1
 
     # 同一チャンネルで時間的に隣接した録画予約がある場合に、それらを同一の録画ファイルに続けて出力するかどうか
@@ -616,7 +621,8 @@ def EncodeEDCBRecSettingData(record_settings: schemas.RecordSettings) -> RecSett
     continue_rec_flag: bool = record_settings.is_sequential_recording_in_single_file_enabled
 
     # 録画対象のチャンネルにワンセグ放送が含まれる場合、ワンセグ放送を別ファイルに同時録画するかどうか
-    ## partial_rec_flag が 2 の時はワンセグ放送だけを出力できるそうだが、EpgTimer の UI ですら設定できない隠し機能のため無視する
+    ## partial_rec_flag が 2 の時はワンセグ放送だけを出力できるが、EpgTimer 標準 UI でも設定経路がなく、
+    ## KonomiTV でも UI 設計上 0/1 のみを扱う方針のため、2 は非対応とする
     partial_rec_flag: int = 1 if record_settings.is_oneseg_separate_output_enabled is True else 0
 
     # チューナーを強制指定する際のチューナー ID / 自動選択の場合は 0 を指定
@@ -733,7 +739,19 @@ async def GetReserveData(
     reservation_id: Annotated[int, Path(description='録画予約 ID 。')],
     edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
 ) -> ReserveDataRequired:
-    """ 指定された録画予約の情報を取得する """
+    """
+    指定された録画予約の情報を取得する
+
+    Args:
+        reservation_id (int): 録画予約 ID
+        edcb (CtrlCmdUtil): EDCB API クライアント
+
+    Returns:
+        ReserveDataRequired: EDCB の ReserveData オブジェクト
+
+    Raises:
+        HTTPException: 指定された録画予約が見つからなかった場合
+    """
 
     # 指定された録画予約の情報を取得
     for reserve_data in await GetReserveDataList(edcb):
@@ -752,45 +770,177 @@ async def GetServiceEventInfo(
     channel: Channel,
     program: Program,
     edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
-) -> ServiceEventInfo:
-    """ EDCB から指定されたチャンネル情報・番組情報に合致する ServiceEventInfo を取得する """
+) -> tuple[ServiceEventInfo, EventInfo]:
+    """
+    EDCB から指定されたチャンネル情報・番組情報に合致する ServiceEventInfo と EventInfo を取得する
+
+    Args:
+        channel (Channel): 録画予約対象のチャンネル情報
+        program (Program): 録画予約対象として指定された番組情報
+        edcb (CtrlCmdUtil): EDCB API クライアント
+
+    Returns:
+        tuple[ServiceEventInfo, EventInfo]: 解決できたサービス情報とイベント情報
+    """
+
+    def FindEventByEventID(service_event_info_list: list[ServiceEventInfo], event_id: int) -> tuple[ServiceEventInfo, EventInfo] | None:
+        """
+        ServiceEventInfo リストから、イベント ID が一致する EventInfo を探す
+
+        Args:
+            service_event_info_list (list[ServiceEventInfo]): EDCB から取得したサービス情報のリスト
+            event_id (int): 探索対象のイベント ID
+
+        Returns:
+            tuple[ServiceEventInfo, EventInfo] | None: 一致したサービス情報とイベント情報
+        """
+
+        for service_event_info in service_event_info_list:
+            for event_info in service_event_info.get('event_list', []):
+                if event_info['eid'] == event_id:
+                    return service_event_info, event_info
+        return None
+
+    def FindOnAirEvent(service_event_info_list: list[ServiceEventInfo], current_time: datetime) -> tuple[ServiceEventInfo, EventInfo] | None:
+        """
+        ServiceEventInfo リストから、現在放送中の EventInfo を探す
+
+        Args:
+            service_event_info_list (list[ServiceEventInfo]): EDCB から取得したサービス情報のリスト
+            current_time (datetime): 判定基準時刻
+
+        Returns:
+            tuple[ServiceEventInfo, EventInfo] | None: 現在放送中のサービス情報とイベント情報
+        """
+
+        for service_event_info in service_event_info_list:
+            for event_info in service_event_info.get('event_list', []):
+                if 'start_time' not in event_info or 'duration_sec' not in event_info:
+                    continue
+                event_end_time = event_info['start_time'] + timedelta(seconds=max(event_info['duration_sec'], 1))
+                if event_info['start_time'] <= current_time < event_end_time:
+                    return service_event_info, event_info
+        return None
 
     # EDCB からサービスと当該番組の開始時刻を指定して番組情報を取得
-    ## API 仕様がお世辞にも意味わからんのだが、一応これでほぼピンポイントで当該番組のみ取得できる
+    ## EIT[p/f] と EIT[schedule] の更新タイミング差で番組開始時刻がずれることがあるため、
+    ## まずは番組開始時刻近傍で探索し、それで見つからなければ現在時刻近傍の広い範囲で再探索する
     assert channel.transport_stream_id is not None, 'transport_stream_id is missing.'
-    service_event_info_list = await edcb.sendEnumPgInfoEx([
-        # 絞り込み対象のネットワーク ID・トランスポートストリーム ID・サービス ID に掛けるビットマスク (?????)
-        ## 意味が分からないけどとりあえず今回はビットマスクは使用しないので 0 を指定
-        0,
-        # 絞り込み対象のネットワーク ID・トランスポートストリーム ID・サービス ID
-        ## (network_id << 32 | transport_stream_id << 16 | service_id) の形式で指定しなければならないらしい
-        channel.network_id << 32 | channel.transport_stream_id << 16 | channel.service_id,
-        # 絞り込み対象の番組開始時刻の最小値
-        EDCBUtil.datetimeToFileTime(program.start_time, timezone(timedelta(hours=9))),
-        # 絞り込み対象の番組開始時刻の最大値
-        EDCBUtil.datetimeToFileTime(program.start_time + timedelta(minutes=1), timezone(timedelta(hours=9))),
-    ])
+    current_time = datetime.now(JST)
+    program_start_time = NormalizeToJSTDatetime(program.start_time)
+    search_ranges = [
+        (program_start_time, program_start_time + timedelta(minutes=1), 'program_time_window'),
+        (current_time - timedelta(hours=6), current_time + timedelta(hours=6), 'current_time_wide_window'),
+    ]
+    latest_service_event_info_list: list[ServiceEventInfo] = []
+    for start_time, end_time, search_label in search_ranges:
+        service_event_info_list = await edcb.sendEnumPgInfoEx([
+            # 絞り込み対象のネットワーク ID・トランスポートストリーム ID・サービス ID に掛けるビットマスク (?????)
+            ## 意味が分からないけどとりあえず今回はビットマスクは使用しないので 0 を指定
+            0,
+            # 絞り込み対象のネットワーク ID・トランスポートストリーム ID・サービス ID
+            ## (network_id << 32 | transport_stream_id << 16 | service_id) の形式で指定しなければならないらしい
+            channel.network_id << 32 | channel.transport_stream_id << 16 | channel.service_id,
+            # 絞り込み対象の番組開始時刻の最小値
+            ## datetimeToFileTime() は内部で tz.utcoffset(None) を呼ぶため、
+            ## ZoneInfo ではなく固定オフセットの datetime.timezone を渡す必要がある
+            EDCBUtil.datetimeToFileTime(start_time, timezone(timedelta(hours=9))),
+            # 絞り込み対象の番組開始時刻の最大値
+            EDCBUtil.datetimeToFileTime(end_time, timezone(timedelta(hours=9))),
+        ])
+        if service_event_info_list is None or len(service_event_info_list) == 0:
+            logging.warning(
+                f'[ReservationsRouter][GetServiceEventInfo] No program information found in search range. [channel_id: {channel.id} / program_id: {program.id} / search_label: {search_label}]',
+            )
+            continue
+        latest_service_event_info_list = service_event_info_list
 
-    # 番組情報が取得できなかった場合はエラーを返す
-    if service_event_info_list is None or len(service_event_info_list) == 0:
-        logging.error(f'[ReservesRouter][GetServiceEventInfo] Failed to get the program information. [channel_id: {channel.id} / program_id: {program.id}]')
-        raise HTTPException(
-            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail = 'Failed to get the program information',
-        )
+        # まずイベント ID 一致を最優先で探す
+        matched_event = FindEventByEventID(service_event_info_list, program.event_id)
+        if matched_event is not None:
+            # 一致したイベントが既に終了していて、かつ現在放送中イベントが別に存在する場合は現在放送中イベントへ切り替える
+            ## スポーツ延長などで番組詳細パネルの EID が古いまま残ったケースを救済する
+            on_air_event = FindOnAirEvent(service_event_info_list, current_time)
+            if ('start_time' in matched_event[1] and
+                'duration_sec' in matched_event[1] and
+                on_air_event is not None and
+                on_air_event[1]['eid'] != matched_event[1]['eid']):
+                matched_event_end_time = matched_event[1]['start_time'] + timedelta(seconds=max(matched_event[1]['duration_sec'], 1))
+                if current_time >= matched_event_end_time:
+                    logging.warning(
+                        f'[ReservationsRouter][GetServiceEventInfo] Matched event is already ended, switched to on-air event. [channel_id: {channel.id} / program_id: {program.id} / requested_event_id: {program.event_id} / matched_event_id: {matched_event[1]["eid"]} / resolved_event_id: {on_air_event[1]["eid"]}]',
+                    )
+                    return on_air_event
+            return matched_event
 
-    # イベント ID が一致する番組情報を探す
-    for service_event_info in service_event_info_list:
-        if ('event_list' in service_event_info and len(service_event_info['event_list']) > 0 and
-            service_event_info['event_list'][0]['eid'] == program.event_id):
-            return service_event_info
+    # イベント ID が一致しないとき、番組が既に終了扱いなら現在放送中イベントへフェイルオーバーする
+    ## 長時間延長などで EPG の切り替わりが遅延したケースでは、指定 EID が実態とずれていることがある
+    requested_program_end_time = program_start_time + timedelta(seconds=max(int(program.duration), 1))
+    if latest_service_event_info_list and current_time >= requested_program_end_time:
+        on_air_event = FindOnAirEvent(latest_service_event_info_list, current_time)
+        if on_air_event is not None:
+            logging.warning(
+                f'[ReservationsRouter][GetServiceEventInfo] Falling back to on-air event because event_id mismatch. [channel_id: {channel.id} / program_id: {program.id} / requested_event_id: {program.event_id} / resolved_event_id: {on_air_event[1]["eid"]}]',
+            )
+            return on_air_event
 
-    # イベント ID が一致する番組情報が見つからなかった場合はエラーを返す
-    logging.error(f'[ReservesRouter][GetServiceEventInfo] Failed to get the program information. [channel_id: {channel.id} / program_id: {program.id}]')
+    # 最終的に番組情報が取得できなかった場合はエラーを返す
+    logging.error(
+        f'[ReservationsRouter][GetServiceEventInfo] Failed to resolve program information from EDCB. [channel_id: {channel.id} / program_id: {program.id} / requested_event_id: {program.event_id}]',
+    )
     raise HTTPException(
         status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail = 'Failed to get the program information',
+        detail = 'Failed to resolve program information from EDCB',
     )
+
+
+def ShouldCheckRecordingInProgress(reserve_data: ReserveDataRequired) -> bool:
+    """
+    録画中判定のために EDCB へ追加問い合わせを行うべきかを判定する。
+
+    Args:
+        reserve_data (ReserveDataRequired): 判定対象の予約情報
+
+    Returns:
+        bool: 追加問い合わせが必要な場合は True
+    """
+
+    # 無効予約・視聴予約は録画ファイルパスが存在しないため、判定 API を呼ばない
+    rec_mode = reserve_data.get('rec_setting', {}).get('rec_mode', 1)
+    if rec_mode >= 5 or rec_mode == 4:
+        return False
+
+    # 録画中判定を行う時間範囲 (現在時刻の2時間前〜2時間後)
+    # 番組延長や繰り上げを考慮しつつ、現在時刻から大きく離れた予約には高コストな追加問い合わせを行わない
+    current_time = datetime.now(tz=JST)
+    recording_check_start = current_time - timedelta(hours=2)
+    recording_check_end = current_time + timedelta(hours=2)
+
+    reserve_start_time = NormalizeToJSTDatetime(reserve_data['start_time'])
+    reserve_end_time = reserve_start_time + timedelta(seconds=reserve_data['duration_second'])
+
+    return reserve_start_time <= recording_check_end and reserve_end_time >= recording_check_start
+
+
+async def GetIsRecordingInProgress(reserve_data: ReserveDataRequired, edcb: CtrlCmdUtil) -> bool:
+    """
+    指定された予約が現在録画中かどうかを判定する。
+
+    Args:
+        reserve_data (ReserveDataRequired): 判定対象の予約情報
+        edcb (CtrlCmdUtil): EDCB API クライアント
+
+    Returns:
+        bool: 録画中の場合は True
+    """
+
+    # 録画中判定が不要な予約では追加問い合わせを行わない
+    if ShouldCheckRecordingInProgress(reserve_data) is False:
+        return False
+
+    # CtrlCmdUtil.sendGetRecFilePath() で「録画中かつ視聴予約でない予約の録画ファイルパス」が返ってくる場合は True、それ以外は False
+    ## 歴史的経緯でこう取得することになっているらしい
+    return isinstance(await edcb.sendGetRecFilePath(reserve_data['reserve_id']), str)
 
 
 @router.get(
@@ -821,8 +971,22 @@ async def ReservationsAPI(
         # 高速化のため、録画予約に必要な番組情報を一括取得しておく
         programs = await GetRequiredProgramsForReservations(reserve_data_list)
 
+        # 録画中判定が必要な予約のみ EDCB へ問い合わせる
+        # 必要最小限の予約に絞ることで、視聴中の定期更新時の EDCB 負荷を抑える
+        is_recording_in_progress_by_reserve_id: dict[int, bool] = {}
+        for reserve_data in reserve_data_list:
+            is_recording_in_progress_by_reserve_id[reserve_data['reserve_id']] = await GetIsRecordingInProgress(reserve_data, edcb)
+
         # EDCB の ReserveData オブジェクトを schemas.Reservation オブジェクトに変換
-        reserves = await asyncio.gather(*(DecodeEDCBReserveData(reserve_data, channels, programs) for reserve_data in reserve_data_list))
+        reserves = await asyncio.gather(*(
+            DecodeEDCBReserveData(
+                reserve_data,
+                channels,
+                programs,
+                is_recording_in_progress = is_recording_in_progress_by_reserve_id[reserve_data['reserve_id']],
+            )
+            for reserve_data in reserve_data_list
+        ))
 
     # 録画予約番組の番組開始時刻でソート
     reserves.sort(key=lambda reserve: reserve.program.start_time)
@@ -864,40 +1028,91 @@ async def AddReservationAPI(
     # EDCB バックエンド利用時は必ずチャンネル情報に transport_stream_id が含まれる
     assert channel.transport_stream_id is not None, 'transport_stream_id is missing.'
 
+    def HasSameReservation(
+        reserve_data_list: list[ReserveDataRequired],
+        network_id: int,
+        transport_stream_id: int,
+        service_id: int,
+        event_id: int,
+    ) -> bool:
+        """
+        同一 ONID/TSID/SID/EID の録画予約が既に存在するかを判定する
+
+        Args:
+            reserve_data_list (list[ReserveDataRequired]): EDCB から取得した録画予約一覧
+            network_id (int): ネットワーク ID (ONID)
+            transport_stream_id (int): トランスポートストリーム ID (TSID)
+            service_id (int): サービス ID (SID)
+            event_id (int): イベント ID (EID)
+
+        Returns:
+            bool: 同一予約が存在する場合は True
+        """
+
+        for reserve_data in reserve_data_list:
+            if (reserve_data['onid'] == network_id and
+                reserve_data['tsid'] == transport_stream_id and
+                reserve_data['sid'] == service_id and
+                reserve_data['eid'] == event_id):
+                return True
+        return False
+
     # すでに同じ番組 ID の録画予約が存在するかを確認
-    for reserve_data in await GetReserveDataList(edcb):
-        if (reserve_data['onid'] == channel.network_id and
-            reserve_data['tsid'] == channel.transport_stream_id and
-            reserve_data['sid'] == channel.service_id and
-            reserve_data['eid'] == program.event_id):
-            logging.error(f'[ReservesRouter][AddReserveAPI] The same program_id is already reserved. [program_id: {reserve_add_request.program_id}]')
-            raise HTTPException(
-                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail = 'The same program_id is already reserved',
-            )
+    reserve_data_list = await GetReserveDataList(edcb)
+    if HasSameReservation(
+        reserve_data_list,
+        channel.network_id,
+        channel.transport_stream_id,
+        channel.service_id,
+        program.event_id,
+    ) is True:
+        logging.error(f'[ReservationsRouter][AddReserveAPI] The same program_id is already reserved. [program_id: {reserve_add_request.program_id}]')
+        raise HTTPException(
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail = 'The same program_id is already reserved',
+        )
 
     # EDCB から録画予約対象の番組に一致する ServiceEventInfo を取得
     ## KonomiTV のデータベースに保存されているチャンネル名・番組名は表示上に半角に加工されているため、EDCB に設定するには不適切
     ## 内部仕様がわからないけど予約に設定されている番組名と EPG 上の番組名が異なると予期せぬ問題が発生しそうな気もする
     ## それ以外にも KonomiTV 側に保存されている情報が古くなっている可能性もあるため、毎回 EDCB から最新の情報を取得する
-    service_event_info = await GetServiceEventInfo(channel, program, edcb)
+    service_event_info, event_info = await GetServiceEventInfo(channel, program, edcb)
 
     # ReserveData オブジェクトに設定するチャンネル情報・番組情報を取得
     ## 放送時間未定運用などでごく稀に取得できないことも考えられるため、その場合は KonomiTV 側が持っている情報にフォールバックする
     ## 当然 TSInformation.formatString() はかけずにそのままの情報を使う
     ## ref: https://github.com/EMWUI/EDCB_Material_WebUI/blob/master/HttpPublic/api/SetReserve#L4-L39
     title: str = program.title
-    start_time: datetime = program.start_time
-    duration_second: int = int(program.duration)
+    start_time: datetime = NormalizeToJSTDatetime(program.start_time)
+    duration_second: int = max(int(program.duration), 1)
     station_name: str = service_event_info['service_info']['service_name']
-    if len(service_event_info['event_list']) > 0:
-        if 'short_info' in service_event_info['event_list'][0]:
-            if 'event_name' in service_event_info['event_list'][0]['short_info']:
-                title = service_event_info['event_list'][0]['short_info']['event_name']
-        if 'start_time' in service_event_info['event_list'][0]:
-            start_time = service_event_info['event_list'][0]['start_time']
-        if 'duration_sec' in service_event_info['event_list'][0]:
-            duration_second = service_event_info['event_list'][0]['duration_sec']
+    event_id: int = program.event_id
+    if 'short_info' in event_info and 'event_name' in event_info['short_info']:
+        title = event_info['short_info']['event_name']
+    if 'start_time' in event_info:
+        start_time = NormalizeToJSTDatetime(event_info['start_time'])
+    if 'duration_sec' in event_info:
+        duration_second = max(event_info['duration_sec'], 1)
+    if 'eid' in event_info:
+        event_id = event_info['eid']
+
+    # 実際に予約するイベント ID がリクエストされたイベント ID と異なる場合は重複チェックをやり直す
+    ## EPG 更新の遅延でフロントエンドが持つ EID が古い場合で、現在放送中のイベントへフェイルオーバーした時に二重予約を防ぐ
+    if event_id != program.event_id:
+        if HasSameReservation(
+            reserve_data_list,
+            channel.network_id,
+            channel.transport_stream_id,
+            channel.service_id,
+            event_id,
+        ) is True:
+            logging.error(
+                f'[ReservationsRouter][AddReserveAPI] The fallback event is already reserved. [program_id: {reserve_add_request.program_id} / requested_event_id: {program.event_id} / resolved_event_id: {event_id}]',
+            )
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'The fallback event is already reserved',
+            )
 
     # EDCB の ReserveData オブジェクトを組み立てる
     ## 一見省略しても良さそうな録画予約対象のチャンネル情報や番組情報なども省略せずに全て含める必要がある (さもないと録画予約情報が破壊される…)
@@ -911,7 +1126,7 @@ async def AddReservationAPI(
         'onid': channel.network_id,
         'tsid': channel.transport_stream_id,
         'sid': channel.service_id,
-        'eid': program.event_id,
+        'eid': event_id,
         'comment': '',  # 単発予約の場合は空文字列で問題ないはず
         'rec_setting': cast(RecSettingData, EncodeEDCBRecSettingData(reserve_add_request.record_settings)),
     }
@@ -919,11 +1134,64 @@ async def AddReservationAPI(
     # EDCB に録画予約を追加するように指示
     result = await edcb.sendAddReserve([add_reserve_data])
     if result is False:
-        # False が返ってきた場合はエラーを返す
-        logging.error('[ReservationsRouter][AddReserveAPI] Failed to add a recording reservation.')
+        # EDCB が「現在時刻で既に放送終了扱い」と判断した可能性がある場合のみ、時刻補正して 1 回だけ再試行する
+        current_time = datetime.now(JST)
+        reserve_end_time = start_time + timedelta(seconds=max(duration_second, 1))
+        if current_time >= reserve_end_time:
+            retry_duration_second = max(int((current_time - start_time).total_seconds()) + 120, 120)
+            retry_add_reserve_data = dict(add_reserve_data)
+            retry_add_reserve_data['duration_second'] = retry_duration_second
+            logging.warning(
+                f'[ReservationsRouter][AddReserveAPI] Retrying with adjusted duration because reservation window looks expired. [program_id: {reserve_add_request.program_id} / event_id: {event_id} / original_duration_second: {duration_second} / retry_duration_second: {retry_duration_second}]',
+            )
+
+            # 再試行前に重複予約を再確認する
+            latest_reserve_data_list = await GetReserveDataList(edcb)
+            if HasSameReservation(
+                latest_reserve_data_list,
+                channel.network_id,
+                channel.transport_stream_id,
+                channel.service_id,
+                event_id,
+            ) is True:
+                logging.error(
+                    f'[ReservationsRouter][AddReserveAPI] Reservation already exists before retry. [program_id: {reserve_add_request.program_id} / event_id: {event_id}]',
+                )
+                raise HTTPException(
+                    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail = 'The same program_id is already reserved',
+                )
+
+            retry_result = await edcb.sendAddReserve([cast(ReserveData, retry_add_reserve_data)])
+            if retry_result is True:
+                logging.info(
+                    f'[ReservationsRouter][AddReserveAPI] Added reservation with adjusted duration fallback. [program_id: {reserve_add_request.program_id} / event_id: {event_id} / retry_duration_second: {retry_duration_second}]',
+                )
+                return
+
+        # それでも失敗した場合は、重複・イベント不整合・通信系を判別しやすいログを残したうえでエラーを返す
+        latest_reserve_data_list = await GetReserveDataList(edcb)
+        if HasSameReservation(
+            latest_reserve_data_list,
+            channel.network_id,
+            channel.transport_stream_id,
+            channel.service_id,
+            event_id,
+        ) is True:
+            logging.error(
+                f'[ReservationsRouter][AddReserveAPI] Reservation was added by another process concurrently. [program_id: {reserve_add_request.program_id} / event_id: {event_id}]',
+            )
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'The same program_id is already reserved',
+            )
+
+        logging.error(
+            f'[ReservationsRouter][AddReserveAPI] Failed to add a recording reservation. [program_id: {reserve_add_request.program_id} / requested_event_id: {program.event_id} / resolved_event_id: {event_id} / start_time: {start_time.isoformat()} / duration_second: {duration_second}]',
+        )
         raise HTTPException(
             status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail = 'Failed to add a recording reservation',
+            detail = 'Failed to add a recording reservation due to EDCB rejection or event mismatch',
         )
 
     # どの録画予約 ID で追加されたかは sendAddReserve() のレスポンスからは取れないので、201 Created を返す
@@ -937,13 +1205,17 @@ async def AddReservationAPI(
 )
 async def ReservationAPI(
     reserve_data: Annotated[ReserveDataRequired, Depends(GetReserveData)],
+    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
 ):
     """
     指定された録画予約の情報を取得する。
     """
 
     # EDCB の ReserveData オブジェクトを schemas.Reservation オブジェクトに変換して返す
-    return await DecodeEDCBReserveData(reserve_data)
+    return await DecodeEDCBReserveData(
+        reserve_data,
+        is_recording_in_progress = await GetIsRecordingInProgress(reserve_data, edcb),
+    )
 
 
 @router.put(
@@ -976,7 +1248,11 @@ async def UpdateReservationAPI(
         )
 
     # 更新された録画予約の情報を schemas.Reservation オブジェクトに変換して返す
-    return await DecodeEDCBReserveData(await GetReserveData(reserve_data['reserve_id'], edcb))
+    updated_reserve_data = await GetReserveData(reserve_data['reserve_id'], edcb)
+    return await DecodeEDCBReserveData(
+        updated_reserve_data,
+        is_recording_in_progress = await GetIsRecordingInProgress(updated_reserve_data, edcb),
+    )
 
 
 @router.delete(

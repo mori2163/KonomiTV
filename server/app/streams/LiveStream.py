@@ -10,6 +10,7 @@ from typing import ClassVar, Literal
 from hashids import Hashids
 
 from app import logging
+from app.config import Config
 from app.constants import QUALITY_TYPES
 from app.schemas import LiveStreamStatus
 from app.streams.LiveEncodingTask import LiveEncodingTask
@@ -159,6 +160,10 @@ class LiveStream:
             ## Mirakurun バックエンドを使っている場合は None のまま
             instance.tuner = None
 
+            # チューナー再利用時の排他ロック
+            ## チューナー再利用の競合を避けるため、LiveStream ごとにロックを持つ
+            instance._tuner_lock = asyncio.Lock()
+
             # 生成したインスタンスを登録する
             cls.__instances[live_stream_id] = instance
 
@@ -189,6 +194,7 @@ class LiveStream:
         self._live_encoding_task_ref: asyncio.Task[None] | None
         self.psi_data_archiver: LivePSIDataArchiver | None
         self.tuner: EDCBTuner | None
+        self._tuner_lock: asyncio.Lock
 
 
     @classmethod
@@ -278,48 +284,155 @@ class LiveStream:
         # ***** ステータスの切り替え *****
 
         current_status = self._status
+        should_start_task: bool = False
 
         # ライブストリームが Offline な場合、新たにエンコードタスクを起動する
         if current_status == 'Offline':
 
             # ステータスを Standby に設定
             # 現在 Idling 状態のライブストリームを探す前に設定しないと多重に LiveEncodingTask が起動しかねず、重篤な不具合につながる
-            self.setStatus('Standby', 'エンコードタスクを起動しています…')
+            async with self._tuner_lock:
+                if self._status == 'Offline':
+                    self.setStatus('Standby', 'エンコードタスクを起動しています…')
+                    should_start_task = True
 
-            # 現在 Idling 状態のライブストリームがあれば、うち最初のライブストリームを Offline にする
-            ## 一般にチューナーリソースは無尽蔵にあるわけではないので、現在 Idling（=つまり誰も見ていない）ライブストリームがあるのなら
-            ## それを Offline にしてチューナーリソースを解放し、新しいライブストリームがチューナーを使えるようにする
-            for _ in range(8):  # 画質切り替えなどタイミングの問題で Idling なストリームがない事もあるので、8回くらいリトライする
+            # 一般にチューナーリソースは無尽蔵にあるわけではないので、現在 Idling（=つまり誰も見ていない）ライブストリームがあるのなら
+            # それを Offline にしてチューナーリソースを解放し、新しいライブストリームがチューナーを使えるようにする
+            ## EDCB バックエンドの場合はチューナーインスタンスを直接移譲して再利用できるため、より高度なチューナー再利用ロジックを実行する
+            ## Mirakurun バックエンドの場合はチューナー管理が Mirakurun/mirakc 側で行われるため、
+            ## Idling ストリームを Offline にしてチューナーを解放するだけでよい (チューナーインスタンスの移譲は不要)
+            is_edcb_backend = (
+                Config().general.backend == 'EDCB' and
+                Config().general.always_receive_tv_from_mirakurun is False
+            )
 
-                # 現在 Idling 状態のライブストリームがあれば
-                idling_live_streams = self.getIdlingLiveStreams()
-                if len(idling_live_streams) > 0:
-                    idling_live_stream: LiveStream = idling_live_streams[0]
+            # EDCB バックエンドの場合は、再利用できるチューナーがあれば取得しておく
+            if should_start_task is True and is_edcb_backend is True:
 
-                    # EDCB バックエンドの場合はチューナーをアンロックし、これから開始するエンコードタスクで再利用できるようにする
-                    if idling_live_stream.tuner is not None:
-                        idling_live_stream.tuner.unlock()
+                # チューナー再利用の対象になりうる Standby / ONAir / Idling のストリームを探す
+                # (クライアントが 0 のもののみを対象にする)
+                ## Idling への移行は非同期で遅れて発生するため、短時間リトライする
+                for _ in range(15):
+                    found_reusable_tuner = False
+                    should_wait_next_retry = False
 
-                    # チューナーリソースを解放する
-                    idling_live_stream.setStatus('Offline', '新しいライブストリームが開始されたため、チューナーリソースを解放しました。')
-                    break
+                    for live_stream in LiveStream.getAllLiveStreams():
+                        # 自分自身は対象外
+                        if live_stream is self:
+                            continue
 
-                # 現在 ONAir 状態のライブストリームがなく、リトライした所で Idling なライブストリームが取得できる見込みがない
-                if len(self.getONAirLiveStreams()) == 0:
-                    break
+                        # ステータスを取得
+                        async with live_stream._tuner_lock:
+                            live_stream_status = live_stream.getStatus()
 
-                await asyncio.sleep(0.1)
+                        # クライアントが接続されている場合は対象外
+                        # ただし Standby 状態のストリームはまだクライアントに有意なデータを配信していないため、
+                        # client_count に関係なくチューナー再利用の対象にする (disconnectAll() で安全に切断できる)
+                        if live_stream_status.client_count != 0 and live_stream_status.status != 'Standby':
+                            # 近いタイミングで Idling に遷移する可能性があるため、リトライ対象とする
+                            if (live_stream_status.status == 'ONAir' or
+                                live_stream_status.status == 'Idling'):
+                                should_wait_next_retry = True
+                            continue
+
+                        # Standby / ONAir / Idling 状態でない場合は対象外
+                        if live_stream_status.status not in ('Standby', 'ONAir', 'Idling'):
+                            continue
+
+                        # チューナーが割り当てられていない場合は対象外
+                        if live_stream.tuner is None:
+                            continue
+
+                        # チューナーが既にキャンセル中の場合は対象外
+                        if live_stream.tuner.getState() == 'Cancelling':
+                            continue
+
+                        # チューナー再利用のため、チューナー状態をキャンセル中に切り替える
+                        live_stream.tuner.setState('Cancelling')
+
+                        # ステータスを Offline に設定
+                        live_stream.setStatus('Offline', '新しいライブストリームが開始されたため、チューナーリソースを再利用します。')
+
+                        # すべての視聴中クライアントのライブストリームへの接続を切断する
+                        live_stream.disconnectAll()
+
+                        # PSI/SI データアーカイバーを終了・破棄する
+                        if live_stream.psi_data_archiver is not None:
+                            live_stream.psi_data_archiver.destroy()
+                            live_stream.psi_data_archiver = None
+
+                        # チューナーとのストリーミング接続を明示的に閉じる
+                        await live_stream.tuner.disconnect(live_stream.live_stream_id)
+
+                        # チューナーの制御権限を移譲する
+                        if live_stream.tuner.handoff(live_stream.live_stream_id, self.live_stream_id) is False:
+                            continue
+
+                        # 実行中のタスクがあればキャンセルする
+                        if live_stream._live_encoding_task_ref is not None:
+                            live_stream._live_encoding_task_ref.cancel()
+
+                            # タスクの完了を最大 10 秒待つ
+                            ## エンコーダープロセスの kill とバックグラウンドタスクの完了を含め、通常は 0.5 秒程度で完了する
+                            ## EDCB との通信ハングなどで無期限にブロックされることを防ぐためにタイムアウトを設ける
+                            ## asyncio.wait() はタスクの状態を変更しないため、タイムアウトしても旧タスクは自然終了を続ける
+                            done, _ = await asyncio.wait(
+                                {live_stream._live_encoding_task_ref},
+                                timeout=10.0,
+                            )
+                            if not done:
+                                logging.warning(f'[Live: {live_stream.live_stream_id}] Encoding task cleanup did not complete within 10 seconds.')
+
+                            live_stream._live_encoding_task_ref = None
+
+                        # チューナーインスタンスを移譲する
+                        self.tuner = live_stream.tuner
+                        live_stream.tuner = None
+                        found_reusable_tuner = True
+                        break
+
+                    if found_reusable_tuner is True:
+                        break
+                    if should_wait_next_retry is False:
+                        break
+
+                    await asyncio.sleep(0.1)
+
+            # Mirakurun バックエンドの場合は、現在 Idling 状態のライブストリームを Offline にしてチューナーリソースを解放する
+            ## Mirakurun バックエンドではチューナーインスタンスの直接移譲はできないため、
+            ## Idling ストリームを Offline にして Controller の自然終了 → Reader 内での HTTP セッション切断を通じて
+            ## Mirakurun/mirakc 側でチューナーが解放されるのを待つ形になる
+            elif should_start_task is True and is_edcb_backend is False:
+
+                # 画質切り替えなどタイミングの問題で Idling なストリームがない事もあるので、リトライする
+                ## ONAir (client_count == 0) のストリームが存在する場合、近いタイミングで Idling に遷移する可能性があるため
+                for _ in range(15):
+
+                    # 現在 Idling 状態のライブストリームがあれば
+                    idling_live_streams = self.getIdlingLiveStreams()
+                    if len(idling_live_streams) > 0:
+                        # チューナーリソースを解放する
+                        idling_live_streams[0].setStatus('Offline', '新しいライブストリームが開始されたため、チューナーリソースを解放しました。')
+                        break
+
+                    # 現在 ONAir 状態のライブストリームがなく、リトライしたところで Idling なライブストリームが取得できる見込みがない
+                    if len(self.getONAirLiveStreams()) == 0:
+                        break
+
+                    await asyncio.sleep(0.1)
 
             # エンコードタスクを非同期で実行
-            instance = LiveEncodingTask(self)
-            self._live_encoding_task_ref = asyncio.create_task(instance.run())
+            if should_start_task is True:
+                instance = LiveEncodingTask(self)
+                self._live_encoding_task_ref = asyncio.create_task(instance.run())
 
         # ***** クライアントの登録 *****
 
         # ライブストリームクライアントのインスタンスを生成・登録する
-        client = LiveStreamClient(self, client_type)
-        self._clients.append(client)
-        logging.info(f'[Live: {self.live_stream_id}] Client Connected. Client ID: {client.client_id}')
+        async with self._tuner_lock:
+            client = LiveStreamClient(self, client_type)
+            self._clients.append(client)
+            logging.info(f'[Live: {self.live_stream_id}] Client Connected. Client ID: {client.client_id}')
 
         # ***** アイドリングからの復帰 *****
 
@@ -440,11 +553,11 @@ class LiveStream:
 
             # Idling への切り替え時、チューナーをアンロックして再利用できるように
             if self._status == 'Idling':
-                self.tuner.unlock()
+                self.tuner.unlock(self.live_stream_id)
 
             # ONAir への切り替え（復帰）時、再びチューナーをロックして制御を横取りされないように
             if self._status == 'ONAir':
-                self.tuner.lock()
+                self.tuner.lock(self.live_stream_id)
 
         return True
 
