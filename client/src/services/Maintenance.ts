@@ -88,6 +88,37 @@ class Maintenance {
 
 
     /**
+     * クライアントをビルドする
+     * @returns ビルドに成功した場合は true、失敗した場合は false
+     */
+    static async buildClient(): Promise<boolean> {
+
+        // API リクエストを実行
+        const response = await APIClient.post('/maintenance/build-client', undefined, {
+            timeout: 30 * 60 * 1000,  // ビルド完了まで時間がかかる場合があるため、タイムアウトは 30 分 (1800000ms) に設定
+        });
+
+        // エラー処理
+        if (response.type === 'error') {
+            switch (response.data.detail) {
+                case 'Client build is already running':
+                    APIClient.showGenericError(response, 'クライアントのビルドは既に実行中です。');
+                    break;
+                case 'Yarn command not found':
+                    APIClient.showGenericError(response, 'クライアントをビルドできませんでした。\nこの環境では yarn コマンドが利用できません。');
+                    break;
+                default:
+                    APIClient.showGenericError(response, 'クライアントをビルドできませんでした。');
+                    break;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+
+    /**
      * 録画フォルダの一括スキャンを開始する
      * @returns タスクの実行に成功した場合は true、失敗した場合は false
      */
