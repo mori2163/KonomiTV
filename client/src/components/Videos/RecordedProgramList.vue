@@ -11,6 +11,7 @@
                         <Icon icon="line-md:loading-twotone-loop" class="mr-1 spin" width="20px" height="20px" />
                         <span>検索中...</span>
                     </template>
+                    <template v-else-if="countText !== null">{{countText}}</template>
                     <template v-else>{{displayTotal}}件</template>
                 </div>
             </h2>
@@ -64,7 +65,8 @@
             </div>
             <div class="recorded-program-list__grid-content">
                 <RecordedProgram v-for="program in displayPrograms" :key="program.id" :program="program"
-                    :forMylist="forMylist" :forWatchedHistory="forWatchedHistory" @deleted="handleProgramDeleted" />
+                    :forMylist="forMylist" :forWatchedHistory="forWatchedHistory"
+                    :forOffline="forOffline" @deleted="handleProgramDeleted" />
             </div>
         </div>
         <div class="recorded-program-list__pagination" v-if="!hidePagination && displayTotal > 0">
@@ -108,8 +110,10 @@ const props = withDefaults(defineProps<{
     emptySubMessage?: string;
     isLoading?: boolean;
     isSearching?: boolean;
+    countText?: string | null;
     forMylist?: boolean;
     forWatchedHistory?: boolean;
+    forOffline?: boolean;
 }>(), {
     page: 1,
     sortOrder: 'desc',
@@ -124,8 +128,10 @@ const props = withDefaults(defineProps<{
     emptySubMessage: 'サーバー設定で録画フォルダのパスを<br class="d-sm-none">正しく設定できているか確認してください。',
     isLoading: false,
     isSearching: false,
+    countText: null,
     forMylist: false,
     forWatchedHistory: false,
+    forOffline: false,
 });
 
 // Emits
@@ -202,7 +208,9 @@ const handleProgramDeleted = (id: number) => {
     &__title {
         display: flex;
         align-items: center;
+        justify-content: space-between;
         position: relative;
+        width: 100%;
         font-size: 24px;
         font-weight: 700;
         padding-top: 8px;
@@ -236,7 +244,7 @@ const handleProgramDeleted = (id: number) => {
             align-items: center;
             flex-shrink: 0;
             padding-top: 8px;
-            margin-left: 12px;
+            margin-left: auto;
             font-size: 14px;
             font-weight: 400;
             color: rgb(var(--v-theme-text-darken-1));

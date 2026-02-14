@@ -6,7 +6,10 @@ import Hls from 'hls.js';
 import mpegts from 'mpegts.js';
 import { watch } from 'vue';
 
+import type { IOfflinePlaybackOptions } from '@/services/player/managers/OfflinePlaybackManager';
+
 import APIClient from '@/services/APIClient';
+import OfflineStorageService from '@/services/OfflineStorageService';
 import CustomBufferController from '@/services/player/CustomBufferController';
 import CaptureManager from '@/services/player/managers/CaptureManager';
 import DocumentPiPManager from '@/services/player/managers/DocumentPiPManager';
@@ -57,6 +60,9 @@ class PlayerController {
     // 再生モード (Live: ライブ視聴, Video: ビデオ視聴)
     private readonly playback_mode: 'Live' | 'Video';
 
+    // オフライン再生向けオプション
+    private readonly offline_playback: IOfflinePlaybackOptions | null;
+
     // 画質プロファイル (Wi-Fi 回線時 / モバイル回線時)
     // デフォルトは自動判定だが、ユーザーによって手動変更されうる
     private quality_profile_type: 'Wi-Fi' | 'Cellular';
@@ -102,10 +108,13 @@ class PlayerController {
      * コンストラクタ
      * 実際の DPlayer の初期化処理は await init() で行われる
      */
-    constructor(playback_mode: 'Live' | 'Video') {
+    constructor(playback_mode: 'Live' | 'Video', options: {
+        offline_playback?: IOfflinePlaybackOptions;
+    } = {}) {
 
         // 再生モードをセット
         this.playback_mode = playback_mode;
+        this.offline_playback = options.offline_playback ?? null;
 
         // デフォルトでは、現在のネットワーク回線が Cellular (モバイル回線) のとき、モバイル回線向けの画質プロファイルを適用する
         // Wi-Fi 回線またはネットワーク回線種別を取得できなかった場合は、Wi-Fi 回線向けの画質プロファイルを適用する
@@ -212,7 +221,9 @@ class PlayerController {
 
         // ブラウザが H.265 / HEVC の再生に対応していて、かつ通信節約モードが有効なとき、H.265 / HEVC で再生する
         let is_hevc_playback = false;
-        if (PlayerUtils.isHEVCVideoSupported() &&
+        if (this.offline_playback !== null) {
+            is_hevc_playback = this.offline_playback.api_quality.endsWith('-hevc');
+        } else if (PlayerUtils.isHEVCVideoSupported() &&
             ((this.playback_mode === 'Live' && this.quality_profile.tv_data_saver_mode === true) ||
              (this.playback_mode === 'Video' && this.quality_profile.video_data_saver_mode === true))) {
             is_hevc_playback = true;
@@ -371,6 +382,21 @@ class PlayerController {
 
                 // ビデオ視聴: 録画番組情報がセットされているはず
                 } else {
+                    // オフライン再生時は、保存時の画質のプレイリスト 1 種類だけを使う
+                    if (this.offline_playback !== null) {
+                        const quality_name = this.offline_playback.api_quality.replace('-hevc', '');
+                        const display_quality_name = quality_name === '1080p-60fps' ? '1080p (60fps)' : quality_name;
+                        qualities.push({
+                            name: display_quality_name,
+                            type: 'hls',
+                            url: this.offline_playback.playlist_url,
+                        });
+                        return {
+                            quality: qualities,
+                            defaultQuality: display_quality_name,
+                        };
+                    }
+
                     // ビデオストリーミング API のベース URL
                     const streaming_api_base_url = `${Utils.api_base_url}/streams/video/${player_store.recorded_program.id}`;
                     // 画質リストを作成
@@ -458,15 +484,24 @@ class PlayerController {
                         options.success([]);
                     } else {
                         // ビデオ視聴: 過去ログコメントを取得して返す
-                        const jikkyo_comments = await Videos.fetchVideoJikkyoComments(player_store.recorded_program.id);
-                        if (jikkyo_comments.is_success === false) {
-                            // 取得に失敗した場合はコメントリストにエラーメッセージを表示する
-                            // ただし「この録画番組の過去ログコメントは存在しないか、現在取得中です。」の場合はエラー扱いしない
-                            player_store.video_comment_init_failed_message = jikkyo_comments.detail;
-                            if (jikkyo_comments.detail !== 'この録画番組の過去ログコメントは存在しないか、現在取得中です。') {
-                                options.error(jikkyo_comments.detail);
-                            } else {
+                        const jikkyo_comments = this.offline_playback !== null ?
+                            await OfflineStorageService.readComments(this.offline_playback.video_id) :
+                            await Videos.fetchVideoJikkyoComments(player_store.recorded_program.id);
+
+                        if (jikkyo_comments === null || jikkyo_comments.is_success === false) {
+                            if (this.offline_playback !== null) {
+                                player_store.video_comment_init_failed_message = 'このオフラインデータには保存済みコメントがありません。';
                                 options.success([]);
+                            } else {
+                                // 取得に失敗した場合はコメントリストにエラーメッセージを表示する
+                                // ただし「この録画番組の過去ログコメントは存在しないか、現在取得中です。」の場合はエラー扱いしない
+                                const failed_message = jikkyo_comments?.detail ?? 'この録画番組の過去ログコメントは取得できませんでした。';
+                                player_store.video_comment_init_failed_message = failed_message;
+                                if (failed_message !== 'この録画番組の過去ログコメントは存在しないか、現在取得中です。') {
+                                    options.error(failed_message);
+                                } else {
+                                    options.success([]);
+                                }
                             }
                         } else {
                             // 過去ログコメントを取得できているということは、recording_start_time は null ではないはず
@@ -558,6 +593,7 @@ class PlayerController {
                 // hls.js
                 hls: {
                     ...Hls.DefaultConfig,
+                    ...(this.offline_playback?.hls_config ?? {}),
                     // Web Worker を有効にする
                     enableWorker: true,
                     // ManagedMediaSource が使える Safari では常に ManagedMediaSource を利用する
@@ -1035,7 +1071,7 @@ class PlayerController {
         // HLS プレイリストやセグメントのリクエストが行われたタイミングでも Keep-Alive が行われるが、
         // それだけではタイミング次第では十分ではないため、定期的に Keep-Alive を行う
         // Keep-Alive が行われなくなったタイミングで、サーバー側で自動的にビデオストリームの終了処理 (エンコードタスクの停止) が行われる
-        if (this.playback_mode === 'Video') {
+        if (this.playback_mode === 'Video' && this.offline_playback === null) {
             this.video_keep_alive_interval_timer_cancel = Utils.setIntervalInWorker(async () => {
                 // 画質切り替えでベース URL が変わることも想定し、あえて毎回 API URL を取得している
                 if (this.player === null) return;

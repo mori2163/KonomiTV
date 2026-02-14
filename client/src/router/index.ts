@@ -45,6 +45,16 @@ const router = createRouter({
             component: () => import('@/views/Videos/Programs.vue'),
         },
         {
+            path: '/videos/offline',
+            name: 'Videos Offline Home',
+            component: () => import('@/views/Videos/OfflineHome.vue'),
+        },
+        {
+            path: '/videos/offline/watch/:video_id',
+            name: 'Videos Offline Watch',
+            component: () => import('@/views/Videos/OfflineWatch.vue'),
+        },
+        {
             path: '/videos/watch/:video_id',
             name: 'Videos Watch',
             component: () => import('@/views/Videos/Watch.vue'),
@@ -189,6 +199,7 @@ router.beforeResolve((to, from, next) => {
     // to と from の両方のパスがこの prefix で始まる場合は View Transition API を適用しない
     const no_transition_routes = [
         '/tv/watch/',
+        '/videos/offline/watch/',
         '/videos/watch/',
     ];
     if (document.startViewTransition && !no_transition_routes.some((route) => to.path.startsWith(route) && from.path.startsWith(route))) {
