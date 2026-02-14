@@ -94,6 +94,7 @@ import { computed, ref, watch } from 'vue';
 
 import type { IRecordedProgram } from '@/services/Videos';
 
+import Message from '@/message';
 import useOfflineManagerStore from '@/stores/OfflineManagerStore';
 import useSettingsStore, { VIDEO_STREAMING_QUALITIES } from '@/stores/SettingsStore';
 import Utils, { PlayerUtils, ProgramUtils } from '@/utils';
@@ -221,14 +222,19 @@ watch(() => props.modelValue, async (is_open) => {
 
 // ダウンロード開始
 const startDownload = async () => {
-    // 開始ボタン押下後は即座にダイアログを閉じる
-    emit('update:modelValue', false);
-    await offlineManagerStore.startDownload(props.program, {
-        quality: selected_api_quality.value,
-        include_comments: include_comments.value,
-    });
+    try {
+        await offlineManagerStore.startDownload(props.program, {
+            quality: selected_api_quality.value,
+            include_comments: include_comments.value,
+        });
+        // ダウンロード開始に成功した場合のみダイアログを閉じる
+        emit('update:modelValue', false);
+    } catch (error) {
+        // 例外が上がった場合はユーザーへ明示的に通知する
+        Message.error('ダウンロードの開始に失敗しました。時間をおいて再度お試しください。');
+        console.error('Failed to start download:', error);
+    }
 };
-
 </script>
 
 <style lang="scss" scoped>

@@ -39,7 +39,13 @@ class OfflineDownloadWorkerProxy implements IOfflineDownloadWorker {
      */
     public async download(options: IOfflineDownloadOptions, callbacks: IOfflineDownloadCallbacks): Promise<void> {
         const remote_worker = await this.remote_worker_promise;
-        await remote_worker.download(options, callbacks);
+        // Comlink 越しに関数を渡すには proxy 化が必要
+        const proxied_callbacks: IOfflineDownloadCallbacks = {
+            onProgress: Comlink.proxy(callbacks.onProgress),
+            onCompleted: Comlink.proxy(callbacks.onCompleted),
+            onError: Comlink.proxy(callbacks.onError),
+        };
+        await remote_worker.download(options, proxied_callbacks);
     }
 
 

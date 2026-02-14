@@ -43,9 +43,23 @@ export default defineComponent({
         }
         next();
     },
+    // ルート離脱時に実行（destroy() の完了を待ってから遷移を許可する）
+    async beforeRouteLeave(_to: RouteLocationNormalized, _from: RouteLocationNormalized, next: NavigationGuardNext) {
+        try {
+            // destroy() 内で PlayerController の teardown まで実行される
+            await this.destroy();
+            next();
+        } catch (error) {
+            console.error('Failed to leave route in OfflineWatch:', error);
+            next(false);
+        }
+    },
     // 終了前に実行
     beforeUnmount() {
-        this.destroy();
+        // ライフサイクルフック自体は await できないため、明示的にエラーを拾って可視化する
+        this.destroy().catch((error) => {
+            console.error('Failed to destroy player on unmount in OfflineWatch:', error);
+        });
     },
     methods: {
 
