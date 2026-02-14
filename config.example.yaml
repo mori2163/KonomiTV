@@ -64,6 +64,12 @@ server:
     custom_https_certificate: null
     custom_https_private_key: null
 
+    # Cloudflare Zero Trust (cloudflared tunnel) 経由でアクセスする場合に有効にしてください。
+    # 有効にすると、Akebi HTTPS Server (HTTPS リバースプロキシ) を起動せず、
+    # Uvicorn (HTTP) が直接リッスンポートで待ち受けます。
+    # cloudflared tunnel の --url オプションには http://localhost:(port) を指定してください。
+    cloudflare_zero_trust: false
+
 # ======================= テレビのライブストリーミングの設定 =======================
 tv:
 

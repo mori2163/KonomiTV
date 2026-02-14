@@ -283,6 +283,7 @@ class _ServerSettingsServer(BaseModel):
     port: PositiveInt = 7000
     custom_https_certificate: FilePath | None = None
     custom_https_private_key: FilePath | None = None
+    cloudflare_zero_trust: bool = False
 
     @field_validator('port')
     def validate_port(cls, port: int, info: ValidationInfo) -> int:

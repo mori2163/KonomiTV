@@ -135,46 +135,59 @@ def main(
 
     # ***** KonomiTV サーバーを起動 *****
 
-    # カスタム HTTPS 証明書/秘密鍵が指定されているとき
-    custom_https_certificate: list[str] = []
-    if CONFIG.server.custom_https_certificate is not None and CONFIG.server.custom_https_private_key is not None:
-        custom_https_certificate = [
-            '--custom-certificate', str(CONFIG.server.custom_https_certificate),
-            '--custom-private-key', str(CONFIG.server.custom_https_private_key),
-        ]
+    # Cloudflare Zero Trust モードが有効な場合、Akebi HTTPS Server を起動せず、
+    # Uvicorn が直接リッスンポートで HTTP 待ち受けを行う
+    if CONFIG.server.cloudflare_zero_trust is True:
+        logging.info('Cloudflare Zero Trust mode is enabled. Akebi HTTPS Server will not be started.')
+        logging.info(f'Uvicorn will listen on 0.0.0.0:{CONFIG.server.port} (HTTP).')
+        reverse_proxy_process = None
+        uvicorn_host = '0.0.0.0'
+        uvicorn_port = CONFIG.server.port
+    else:
+        # カスタム HTTPS 証明書/秘密鍵が指定されているとき
+        custom_https_certificate: list[str] = []
+        if CONFIG.server.custom_https_certificate is not None and CONFIG.server.custom_https_private_key is not None:
+            custom_https_certificate = [
+                '--custom-certificate', str(CONFIG.server.custom_https_certificate),
+                '--custom-private-key', str(CONFIG.server.custom_https_private_key),
+            ]
 
-    # Akebi HTTPS Server (HTTPS リバースプロキシ) を起動
-    ## HTTP/2 対応と HTTPS 化を一手に行う Golang 製の特殊なリバースプロキシサーバー
-    ## ログは server/logs/Akebi-HTTPS-Server.log に出力する
-    ## ref: https://github.com/tsukumijima/Akebi
-    with open(AKEBI_LOG_PATH, mode='w', encoding='utf-8') as file:
-        reverse_proxy_process = subprocess.Popen(
-            [
-                LIBRARY_PATH['Akebi'],
-                '--listen-address', f'0.0.0.0:{CONFIG.server.port}',
-                '--proxy-pass-url', f'http://127.0.0.77:{CONFIG.server.port + 10}/',
-                '--keyless-server-url', 'https://akebi.konomi.tv/',
-                *custom_https_certificate,  # カスタム HTTPS 証明書/秘密鍵を指定する引数を追加（指定されているときのみ）
-            ],
-            stdout = file,
-            stderr = file,
-            creationflags = (subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0),  # コンソールなしで実行 (Windows)
-        )
+        # Akebi HTTPS Server (HTTPS リバースプロキシ) を起動
+        ## HTTP/2 対応と HTTPS 化を一手に行う Golang 製の特殊なリバースプロキシサーバー
+        ## ログは server/logs/Akebi-HTTPS-Server.log に出力する
+        ## ref: https://github.com/tsukumijima/Akebi
+        with open(AKEBI_LOG_PATH, mode='w', encoding='utf-8') as file:
+            reverse_proxy_process = subprocess.Popen(
+                [
+                    LIBRARY_PATH['Akebi'],
+                    '--listen-address', f'0.0.0.0:{CONFIG.server.port}',
+                    '--proxy-pass-url', f'http://127.0.0.77:{CONFIG.server.port + 10}/',
+                    '--keyless-server-url', 'https://akebi.konomi.tv/',
+                    *custom_https_certificate,  # カスタム HTTPS 証明書/秘密鍵を指定する引数を追加（指定されているときのみ）
+                ],
+                stdout = file,
+                stderr = file,
+                creationflags = (subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0),  # コンソールなしで実行 (Windows)
+            )
 
-    # このプロセスが終了されたときに、HTTPS リバースプロキシも一緒に終了する
-    atexit.register(lambda: reverse_proxy_process.terminate())
+        # このプロセスが終了されたときに、HTTPS リバースプロキシも一緒に終了する
+        atexit.register(lambda: reverse_proxy_process.terminate())
+        uvicorn_host = '127.0.0.77'
+        uvicorn_port = CONFIG.server.port + 10
 
     # Uvicorn の設定
     server_config = uvicorn.Config(
         # 起動するアプリケーション
         app = 'app.app:app',
         # リッスンするアドレス
-        ## サーバーへのすべてのアクセスには一度 Akebi のリバースプロキシを通す
+        ## Cloudflare Zero Trust モードでは 0.0.0.0 で直接リッスンする
+        ## 通常モードではサーバーへのすべてのアクセスには一度 Akebi のリバースプロキシを通す
         ## 混乱を避けるため、容易にアクセスされないだろう 127.0.0.77 のみでリッスンしている
-        host = '127.0.0.77',
+        host = uvicorn_host,
         # リッスンするポート番号
-        ## 指定されたポートに 10 を足したもの
-        port = CONFIG.server.port + 10,
+        ## 通常モードでは指定されたポートに 10 を足したもの
+        ## Cloudflare Zero Trust モードでは指定されたポートをそのまま利用
+        port = uvicorn_port,
         # 自動リロードモードモードで起動するか
         reload = reload,
         # リロードするフォルダ
@@ -231,8 +244,9 @@ def main(
         # 少し前の Uvicorn は KeyboardInterrupt を内部で握り潰していたが、最近のバージョンから送出するようになった
         pass
 
-    # HTTPS リバースプロキシを終了
-    reverse_proxy_process.terminate()
+    # HTTPS リバースプロキシを終了 (Cloudflare Zero Trust モードでは起動していないのでスキップ)
+    if reverse_proxy_process is not None:
+        reverse_proxy_process.terminate()
 
     # この時点ではタイミングの関係でまだロックファイルが作成されていないことがあるので、1秒待機する
     time.sleep(1)
