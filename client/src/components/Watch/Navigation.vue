@@ -12,9 +12,14 @@
             <Icon class="watch-navigation__link-icon" icon="fluent:tv-20-regular" width="26px" />
         </router-link>
         <router-link v-ripple class="watch-navigation__link" active-class="watch-navigation__link--active"
-            :class="{'watch-navigation__link--active': $route.path.startsWith('/videos')}"
+            :class="{'watch-navigation__link--active': $route.path.startsWith('/videos') && !$route.path.startsWith('/videos/offline')}"
             v-ftooltip.right="'ビデオをみる'"  to="/videos/">
             <Icon class="watch-navigation__link-icon" icon="fluent:movies-and-tv-20-regular" width="26px" />
+        </router-link>
+        <router-link v-ripple class="watch-navigation__link" active-class="watch-navigation__link--active"
+            :class="{'watch-navigation__link--active': $route.path.startsWith('/videos/offline')}"
+            v-ftooltip.right="'オフライン視聴'" to="/videos/offline">
+            <Icon class="watch-navigation__link-icon" icon="fluent:cloud-download-20-regular" width="26px" />
         </router-link>
         <router-link v-ripple class="watch-navigation__link" active-class="watch-navigation__link--active"
             :class="{'watch-navigation__link--active': $route.path.startsWith('/timetable')}"

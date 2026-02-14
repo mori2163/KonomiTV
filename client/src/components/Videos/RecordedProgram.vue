@@ -1,17 +1,34 @@
 <template>
-    <router-link v-ripple class="recorded-program"
-        :to="program.recorded_video.status === 'Recorded' && program.recorded_video.has_key_frames ? `/videos/watch/${program.id}` : { path: '' }"
+    <component :is="is_link_enabled ? 'router-link' : 'div'" v-ripple class="recorded-program"
+        :to="is_link_enabled ? link_url : undefined"
         :class="{
             'recorded-program--recording': program.recorded_video.status === 'Recording',
             'recorded-program--analyzing': !program.recorded_video.has_key_frames && program.recorded_video.status !== 'AnalysisFailed',
             'recorded-program--failed': program.recorded_video.status === 'AnalysisFailed',
+            'recorded-program--operation-locked': is_operation_locked,
+            'recorded-program--operation-locked-for-offline': is_offline_menu_available_while_locked,
         }">
         <div class="recorded-program__container">
             <div class="recorded-program__thumbnail">
                 <img class="recorded-program__thumbnail-image" loading="lazy" decoding="async"
                     :src="`${Utils.api_base_url}/videos/${program.id}/thumbnail`">
+                <div v-if="is_offline_download_in_progress"
+                    class="recorded-program__thumbnail-offline-progress"
+                    :class="{
+                        'recorded-program__thumbnail-offline-progress--paused': offline_program?.download_status === 'Paused',
+                    }">
+                    <div class="recorded-program__thumbnail-offline-progress-bar" :style="`width: ${offline_progress_percent}%`"></div>
+                </div>
                 <div class="recorded-program__thumbnail-duration">{{ProgramUtils.getProgramDuration(program)}}</div>
-                <div v-if="program.recorded_video.status === 'Recording'" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--recording">
+                <div v-if="offline_program?.download_status === 'Downloading'" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--offline-downloading">
+                    <Icon icon="fluent:clock-12-regular" width="15px" height="15px" />
+                    保存中 {{ offline_progress_percent }}%
+                </div>
+                <div v-else-if="offline_program?.download_status === 'Paused'" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--offline-paused">
+                    <Icon icon="fluent:pause-20-regular" width="14px" height="14px" />
+                    保存を一時停止中
+                </div>
+                <div v-else-if="program.recorded_video.status === 'Recording'" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--recording">
                     <div class="recorded-program__thumbnail-status-dot"></div>
                     録画中
                 </div>
@@ -49,7 +66,7 @@
                 <div class="recorded-program__content-description"
                     v-html="ProgramUtils.decorateProgramInfo(program, 'description')"></div>
             </div>
-            <div v-if="!forWatchedHistory" v-ripple class="recorded-program__mylist"
+            <div v-if="!forWatchedHistory && is_operation_locked === false" v-ripple class="recorded-program__mylist"
                 :class="{'recorded-program__mylist--highlight': isInMylist && !forMylist}"
                 v-ftooltip="isInMylist ? 'マイリストから削除する' : 'マイリストに追加する'"
                 @click.prevent.stop="toggleMylist"
@@ -68,7 +85,7 @@
                     </svg>
                 </template>
             </div>
-            <div v-if="forWatchedHistory" v-ripple class="recorded-program__mylist"
+            <div v-if="forWatchedHistory && is_operation_locked === false" v-ripple class="recorded-program__mylist"
                 v-ftooltip="'視聴履歴から削除する'"
                 @click.prevent.stop="removeFromWatchedHistory"
                 @mousedown.prevent.stop="">
@@ -77,9 +94,10 @@
                 </svg>
             </div>
             <div class="recorded-program__menu">
-                <v-menu location="bottom end" :close-on-content-click="true">
+                <v-menu location="bottom end" :close-on-content-click="true" :disabled="is_menu_disabled">
                     <template v-slot:activator="{ props }">
                         <div v-ripple class="recorded-program__menu-button"
+                            :class="{'recorded-program__menu-button--disabled': is_menu_disabled}"
                             v-bind="props"
                             @click.prevent.stop=""
                             @mousedown.prevent.stop="">
@@ -89,45 +107,139 @@
                         </div>
                     </template>
                     <v-list density="compact" bg-color="background-lighten-1" class="recorded-program__menu-list">
-                        <v-list-item @click="show_video_info = true">
-                            <template v-slot:prepend>
-                                <svg width="20px" height="20px" viewBox="0 0 16 16">
-                                    <path fill="currentColor" d="M8.499 7.5a.5.5 0 1 0-1 0v3a.5.5 0 0 0 1 0zm.25-2a.749.749 0 1 1-1.499 0a.749.749 0 0 1 1.498 0M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1M2 8a6 6 0 1 1 12 0A6 6 0 0 1 2 8"></path>
-                                </svg>
+                        <template v-if="forOffline">
+                            <v-list-item
+                                v-if="offline_program?.download_status === 'Downloading'"
+                                @click="pauseOfflineDownload">
+                                <template v-slot:prepend>
+                                    <Icon icon="fluent:pause-20-regular" width="20px" height="20px" />
+                                </template>
+                                <v-list-item-title class="ml-3">オフライン保存を一時停止</v-list-item-title>
+                            </v-list-item>
+                            <template v-else>
+                                <v-list-item
+                                    v-if="offline_program?.download_status === 'Paused'"
+                                    @click="resumeOfflineDownload">
+                                    <template v-slot:prepend>
+                                        <Icon icon="fluent:play-20-regular" width="20px" height="20px" />
+                                    </template>
+                                    <v-list-item-title class="ml-3">オフライン保存を再開</v-list-item-title>
+                                </v-list-item>
+                                <v-list-item @click="showOfflineDownloadDialog">
+                                    <template v-slot:prepend>
+                                        <Icon icon="fluent:arrow-reset-20-regular" width="20px" height="20px" />
+                                    </template>
+                                    <v-list-item-title class="ml-3">オフライン保存を再取得</v-list-item-title>
+                                </v-list-item>
+                                <v-list-item @click="showOfflineDeleteConfirmation" class="recorded-program__menu-list-item--danger">
+                                    <template v-slot:prepend>
+                                        <Icon icon="fluent:delete-24-regular" width="20px" height="20px" />
+                                    </template>
+                                    <v-list-item-title class="ml-3">オフライン保存を削除する</v-list-item-title>
+                                </v-list-item>
                             </template>
-                            <v-list-item-title class="ml-3">録画ファイル情報を表示</v-list-item-title>
-                        </v-list-item>
-                        <v-list-item @click="downloadVideo" :disabled="program.recorded_video.status === 'Recording'">
-                            <template v-slot:prepend>
-                                <Icon icon="fluent:arrow-download-24-regular" width="20px" height="20px" />
-                            </template>
-                            <v-list-item-title class="ml-3">録画ファイルをダウンロード ({{ Utils.formatBytes(program.recorded_video.file_size) }})</v-list-item-title>
-                        </v-list-item>
-                        <v-list-item @click="reanalyzeVideo" v-ftooltip="'再生時に必要な録画ファイル情報・番組情報・サムネイルなどをすべて再解析・再生成します（数分かかります）'">
-                            <template v-slot:prepend>
-                                <Icon icon="fluent:book-arrow-clockwise-20-regular" width="20px" height="20px" />
-                            </template>
-                            <v-list-item-title class="ml-3">メタデータを再解析</v-list-item-title>
-                        </v-list-item>
-                        <v-list-item @click="regenerateThumbnail()" v-ftooltip="'サムネイルのみを再生成します（数分かかります） 変更を反映するにはブラウザキャッシュの削除が必要です'">
-                            <template v-slot:prepend>
-                                <Icon icon="fluent:image-arrow-counterclockwise-24-regular" width="20px" height="20px" />
-                            </template>
-                            <v-list-item-title class="ml-3">サムネイルを再生成</v-list-item-title>
-                        </v-list-item>
-                        <v-divider></v-divider>
-                        <v-list-item @click="showDeleteConfirmation" :disabled="program.recorded_video.status === 'Recording'" class="recorded-program__menu-list-item--danger">
-                            <template v-slot:prepend>
-                                <Icon icon="fluent:delete-24-regular" width="20px" height="20px" />
-                            </template>
-                            <v-list-item-title class="ml-3">録画ファイルを削除</v-list-item-title>
-                        </v-list-item>
+                        </template>
+                        <template v-else>
+                            <v-list-item @click="show_video_info = true">
+                                <template v-slot:prepend>
+                                    <svg width="20px" height="20px" viewBox="0 0 16 16">
+                                        <path fill="currentColor" d="M8.499 7.5a.5.5 0 1 0-1 0v3a.5.5 0 0 0 1 0zm.25-2a.749.749 0 1 1-1.499 0a.749.749 0 0 1 1.498 0M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1M2 8a6 6 0 1 1 12 0A6 6 0 0 1 2 8"></path>
+                                    </svg>
+                                </template>
+                                <v-list-item-title class="ml-3">録画ファイル情報を表示</v-list-item-title>
+                            </v-list-item>
+                            <v-list-item @click="downloadVideo" :disabled="program.recorded_video.status === 'Recording'">
+                                <template v-slot:prepend>
+                                    <Icon icon="fluent:arrow-download-24-regular" width="20px" height="20px" />
+                                </template>
+                                <v-list-item-title class="ml-3">録画ファイルをダウンロード ({{ Utils.formatBytes(program.recorded_video.file_size) }})</v-list-item-title>
+                            </v-list-item>
+                            <v-list-item
+                                v-if="offlineManagerStore.is_supported && (offline_program === null || offline_program.download_status === 'Failed')"
+                                :disabled="program.recorded_video.status === 'Recording'"
+                                @click="showOfflineDownloadDialog">
+                                <template v-slot:prepend>
+                                    <Icon icon="fluent:cloud-download-20-regular" width="20px" height="20px" />
+                                </template>
+                                <v-list-item-title class="ml-3">
+                                    {{ offline_program?.download_status === 'Failed' ? 'オフライン保存をリトライ' : 'オフラインに保存する' }}
+                                </v-list-item-title>
+                            </v-list-item>
+                            <v-list-item
+                                v-else-if="offlineManagerStore.is_supported && offline_program?.download_status === 'Downloading'"
+                                @click="pauseOfflineDownload">
+                                <template v-slot:prepend>
+                                    <Icon icon="fluent:pause-20-regular" width="20px" height="20px" />
+                                </template>
+                                <v-list-item-title class="ml-3">ダウンロード中 ({{ offline_progress_percent }}%) / 一時停止</v-list-item-title>
+                            </v-list-item>
+                            <v-list-item
+                                v-else-if="offlineManagerStore.is_supported && offline_program?.download_status === 'Paused'"
+                                @click="resumeOfflineDownload">
+                                <template v-slot:prepend>
+                                    <Icon icon="fluent:play-20-regular" width="20px" height="20px" />
+                                </template>
+                                <v-list-item-title class="ml-3">オフライン保存を再開</v-list-item-title>
+                            </v-list-item>
+                            <v-list-item
+                                v-else-if="offlineManagerStore.is_supported && offline_program?.download_status === 'Completed'"
+                                @click="showOfflineDeleteConfirmation">
+                                <template v-slot:prepend>
+                                    <Icon icon="fluent:delete-24-regular" width="20px" height="20px" />
+                                </template>
+                                <v-list-item-title class="ml-3">オフラインから削除する</v-list-item-title>
+                            </v-list-item>
+                            <v-list-item @click="reanalyzeVideo" v-ftooltip="'再生時に必要な録画ファイル情報・番組情報・サムネイルなどをすべて再解析・再生成します（数分かかります）'">
+                                <template v-slot:prepend>
+                                    <Icon icon="fluent:book-arrow-clockwise-20-regular" width="20px" height="20px" />
+                                </template>
+                                <v-list-item-title class="ml-3">メタデータを再解析</v-list-item-title>
+                            </v-list-item>
+                            <v-list-item @click="regenerateThumbnail()" v-ftooltip="'サムネイルのみを再生成します（数分かかります） 変更を反映するにはブラウザキャッシュの削除が必要です'">
+                                <template v-slot:prepend>
+                                    <Icon icon="fluent:image-arrow-counterclockwise-24-regular" width="20px" height="20px" />
+                                </template>
+                                <v-list-item-title class="ml-3">サムネイルを再生成</v-list-item-title>
+                            </v-list-item>
+                            <v-divider></v-divider>
+                            <v-list-item @click="showDeleteConfirmation" :disabled="program.recorded_video.status === 'Recording'" class="recorded-program__menu-list-item--danger">
+                                <template v-slot:prepend>
+                                    <Icon icon="fluent:delete-24-regular" width="20px" height="20px" />
+                                </template>
+                                <v-list-item-title class="ml-3">録画ファイルを削除</v-list-item-title>
+                            </v-list-item>
+                        </template>
                     </v-list>
                 </v-menu>
             </div>
         </div>
-    </router-link>
+    </component>
     <RecordedFileInfoDialog :program="program" v-model:show="show_video_info" />
+    <OfflineDownloadDialog v-model="show_offline_download_dialog" :program="program" />
+
+    <!-- オフライン保存削除確認ダイアログ -->
+    <v-dialog max-width="750" v-model="show_offline_delete_confirmation">
+        <v-card>
+            <v-card-title class="d-flex justify-center pt-6 font-weight-bold">オフライン保存データを削除しますか？</v-card-title>
+            <v-card-text class="pt-2 pb-0">
+                <div class="text-error-lighten-1 font-weight-bold">
+                    この番組のオフライン保存データ（映像・コメント・サムネイル）がすべて削除されます。<br>
+                    元に戻すことはできません。削除してもよろしいですか？
+                </div>
+            </v-card-text>
+            <v-card-actions class="pt-4 px-6 pb-6">
+                <v-spacer></v-spacer>
+                <v-btn color="text" variant="text" @click="show_offline_delete_confirmation = false">
+                    <Icon icon="fluent:dismiss-20-regular" width="18px" height="18px" />
+                    <span class="ml-1">キャンセル</span>
+                </v-btn>
+                <v-btn class="px-3" color="error" variant="flat" @click="deleteOfflineProgram">
+                    <Icon icon="fluent:delete-20-regular" width="18px" height="18px" />
+                    <span class="ml-1">オフライン保存を削除</span>
+                </v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
 
     <!-- 録画ファイル削除確認ダイアログ -->
     <v-dialog max-width="750" v-model="show_delete_confirmation">
@@ -159,8 +271,10 @@
 import { ref, computed } from 'vue';
 
 import RecordedFileInfoDialog from '@/components/Videos/Dialogs/RecordedFileInfoDialog.vue';
+import OfflineDownloadDialog from '@/components/Videos/OfflineDownloadDialog.vue';
 import Message from '@/message';
 import Videos, { IRecordedProgram } from '@/services/Videos';
+import useOfflineManagerStore from '@/stores/OfflineManagerStore';
 import useSettingsStore from '@/stores/SettingsStore';
 import useUserStore from '@/stores/UserStore';
 import Utils, { ProgramUtils } from '@/utils';
@@ -170,9 +284,11 @@ const props = withDefaults(defineProps<{
     program: IRecordedProgram;
     forMylist?: boolean;
     forWatchedHistory?: boolean;
+    forOffline?: boolean;
 }>(), {
     forMylist: false,
     forWatchedHistory: false,
+    forOffline: false,
 });
 
 // Emits
@@ -184,6 +300,8 @@ const emit = defineEmits<{
 const show_video_info = ref(false);
 // 削除確認ダイアログの表示状態
 const show_delete_confirmation = ref(false);
+// オフライン保存ダイアログの表示状態
+const show_offline_download_dialog = ref(false);
 
 // 録画ファイルのダウンロード (location.href を変更し、ダウンロード自体はブラウザに任せる)
 const downloadVideo = () => {
@@ -210,6 +328,52 @@ const regenerateThumbnail = async () => {
 
 // マイリストに追加/削除
 const settingsStore = useSettingsStore();
+const offlineManagerStore = useOfflineManagerStore();
+void offlineManagerStore.initialize();
+
+// オフライン保存状態
+const offline_program = computed(() => {
+    return offlineManagerStore.getProgramById(props.program.id);
+});
+
+// オフライン保存進捗率
+const offline_progress_percent = computed(() => {
+    return offlineManagerStore.getProgressPercent(props.program.id);
+});
+
+// サムネイル上部のダウンロード進捗バーを表示するかどうか
+const is_offline_download_in_progress = computed(() => {
+    return offline_program.value?.download_status === 'Downloading' || offline_program.value?.download_status === 'Paused';
+});
+
+// オフライン保存中の番組は操作をロックする
+const is_operation_locked = computed(() => {
+    return offline_program.value?.download_status === 'Downloading';
+});
+
+// 保存中でもメニューから一時停止できるようにする
+const is_offline_menu_available_while_locked = computed(() => {
+    return offline_program.value?.download_status === 'Downloading';
+});
+
+// メニューを無効化するかどうか
+const is_menu_disabled = computed(() => {
+    return is_operation_locked.value === true && is_offline_menu_available_while_locked.value === false;
+});
+
+// サーバー/オフライン視聴画面へのリンクが有効かどうか
+const is_link_enabled = computed(() => {
+    return props.program.recorded_video.status === 'Recorded' &&
+        props.program.recorded_video.has_key_frames &&
+        is_operation_locked.value === false &&
+        (!props.forOffline || offline_program.value?.download_status === 'Completed');
+});
+
+// 遷移先の URL
+const link_url = computed(() => {
+    return props.forOffline ? `/videos/offline/watch/${props.program.id}` : `/videos/watch/${props.program.id}`;
+});
+
 const toggleMylist = () => {
     // マイリストに追加されているか確認
     const isInMylist = settingsStore.settings.mylist.some(item => {
@@ -259,6 +423,48 @@ const showDeleteConfirmation = () => {
         return;
     }
     show_delete_confirmation.value = true;
+};
+
+// オフライン保存ダイアログを表示
+const showOfflineDownloadDialog = () => {
+    show_offline_download_dialog.value = true;
+};
+
+// オフライン保存を一時停止
+const pauseOfflineDownload = async () => {
+    try {
+        await offlineManagerStore.pauseDownload(props.program.id);
+    } catch (error) {
+        console.error('Failed to pause offline download:', error);
+        Message.error('ダウンロードの一時停止に失敗しました。');
+    }
+};
+
+// オフライン保存を再開
+const resumeOfflineDownload = async () => {
+    try {
+        await offlineManagerStore.resumeDownload(props.program.id);
+    } catch (error) {
+        console.error('Failed to resume offline download:', error);
+        Message.error('ダウンロードの再開に失敗しました。');
+    }
+};
+
+// オフライン保存データの削除確認ダイアログを表示
+const show_offline_delete_confirmation = ref(false);
+const showOfflineDeleteConfirmation = () => {
+    show_offline_delete_confirmation.value = true;
+};
+
+// オフライン保存データを削除（確認後に呼ばれる）
+const deleteOfflineProgram = async () => {
+    show_offline_delete_confirmation.value = false;
+    try {
+        await offlineManagerStore.deleteProgram(props.program.id);
+    } catch (error) {
+        console.error('Failed to delete offline program:', error);
+        Message.error('オフライン保存データの削除に失敗しました。');
+    }
 };
 
 // 録画ファイル削除
@@ -359,6 +565,27 @@ const deleteVideo = async () => {
             }
         }
 
+        &-offline-progress {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: rgba(0, 0, 0, 0.55);
+
+            &-bar {
+                height: 100%;
+                background: rgb(var(--v-theme-primary));
+                transition: width 0.2s ease;
+            }
+
+            &--paused {
+                .recorded-program__thumbnail-offline-progress-bar {
+                    background: rgb(var(--v-theme-warning));
+                }
+            }
+        }
+
         &-status {
             display: flex;
             align-items: center;
@@ -379,6 +606,21 @@ const deleteVideo = async () => {
                 svg {
                     color: rgb(var(--v-theme-primary));
                     animation: progress-rotate 1.5s infinite;
+                }
+            }
+
+            &--offline-downloading {
+                gap: 3px;
+                svg {
+                    color: rgb(var(--v-theme-primary));
+                    animation: progress-rotate 1.5s infinite;
+                }
+            }
+
+            &--offline-paused {
+                gap: 3px;
+                svg {
+                    color: rgb(var(--v-theme-warning));
                 }
             }
 
@@ -745,6 +987,13 @@ const deleteVideo = async () => {
                     opacity: 0.15;
                 }
             }
+            &--disabled {
+                color: rgb(var(--v-theme-text-darken-2));
+                cursor: default;
+                &:before {
+                    display: none;
+                }
+            }
             // タッチデバイスで hover を無効にする
             @media (hover: none) {
                 &:hover {
@@ -777,6 +1026,24 @@ const deleteVideo = async () => {
             opacity: 0.65;
         }
         .recorded-program__mylist,
+        .recorded-program__menu {
+            pointer-events: auto;
+        }
+    }
+
+    &--operation-locked {
+        pointer-events: none;
+        &:hover {
+            background: rgb(var(--v-theme-background-lighten-1));
+        }
+        .recorded-program__thumbnail-image,
+        .recorded-program__thumbnail-duration,
+        .recorded-program__content {
+            opacity: 0.7;
+        }
+    }
+
+    &--operation-locked-for-offline {
         .recorded-program__menu {
             pointer-events: auto;
         }
