@@ -333,6 +333,18 @@
                 <Icon icon="fluent:document-text-16-regular" height="20px" />
                 <span class="ml-2">サーバーログを表示</span>
             </v-btn>
+            <div class="settings__item">
+                <div class="settings__item-heading">KonomiTV クライアントをビルド</div>
+                <div class="settings__item-label">
+                    この KonomiTV サーバーが配信するクライアント (Web UI) を再ビルドします。<br>
+                    ビルド完了後にページを再読み込みすると最新のビルド結果が反映されます。<br>
+                </div>
+            </div>
+            <v-btn class="settings__save-button mt-5" color="background-lighten-2" variant="flat"
+                @click="buildClient()">
+                <Icon icon="fluent:arrow-counterclockwise-20-filled" height="20px" />
+                <span class="ml-2">クライアントをビルド</span>
+            </v-btn>
         </div>
         <div class="settings__content">
             <div class="settings__item">
@@ -535,6 +547,15 @@ async function updateDatabase() {
     Message.show('データベースを更新しています...');
     await Maintenance.updateDatabase();
     Message.success('データベースを更新しました。');
+}
+
+// クライアントをビルドする関数
+async function buildClient() {
+    Message.show('クライアントをビルドしています...');
+    const result = await Maintenance.buildClient();
+    if (result === true) {
+        Message.success('クライアントをビルドしました。\nページを再読み込みすると最新のビルド結果が反映されます。');
+    }
 }
 
 // 録画フォルダの一括スキャンを実行する関数

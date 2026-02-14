@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import shutil
 import signal
 import sys
 import threading
@@ -21,6 +22,7 @@ from tortoise.expressions import RawSQL
 from app import logging, schemas
 from app.config import Config
 from app.constants import (
+    BASE_DIR,
     KONOMITV_ACCESS_LOG_PATH,
     KONOMITV_SERVER_LOG_PATH,
     RESTART_REQUIRED_LOCK_PATH,
@@ -47,6 +49,8 @@ router = APIRouter(
 # 録画フォルダの一括スキャン・バックグラウンド解析タスクの asyncio.Task インスタンス
 batch_scan_task: asyncio.Task[None] | None = None
 background_analysis_task: asyncio.Task[None] | None = None
+# クライアントビルドタスクの asyncio.Task インスタンス
+client_build_task: asyncio.Task[None] | None = None
 
 
 async def GetCurrentAdminUserOrLocal(
@@ -314,6 +318,83 @@ async def BackgroundAnalysisAPI():
         raise HTTPException(
             status_code = status.HTTP_429_TOO_MANY_REQUESTS,
             detail = 'Background analysis task is already running',
+        )
+
+
+@router.post(
+    '/build-client',
+    summary = 'クライアントビルド API',
+    status_code = status.HTTP_204_NO_CONTENT,
+)
+async def BuildClientAPI(
+    current_user: Annotated[User | None, Depends(GetCurrentAdminUserOrLocal)],
+):
+    """
+    KonomiTV クライアントの yarn build を実行してビルド成果物を更新する。<br>
+    JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていて、かつ管理者アカウントでないとアクセスできない。
+    """
+
+    global client_build_task
+
+    async def BuildClient():
+        logging.info('Manual client build has started.')
+
+        # client/ ディレクトリに移動して yarn build を実行
+        # Windows では CreateProcess() が yarn.cmd を暗黙解決できないため、拡張子付きで解決する
+        yarn_command = 'yarn.cmd' if sys.platform == 'win32' else 'yarn'
+        yarn_executable = shutil.which(yarn_command)
+        if yarn_executable is None:
+            logging.error('[MaintenanceRouter][BuildClientAPI] Yarn command not found.')
+            raise HTTPException(
+                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail = 'Yarn command not found',
+            )
+        try:
+            build_process = await asyncio.create_subprocess_exec(
+                yarn_executable,
+                'build',
+                cwd = str(BASE_DIR.parent / 'client'),
+                stdout = asyncio.subprocess.PIPE,
+                stderr = asyncio.subprocess.STDOUT,
+            )
+        except FileNotFoundError as ex:
+            logging.error('[MaintenanceRouter][BuildClientAPI] Yarn command not found.', exc_info=ex)
+            raise HTTPException(
+                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail = 'Yarn command not found',
+            ) from ex
+
+        # ビルドの完了を待機
+        stdout, _ = await build_process.communicate()
+
+        # ビルドに失敗した場合はログを出してエラーを返す
+        if build_process.returncode != 0:
+            build_log = stdout.decode('utf-8', errors='replace').strip()
+            logging.error(
+                f'[MaintenanceRouter][BuildClientAPI] Client build failed. '
+                f'(exit code: {build_process.returncode})\n{build_log}'
+            )
+            raise HTTPException(
+                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail = 'Failed to build client',
+            )
+
+        logging.info('Manual client build has finished.')
+
+    # タスクが実行中でない場合、新しくタスクを作成して実行
+    ## asyncio.create_task() で実行することで、API への HTTP コネクションが切断されてもタスクが継続される
+    if client_build_task is None:
+        client_build_task = asyncio.create_task(BuildClient())
+        try:
+            # タスクの実行が完了するまで待機
+            await client_build_task
+        finally:
+            client_build_task = None
+    else:
+        logging.warning('[MaintenanceRouter][BuildClientAPI] Client build is already running.')
+        raise HTTPException(
+            status_code = status.HTTP_429_TOO_MANY_REQUESTS,
+            detail = 'Client build is already running',
         )
 
 
