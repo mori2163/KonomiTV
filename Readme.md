@@ -4,6 +4,25 @@
 <img width="100%" src="https://github.com/user-attachments/assets/6971f354-0418-4305-bf6d-b061142ffec6">
 <video controls src="https://github.com/user-attachments/assets/ee0b6df0-3bb0-40da-99f4-798437aa2f9c"></video>
 
+### フォーク実装状況
+
+- [x] **Discord連携機能**
+  - `discord` ブランチ ([#16](https://github.com/mori2163/KonomiTV/pull/16))
+  - スラッシュコマンドや録画開始/終了通知に対応。
+
+- [x] **キャプチャ画面ページ**
+  - `capture` ブランチ ([#17](https://github.com/mori2163/KonomiTV/pull/17))
+
+- [x] **オフライン視聴ページ**
+  - `feature/offline` ブランチ ([#18](https://github.com/mori2163/KonomiTV/pull/18))
+  - 既存の HLS セグメント機構を利用し、ローカル（OPFS）に保存してオフライン再生が可能。
+  
+- [x] **Cloudflare Zero Trust 対応**
+  - `feature/cloudflare-zerotrust` ブランチ ([#20](https://github.com/mori2163/KonomiTV/pull/20))
+  - Akebi を無効化し、cloudflared トンネル経由でのアクセスに対応。
+  
+- クライアントビルドボタンの実装([#19](https://github.com/mori2163/KonomiTV/pull/19))
+
 **いろいろな場所とデバイスでテレビと録画を快適に見れる、モダンな Web ベースのソフトウェアです。**
 
 ユーザーのさまざまな好みがつまった、温かみのある居心地の良い場を作りたいという願いを込めて、KonomiTV と名付けました。  
