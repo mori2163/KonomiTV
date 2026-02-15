@@ -137,11 +137,11 @@ def main(
 
     # Cloudflare Zero Trust モードが有効な場合、Akebi HTTPS Server を起動せず、
     # Uvicorn が直接リッスンポートで HTTP 待ち受けを行う
-    if CONFIG.server.cloudflare_zero_trust is True:
+    if CONFIG.server.cloudflare_zero_trust:
         logging.info('Cloudflare Zero Trust mode is enabled. Akebi HTTPS Server will not be started.')
-        logging.info(f'Uvicorn will listen on 0.0.0.0:{CONFIG.server.port} (HTTP).')
+        logging.info(f'Uvicorn will listen on 127.0.0.1:{CONFIG.server.port} (HTTP).')
         reverse_proxy_process = None
-        uvicorn_host = '0.0.0.0'
+        uvicorn_host = '127.0.0.1'
         uvicorn_port = CONFIG.server.port
     else:
         # カスタム HTTPS 証明書/秘密鍵が指定されているとき
