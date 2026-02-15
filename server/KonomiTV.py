@@ -136,13 +136,15 @@ def main(
     # ***** KonomiTV サーバーを起動 *****
 
     # Cloudflare Zero Trust モードが有効な場合、Akebi HTTPS Server を起動せず、
-    # Uvicorn が直接リッスンポートで HTTP 待ち受けを行う
+    # Uvicorn が内部向けループバックアドレスで HTTP 待ち受けを行う
+    # ※ 既存の Windows サービス停止処理や Maintenance API のローカルバイパスは
+    #    127.0.0.77:{port+10} を前提としているため、Zero Trust モードでも維持する
     if CONFIG.server.cloudflare_zero_trust:
         logging.info('Cloudflare Zero Trust mode is enabled. Akebi HTTPS Server will not be started.')
-        logging.info(f'Uvicorn will listen on 127.0.0.1:{CONFIG.server.port} (HTTP).')
+        logging.info(f'Uvicorn will listen on 127.0.0.77:{CONFIG.server.port + 10} (HTTP, internal).')
         reverse_proxy_process = None
-        uvicorn_host = '127.0.0.1'
-        uvicorn_port = CONFIG.server.port
+        uvicorn_host = '127.0.0.77'
+        uvicorn_port = CONFIG.server.port + 10
     else:
         # カスタム HTTPS 証明書/秘密鍵が指定されているとき
         custom_https_certificate: list[str] = []
@@ -180,13 +182,13 @@ def main(
         # 起動するアプリケーション
         app = 'app.app:app',
         # リッスンするアドレス
-        ## Cloudflare Zero Trust モードでは 0.0.0.0 で直接リッスンする
+        ## Cloudflare Zero Trust モードでは Akebi を介さず、内部向けループバックで直接リッスンする
         ## 通常モードではサーバーへのすべてのアクセスには一度 Akebi のリバースプロキシを通す
         ## 混乱を避けるため、容易にアクセスされないだろう 127.0.0.77 のみでリッスンしている
         host = uvicorn_host,
         # リッスンするポート番号
-        ## 通常モードでは指定されたポートに 10 を足したもの
-        ## Cloudflare Zero Trust モードでは指定されたポートをそのまま利用
+        ## 通常モード/Cloudflare Zero Trust モードのどちらでも指定されたポートに 10 を足したもの
+        ## Zero Trust モードでも内部通信仕様との互換性維持のため、port + 10 を利用する
         port = uvicorn_port,
         # 自動リロードモードモードで起動するか
         reload = reload,
