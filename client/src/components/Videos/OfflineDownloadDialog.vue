@@ -223,12 +223,14 @@ watch(() => props.modelValue, async (is_open) => {
 // ダウンロード開始
 const startDownload = async () => {
     try {
-        await offlineManagerStore.startDownload(props.program, {
+        const is_started = await offlineManagerStore.startDownload(props.program, {
             quality: selected_api_quality.value,
             include_comments: include_comments.value,
         });
         // ダウンロード開始に成功した場合のみダイアログを閉じる
-        emit('update:modelValue', false);
+        if (is_started === true) {
+            emit('update:modelValue', false);
+        }
     } catch (error) {
         // 例外が上がった場合はユーザーへ明示的に通知する
         Message.error('ダウンロードの開始に失敗しました。時間をおいて再度お試しください。');

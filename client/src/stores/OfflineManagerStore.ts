@@ -247,6 +247,7 @@ const useOfflineManagerStore = defineStore('offlineManager', () => {
         active_download_worker = new OfflineDownloadWorkerProxy();
         const current_worker = active_download_worker;
         Message.show('ダウンロードを開始しました。');
+        let is_error_handled_by_callback = false;
 
         const callbacks = Comlink.proxy<IOfflineDownloadCallbacks>({
             onProgress: async (progress: IOfflineDownloadProgress) => {
@@ -285,6 +286,7 @@ const useOfflineManagerStore = defineStore('offlineManager', () => {
                     upsertProgramRecordInState(updated_record);
                 }
                 Message.error(`ダウンロードに失敗しました: ${error_message}`);
+                is_error_handled_by_callback = true;
             },
         });
         const callbacks_with_release = callbacks as IOfflineDownloadCallbacks & {
@@ -316,15 +318,17 @@ const useOfflineManagerStore = defineStore('offlineManager', () => {
                     return false;
                 }
 
-                const updated_record = await OfflineStorageService.updateProgram(recorded_program.id, {
-                    download_status: 'Failed',
-                    failed_at: dayjs().format(),
-                    error_message: error_message,
-                });
-                if (updated_record !== null) {
-                    upsertProgramRecordInState(updated_record);
+                if (is_error_handled_by_callback === false) {
+                    const updated_record = await OfflineStorageService.updateProgram(recorded_program.id, {
+                        download_status: 'Failed',
+                        failed_at: dayjs().format(),
+                        error_message: error_message,
+                    });
+                    if (updated_record !== null) {
+                        upsertProgramRecordInState(updated_record);
+                    }
+                    Message.error(`ダウンロードに失敗しました: ${error_message}`);
                 }
-                Message.error(`ダウンロードに失敗しました: ${error_message}`);
                 return false;
             } finally {
                 if (active_download_video_id.value === recorded_program.id) {
@@ -345,9 +349,13 @@ const useOfflineManagerStore = defineStore('offlineManager', () => {
                 await refreshStorageEstimate();
             }
         })();
-
-        active_download_promise = download_promise;
-        return await download_promise;
+        // 非同期ダウンロード本体の失敗を未処理例外にしないため、ここで受け止める
+        const safe_download_promise = download_promise.catch((error) => {
+            console.error('Failed to finalize offline download task:', error);
+            return false;
+        });
+        active_download_promise = safe_download_promise;
+        return true;
     };
 
 
