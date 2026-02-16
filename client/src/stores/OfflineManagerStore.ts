@@ -247,6 +247,9 @@ const useOfflineManagerStore = defineStore('offlineManager', () => {
         active_download_worker = new OfflineDownloadWorkerProxy();
         const current_worker = active_download_worker;
         Message.show('ダウンロードを開始しました。');
+        // `is_error_handled_by_callback` は Worker 側から Comlink 経由で呼ばれる `onError` と、
+        // `current_worker.download(...).catch(...)` の Promise rejection ハンドラーで
+        // 同じ失敗を二重処理しないための暫定フラグ。
         let is_error_handled_by_callback = false;
 
         const callbacks = Comlink.proxy<IOfflineDownloadCallbacks>({
