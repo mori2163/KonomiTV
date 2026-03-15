@@ -20,6 +20,12 @@
                             <span class="ml-2">クリップボードにコピー</span>
                         </v-list-item-title>
                     </v-list-item>
+                    <v-list-item density="compact" style="min-height: 30px" @click="copyUserIDToClipboard()">
+                        <v-list-item-title class="d-flex align-center">
+                            <Icon icon="fluent:person-20-filled" width="20px" />
+                            <span class="ml-2">このコメントのユーザー ID をコピー</span>
+                        </v-list-item-title>
+                    </v-list-item>
                     <v-list-item density="compact" style="min-height: 30px" @click="addMutedKeywords()">
                         <v-list-item-title class="d-flex align-center">
                             <Icon icon="fluent:comment-dismiss-20-filled" width="20px" />
@@ -45,6 +51,7 @@
                             <span class="comment__time">{{item.time}}</span>
                             <!-- なぜか @click だとスマホで発火しないので @touchend にしている -->
                             <div class="comment__icon" v-ripple="!Utils.isTouchDevice()"
+                                @click.stop
                                 @mouseup="showCommentListDropdown($event, item)"
                                 @touchend="showCommentListDropdown($event, item)">
                                 <!-- Icon コンポーネントを使うと個数が多いときに高負荷になるため、意図的に SVG を直書きしている -->
@@ -59,11 +66,13 @@
             </template>
             <template v-else>
                 <VirtuaList ref="virtua_scroller" class="comment-list" :data="comment_list" #default="{ item }">
-                    <div class="comment" :class="{'comment--my-post': item.my_post}">
+                    <div class="comment comment--seekable" :class="{'comment--my-post': item.my_post}"
+                        @click="seekToComment(item)">
                         <span class="comment__text">{{item.text}}</span>
                         <span class="comment__time">{{item.time}}</span>
                         <!-- なぜか @click だとスマホで発火しないので @touchend にしている -->
                         <div class="comment__icon" v-ripple="!Utils.isTouchDevice()"
+                            @click.stop
                             @mouseup="showCommentListDropdown($event, item)"
                             @touchend="showCommentListDropdown($event, item)">
                             <!-- Icon コンポーネントを使うと個数が多いときに高負荷になるため、意図的に SVG を直書きしている -->
@@ -407,7 +416,7 @@ export default defineComponent({
         // ドロップダウンメニューを表示する
         showCommentListDropdown(event: Event, comment: ICommentData) {
             const comment_list_wrapper_rect = (this.$refs.comment_list_wrapper as HTMLDivElement).getBoundingClientRect();
-            const comment_list_dropdown_height = 106;  // 106px はドロップダウンメニューの高さ
+            const comment_list_dropdown_height = 141;  // 141px はドロップダウンメニューの高さ
             const comment_button_rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
             // メニューの表示位置をクリックされたコメントに合わせる
             this.comment_list_dropdown_top = comment_button_rect.top - comment_list_wrapper_rect.top;
@@ -424,7 +433,7 @@ export default defineComponent({
         hideCommentListDropdown() {
             this.is_comment_list_dropdown_display = false;
             this.comment_list = this.comment_list.filter((comment) => {
-                return CommentUtils.isMutedComment(comment.text, comment.user_id) === false;
+                return CommentUtils.isMutedComment(comment.text, comment.user_id, undefined, undefined, undefined, comment.premium) === false;
             });
         },
 
@@ -432,6 +441,13 @@ export default defineComponent({
         copyTextToClipboard() {
             if (this.comment_list_dropdown_comment === null) return;
             navigator.clipboard.writeText(this.comment_list_dropdown_comment.text);
+            this.hideCommentListDropdown();
+        },
+
+        // コメントのユーザー ID をクリップボードにコピーする
+        copyUserIDToClipboard() {
+            if (this.comment_list_dropdown_comment === null) return;
+            navigator.clipboard.writeText(this.comment_list_dropdown_comment.user_id);
             this.hideCommentListDropdown();
         },
 
@@ -552,6 +568,18 @@ export default defineComponent({
 
             // 自動スクロール中のフラグを降ろす
             this.is_auto_scrolling = false;
+        },
+
+        /**
+         * 録画再生時、コメントをクリックしてその再生位置までシークする
+         * @param comment クリックされたコメント
+         */
+        seekToComment(comment: ICommentData): void {
+            if (this.playback_mode !== 'Video') return;
+            if (comment.playback_position === undefined) return;
+            this.playerStore.event_emitter.emit('SeekRequest', {
+                playback_position: comment.playback_position,
+            });
         },
 
         /**
@@ -734,6 +762,13 @@ export default defineComponent({
                 min-height: 28px;
                 padding-top: 6px;
                 word-break: break-word;
+                &--seekable {
+                    cursor: pointer;
+                    transition: color 0.15s ease;
+                    &:hover {
+                        color: rgb(var(--v-theme-primary));
+                    }
+                }
                 &--my-post {
                     color: rgb(var(--v-theme-secondary-lighten-2));
                 }

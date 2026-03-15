@@ -32,6 +32,7 @@ from app.routers import (
     MaintenanceRouter,
     NiconicoRouter,
     ProgramsRouter,
+    RecordingPresetsRouter,
     ReservationConditionsRouter,
     ReservationsRouter,
     SeriesRouter,
@@ -79,6 +80,7 @@ app.include_router(LiveStreamsRouter.router)
 app.include_router(VideoStreamsRouter.router)
 app.include_router(ReservationsRouter.router)
 app.include_router(ReservationConditionsRouter.router)
+app.include_router(RecordingPresetsRouter.router)
 app.include_router(CapturesRouter.router)
 app.include_router(DataBroadcastingRouter.router)
 app.include_router(DiscordRouter.router)
