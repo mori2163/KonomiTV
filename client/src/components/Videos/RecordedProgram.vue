@@ -1,9 +1,8 @@
 <template>
-    <component :is="is_link_enabled ? 'router-link' : 'div'" v-ripple class="recorded-program"
-        :to="is_link_enabled ? link_url : undefined"
+    <router-link v-ripple class="recorded-program"
+        :to="program.recorded_video.status === 'Recorded' ? link_url : { path: '' }"
         :class="{
             'recorded-program--recording': program.recorded_video.status === 'Recording',
-            'recorded-program--analyzing': !program.recorded_video.has_key_frames && program.recorded_video.status !== 'AnalysisFailed',
             'recorded-program--failed': program.recorded_video.status === 'AnalysisFailed',
             'recorded-program--operation-locked': is_operation_locked,
             'recorded-program--operation-locked-for-offline': is_offline_menu_available_while_locked,
@@ -35,10 +34,6 @@
                 <div v-else-if="program.recorded_video.status === 'AnalysisFailed'" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--failed">
                     <Icon icon="fluent:error-circle-12-regular" width="15px" height="15px" />
                     メタデータ解析失敗
-                </div>
-                <div v-else-if="!program.recorded_video.has_key_frames" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--analyzing">
-                    <Icon icon="fluent:clock-12-regular" width="15px" height="15px" />
-                    メタデータ解析中
                 </div>
                 <div v-else-if="program.is_partially_recorded" class="recorded-program__thumbnail-status recorded-program__thumbnail-status--partial">
                     ⚠️ 一部のみ録画
@@ -213,7 +208,7 @@
                 </v-menu>
             </div>
         </div>
-    </component>
+    </router-link>
     <RecordedFileInfoDialog :program="program" v-model:show="show_video_info" />
     <OfflineDownloadDialog v-model="show_offline_download_dialog" :program="program" />
 
@@ -361,15 +356,7 @@ const is_menu_disabled = computed(() => {
     return is_operation_locked.value === true && is_offline_menu_available_while_locked.value === false;
 });
 
-// サーバー/オフライン視聴画面へのリンクが有効かどうか
-const is_link_enabled = computed(() => {
-    return props.program.recorded_video.status === 'Recorded' &&
-        props.program.recorded_video.has_key_frames &&
-        is_operation_locked.value === false &&
-        (!props.forOffline || offline_program.value?.download_status === 'Completed');
-});
-
-// 遷移先の URL
+// 遷移先の URL (forOffline の場合はオフライン視聴画面へのリンクにする)
 const link_url = computed(() => {
     return props.forOffline ? `/videos/offline/watch/${props.program.id}` : `/videos/watch/${props.program.id}`;
 });
@@ -487,6 +474,8 @@ const deleteVideo = async () => {
     display: flex;
     position: relative;
     width: 100%;
+    min-width: 0;  // 一覧側の横幅が狭いときも、カード自身が親要素を押し広げないようにする
+    max-width: 100%;
     height: 125px;
     padding: 0px 16px;
     color: rgb(var(--v-theme-text));
@@ -518,6 +507,7 @@ const deleteVideo = async () => {
         display: flex;
         align-items: center;
         width: 100%;
+        min-width: 0;  // サムネイルと本文を同じ行に収め、長い番組名は本文側の省略表示に任せる
         height: 100%;
         padding: 12px 0px;
         @include smartphone-vertical {
@@ -600,14 +590,6 @@ const deleteVideo = async () => {
             line-height: 1;
             background: rgba(var(--v-theme-background-lighten-1), 0.9);
             color: rgba(255, 255, 255, 0.85);
-
-            &--analyzing {
-                gap: 3px;
-                svg {
-                    color: rgb(var(--v-theme-primary));
-                    animation: progress-rotate 1.5s infinite;
-                }
-            }
 
             &--offline-downloading {
                 gap: 3px;
@@ -1015,7 +997,7 @@ const deleteVideo = async () => {
         }
     }
 
-    &--recording, &--analyzing, &--failed {
+    &--recording, &--failed {
         pointer-events: none;
         &:hover {
             background: rgb(var(--v-theme-background-lighten-1));

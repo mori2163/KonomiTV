@@ -28,13 +28,13 @@ export interface IRecordedVideo {
     video_frame_rate: number;
     video_resolution_width: number;
     video_resolution_height: number;
+    has_video_stream_changes: boolean;
     primary_audio_codec: 'AAC-LC';
     primary_audio_channel: 'Monaural' | 'Stereo' | '5.1ch';
     primary_audio_sampling_rate: number;
     secondary_audio_codec: 'AAC-LC' | null;
     secondary_audio_channel: 'Monaural' | 'Stereo' | '5.1ch' | null;
     secondary_audio_sampling_rate: number | null;
-    has_key_frames: boolean;
     cm_sections: { start_time: number; end_time: number; }[] | null;
     thumbnail_info: IThumbnailInfo | null;
     created_at: string;
@@ -87,13 +87,13 @@ export const IRecordedVideoDefault: IRecordedVideo = {
     video_frame_rate: 29.97,
     video_resolution_width: 1440,
     video_resolution_height: 1080,
+    has_video_stream_changes: false,
     primary_audio_codec: 'AAC-LC',
     primary_audio_channel: 'Stereo',
     primary_audio_sampling_rate: 48000,
     secondary_audio_codec: null,
     secondary_audio_channel: null,
     secondary_audio_sampling_rate: null,
-    has_key_frames: false,
     cm_sections: null,
     thumbnail_info: null,
     created_at: '2000-01-01T00:00:00+09:00',

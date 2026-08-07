@@ -15,7 +15,7 @@ from pydantic import BaseModel, PositiveInt
 
 
 # バージョン
-VERSION = '0.13.0'
+VERSION = '0.14.1'
 
 # 日本標準時 (JST, UTC+9) の ZoneInfo
 ## KonomiTV は日本向けのアプリケーションのため、日時は JST で統一して扱う
@@ -33,6 +33,11 @@ DATA_DIR = BASE_DIR / 'data'
 ACCOUNT_ICON_DIR = DATA_DIR / 'account-icons'
 ## サムネイル画像があるディレクトリ
 THUMBNAILS_DIR = DATA_DIR / 'thumbnails'
+## Twitter 関連のデバッグ用スクリーンショットの保存先ディレクトリ
+TWITTER_DEBUG_SCREENSHOTS_DIR = DATA_DIR / 'twitter-debug-screenshots'
+## デバッグ用スクリーンショットの保持期限 (日数)
+## 7 日を超えたスクリーンショットを自動削除する
+TWITTER_DEBUG_SCREENSHOTS_RETENTION_DAYS = 7
 ## サーバー終了時に再起動が必要なことを伝えるロックファイルのパス
 RESTART_REQUIRED_LOCK_PATH = DATA_DIR / 'restart_required.lock'
 
@@ -388,6 +393,15 @@ TWITTER_ACCOUNT_COOKIE_FERNET_KEY = base64.urlsafe_b64encode(
 )
 # Cookie の暗号化に使う Fernet のインスタンス
 TWITTER_ACCOUNT_COOKIE_FERNET = Fernet(TWITTER_ACCOUNT_COOKIE_FERNET_KEY)
+
+# 暗号化された Bluesky セッション文字列の接頭辞
+BLUESKY_ACCOUNT_SESSION_ENCRYPTION_PREFIX = 'enc:'
+# Bluesky セッション文字列の暗号化に使う Fernet の暗号化キー
+BLUESKY_ACCOUNT_SESSION_FERNET_KEY = base64.urlsafe_b64encode(
+    hashlib.sha256(f'bluesky:{JWT_SECRET_KEY}'.encode()).digest(),
+)
+# Bluesky セッション文字列の暗号化に使う Fernet のインスタンス
+BLUESKY_ACCOUNT_SESSION_FERNET = Fernet(BLUESKY_ACCOUNT_SESSION_FERNET_KEY)
 
 # パスワードハッシュ化のための設定
 PASSWORD_CONTEXT = CryptContext(

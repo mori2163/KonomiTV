@@ -111,6 +111,7 @@
 <script lang="ts">
 // 忘れがちなので無駄にコメントが多め
 import { defineComponent } from 'vue';
+
 import Message from '@/message';
 import Settings, { IServerSettingsDefault } from '@/services/Settings';
 import useSettingsStore from '@/stores/SettingsStore';

@@ -12,7 +12,7 @@ from tortoise.fields import Field as TortoiseField
 from tortoise.models import Model as TortoiseModel
 
 from app.models.RecordedProgram import RecordedProgram
-from app.schemas import CMSection, KeyFrame, ThumbnailInfo
+from app.schemas import CMSection, KeyFrame, SegmentMapEntry, ThumbnailInfo
 
 
 class RecordedVideo(TortoiseModel):
@@ -42,6 +42,7 @@ class RecordedVideo(TortoiseModel):
     video_frame_rate = fields.FloatField()
     video_resolution_width = fields.IntField()
     video_resolution_height = fields.IntField()
+    has_video_stream_changes = fields.BooleanField(default=False)
     primary_audio_codec = cast(TortoiseField[Literal['AAC-LC']], fields.CharField(255))
     primary_audio_channel = cast(TortoiseField[Literal['Monaural', 'Stereo', '5.1ch']], fields.CharField(255))
     primary_audio_sampling_rate = fields.IntField()
@@ -49,6 +50,10 @@ class RecordedVideo(TortoiseModel):
     secondary_audio_channel = cast(TortoiseField[Literal['Monaural', 'Stereo', '5.1ch'] | None], fields.CharField(255, null=True))
     secondary_audio_sampling_rate = cast(TortoiseField[int | None], fields.IntField(null=True))
     key_frames = cast(TortoiseField[list[KeyFrame]],
+        fields.JSONField(default=[], encoder=lambda x: json.dumps(x, ensure_ascii=False)))  # type: ignore
+    segment_map = cast(TortoiseField[list[SegmentMapEntry]],
+        # segment_map は再生開始時刻から入力ファイル位置を引くためのキャッシュ
+        ## 空配列は未キャッシュ状態を表し、再生可否の判定には使わない
         fields.JSONField(default=[], encoder=lambda x: json.dumps(x, ensure_ascii=False)))  # type: ignore
     cm_sections = cast(TortoiseField[list[CMSection] | None],
         # None は未解析状態を表す ([] は解析したが CM 区間がなかった/検出に失敗したことを表す)
@@ -58,7 +63,3 @@ class RecordedVideo(TortoiseModel):
         fields.JSONField(default=None, encoder=lambda x: json.dumps(x, ensure_ascii=False), null=True))  # type: ignore
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
-
-    @property
-    def has_key_frames(self) -> bool:
-        return len(self.key_frames) > 0
