@@ -1,11 +1,13 @@
 
 import DPlayer from 'dplayer';
 
+import Utils from '@/utils/Utils';
+
 
 /**
- * ライブストリーミング API で設定できる動画の画質
+ * ライブ/録画番組ストリーミング API でベース画質として設定できる動画の画質
  */
-type LiveAPIVideoQuality = (
+type APIBaseVideoQuality = (
     '1080p-60fps' |
     '1080p-60fps-hevc' |
     '1080p' |
@@ -25,25 +27,23 @@ type LiveAPIVideoQuality = (
 );
 
 /**
+ * ライブストリーミング API で設定できる動画の画質
+ */
+type LiveAPIVideoQuality = (
+    APIBaseVideoQuality |
+    `${APIBaseVideoQuality}-10bit` |
+    `${APIBaseVideoQuality}-24fps` |
+    `${APIBaseVideoQuality}-10bit-24fps`
+);
+
+/**
  * 録画番組ストリーミング API で設定できる動画の画質
  */
 type VideoAPIVideoQuality = (
-    '1080p-60fps' |
-    '1080p-60fps-hevc' |
-    '1080p' |
-    '1080p-hevc' |
-    '810p' |
-    '810p-hevc' |
-    '720p' |
-    '720p-hevc' |
-    '540p' |
-    '540p-hevc' |
-    '480p' |
-    '480p-hevc' |
-    '360p' |
-    '360p-hevc' |
-    '240p' |
-    '240p-hevc'
+    APIBaseVideoQuality |
+    `${APIBaseVideoQuality}-10bit` |
+    `${APIBaseVideoQuality}-24fps` |
+    `${APIBaseVideoQuality}-10bit-24fps`
 );
 
 
@@ -140,5 +140,69 @@ export class PlayerUtils {
     static isHEVCVideoSupported(): boolean {
         // hvc1.1.6.L123.B0 の部分は呪文 (HEVC であることと、そのプロファイルを示す値らしい)
         return document.createElement('video').canPlayType('video/mp4; codecs="hvc1.1.6.L123.B0"') === 'probably';
+    }
+
+
+    /**
+     * 現在のブラウザで H.265 / HEVC Main10 映像が再生できるかどうかを取得する
+     * @returns 再生できるなら true、できないなら false
+     */
+    static async isHEVC10bitVideoSupported(): Promise<boolean> {
+        // 本来の Main10 プロファイルは hvc1.2.4.L123.B0 らしいが、mpegts.js の MIME 文字列生成ロジックに合わせてこれで検証している
+        const video_content_type = 'video/mp4; codecs="hvc1.2.1.L123.B0"';
+        const audio_content_type = 'audio/mp4; codecs="mp4a.40.2"';
+
+        // HEVC 10bit は透過的に有効化するため、MediaCapabilities で対応を判断できる環境だけを対象にする
+        // ここで対象外になっても通常の HEVC 8bit 再生へ戻せるため、互換性を優先する
+        if (navigator.mediaCapabilities === undefined) {
+            return false;
+        }
+
+        // mpegts.js は映像と音声の SourceBuffer を別々に作る
+        // iPhone Safari では通常の MediaSource がなく ManagedMediaSource だけが存在するため、mpegts.js と同じく両方を確認する
+        const media_source_api = window.MediaSource;
+        const managed_media_source_api = window.ManagedMediaSource;
+        const is_source_buffer_supported =
+            (media_source_api !== undefined &&
+             media_source_api.isTypeSupported(video_content_type) === true &&
+             media_source_api.isTypeSupported(audio_content_type) === true) ||
+            (managed_media_source_api !== undefined &&
+             managed_media_source_api.isTypeSupported(video_content_type) === true &&
+             managed_media_source_api.isTypeSupported(audio_content_type) === true);
+        if (is_source_buffer_supported === false) {
+            return false;
+        }
+
+        try {
+            const decoding_info = await navigator.mediaCapabilities.decodingInfo({
+                type: 'media-source',
+                audio: {
+                    contentType: audio_content_type,
+                    channels: '2',
+                    bitrate: 192000,
+                    samplerate: 48000,
+                },
+                video: {
+                    contentType: video_content_type,
+                    width: 1920,
+                    height: 1080,
+                    bitrate: 5200000,
+                    framerate: 60,
+                },
+            });
+
+            // Safari の MediaCapabilities は、iPhone 実機で実際には滑らかに再生できる HEVC 8bit / 10bit でも smooth: false を返すことがある
+            // supported と powerEfficient は true を返すため、Safari では smooth を参考値として扱う
+            if (Utils.isSafari() === true) {
+                return decoding_info.supported === true && decoding_info.powerEfficient === true;
+            }
+
+            // Android タブレットでは HEVC 10bit 再生に対応しない個体が多いため、Safari 以外では smooth も必須にする
+            return decoding_info.supported === true && decoding_info.smooth === true && decoding_info.powerEfficient === true;
+        } catch (error) {
+            // MediaCapabilities API の実装差で例外が出ても、通常の HEVC 8bit 再生へ戻せば視聴は継続できる
+            console.warn('[PlayerUtils] Failed to check HEVC 10bit playback support.', error);
+            return false;
+        }
     }
 }

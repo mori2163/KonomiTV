@@ -42,7 +42,8 @@ from app.utils.TSInformation import TerrestrialRegion
 class ClientSettings(BaseModel):
     last_synced_at: Annotated[float, PositiveFloat] = 0.0
     # showed_panel_last_time: 同期無効
-    # selected_twitter_account_id: 同期無効
+    # selected_twitter_panel_account: 同期無効
+    # twitter_panel_post_targets: 同期無効
     saved_twitter_hashtags: list[str] = []
     mylist: list[dict[str, Any]] = []
     watched_history: list[dict[str, Any]] = []
@@ -91,10 +92,14 @@ class ClientSettings(BaseModel):
     # tv_data_saver_mode_cellular: 同期無効
     # tv_low_latency_mode: 同期無効
     # tv_low_latency_mode_cellular: 同期無効
+    # tv_24fps_mode: 同期無効
+    # tv_24fps_mode_cellular: 同期無効
     # video_streaming_quality: 同期無効
     # video_streaming_quality_cellular: 同期無効
     # video_data_saver_mode: 同期無効
     # video_data_saver_mode_cellular: 同期無効
+    # video_24fps_mode: 同期無効
+    # video_24fps_mode_cellular: 同期無効
     caption_font: str = 'Windows TV MaruGothic'
     always_border_caption_text: bool = True
     specify_caption_opacity: bool = False
@@ -124,6 +129,8 @@ class ClientSettings(BaseModel):
     fold_panel_after_sending_tweet: bool = False
     reset_hashtag_when_program_switches: bool = True
     auto_add_watching_channel_hashtag: bool = True
+    twitter_reply_thread_mode: Literal['PerHashtag', 'PerDay', 'Disabled'] = 'PerHashtag'
+    bluesky_reply_thread_mode: Literal['PerHashtag', 'PerDay', 'Disabled'] = 'Disabled'
     twitter_active_tab: Literal['Search', 'Timeline', 'Capture'] = 'Capture'
     tweet_hashtag_position: Literal['Prepend', 'Append', 'PrependWithLineBreak', 'AppendWithLineBreak'] = 'Append'
     tweet_capture_watermark_position: Literal['None', 'TopLeft', 'TopRight', 'BottomLeft', 'BottomRight'] = 'None'

@@ -11,20 +11,23 @@ from typing import ClassVar, Literal, cast
 import anyio
 from fastapi import HTTPException, status
 from tortoise import transactions
+from tortoise.exceptions import IntegrityError
 from watchfiles import Change, awatch
 
 from app import logging, schemas
 from app.config import Config
 from app.constants import JST, THUMBNAILS_DIR
 from app.metadata.CMSectionsDetector import CMSectionsDetector
-from app.metadata.KeyFrameAnalyzer import KeyFrameAnalyzer
 from app.metadata.MetadataAnalyzer import MetadataAnalyzer
 from app.metadata.ThumbnailGenerator import ThumbnailGenerator
 from app.models.Channel import Channel
 from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
+from app.streams.VideoSegmentPlanner import VideoSegmentPlanner
+from app.utils import ShutdownProcessPoolExecutor
 from app.utils.DriveIOLimiter import DriveIOLimiter
 from app.utils.ProcessLimiter import ProcessLimiter
+from app.utils.TSInformation import TSInformation
 
 
 @dataclass(slots=True)
@@ -146,6 +149,8 @@ class RecordedScanTask:
         self._file_locks: dict[anyio.Path, asyncio.Lock] = {}
         # _file_locks 辞書自体へのアクセスを保護するためのロック
         self._file_locks_dict_lock = asyncio.Lock()
+        # 録画専用チャンネルの枝番計算と保存を直列化するためのロック
+        self._recording_only_channels_lock = asyncio.Lock()
 
         # 初期化済みフラグをセット
         self._initialized = True
@@ -300,12 +305,15 @@ class RecordedScanTask:
                     # 重複がない場合も保持リストに追加
                     videos_to_keep.append(videos[0])
                 if index % 50 == 0:
-                    # 重複チェックがループを占有し続けないよう適宜制御を返す
+                    # 重複チェックがイベントループを占有し続けないよう適宜制御を返す
                     await asyncio.sleep(0)
         if duplicates_found:
             logging.info(f'Duplicate record cleanup finished. Total {total_deleted_count} duplicate records were deleted.')
         else:
             logging.info('No duplicate records found.')
+
+        # 旧 key_frames が残っている録画は、再生開始位置キャッシュへ変換して DB サイズを抑える
+        await self.__migrateKeyFramesToSegmentMap()
 
         # 現在登録されている全ての RecordedVideo レコードをキャッシュ
         ## 重複削除処理で保持すると判断されたレコードのみを使う
@@ -382,7 +390,7 @@ class RecordedScanTask:
                     await RecordedProgram.filter(id=existing_recorded_video_summary.recorded_program_id).delete()
                     logging.info(f'{file_path}: Deleted record for non-existent file.')
                 if index % 50 == 0:
-                    # 既存レコードの走査が長時間化しないよう適宜制御を返す
+                    # 既存レコードの走査がイベントループを占有し続けないよう適宜制御を返す
                     await asyncio.sleep(0)
 
         # DB に存在する全ての RecordedVideo レコードのハッシュを取得
@@ -620,26 +628,34 @@ class RecordedScanTask:
 
                 # ProcessPoolExecutor を使い、別プロセス上でメタデータを解析
                 ## メタデータ解析処理は実装上同期 I/O で実装されており、また CPU-bound な処理のため、別プロセスで実行している
-                ## with 文で括ることで、with 文を抜けたときに ProcessPoolExecutor がクリーンアップされるようにする
-                ## さもなければサーバーの終了後もプロセスが残り続けてゾンビプロセス化し、メモリリークを引き起こしてしまう
+                ## コンテキストマネージャーはキャンセル時にも子プロセス終了を同期的に待つため、イベントループ上では使わない
+                ## 正常完了時は明示的に待ってクリーンアップし、リクエスト切断時だけ待機なしで解放処理へ進める
                 loop = asyncio.get_running_loop()
                 analyzer = MetadataAnalyzer(pathlib.Path(str(file_path)))  # anyio.Path -> pathlib.Path に変換
+                executor = concurrent.futures.ProcessPoolExecutor(max_workers=1)
+                should_wait_executor = True
                 try:
-                    with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
-                        recorded_program = await loop.run_in_executor(executor, analyzer.analyze)
-                    if recorded_program is None:
-                        logging.error(f'{file_path}: Failed to analyze metadata.')
-                        # メタデータ解析に失敗したがこの時点ですでに DB にエントリが存在している場合は、UI から判別できるようステータスを更新する
-                        ## 本来メタデータ解析に失敗した録画ファイルは DB には登録されないが、「録画中は問題なく解析できていたが、録画完了後に解析できなくなった」
-                        ## といったシチュエーションも稀に考えられなくもないため、そうした場合の保険として実装した
-                        if existing_recorded_video_summary is not None:
-                            await RecordedVideo.filter(id=existing_recorded_video_summary.id).update(status='AnalysisFailed')
-                            existing_recorded_video_summary.status = 'AnalysisFailed'
-                        self._recording_files.pop(file_path, None)  # もし録画中扱いであればここで削除
-                        return
+                    recorded_program = await loop.run_in_executor(executor, analyzer.analyze)
+                except asyncio.CancelledError:
+                    should_wait_executor = False
+                    await ShutdownProcessPoolExecutor(executor, is_cancelled=True)
+                    raise
                 except Exception as ex:
                     logging.error(f'{file_path}: Error analyzing metadata:', exc_info=ex)
                     # メタデータ解析中に例外が発生した場合も、この時点ですでに DB にエントリが存在している場合は、UI から判別できるようステータスを更新する
+                    if existing_recorded_video_summary is not None:
+                        await RecordedVideo.filter(id=existing_recorded_video_summary.id).update(status='AnalysisFailed')
+                        existing_recorded_video_summary.status = 'AnalysisFailed'
+                    self._recording_files.pop(file_path, None)  # もし録画中扱いであればここで削除
+                    return
+                finally:
+                    if should_wait_executor is True:
+                        await ShutdownProcessPoolExecutor(executor, is_cancelled=False)
+                if recorded_program is None:
+                    logging.error(f'{file_path}: Failed to analyze metadata.')
+                    # メタデータ解析に失敗したがこの時点ですでに DB にエントリが存在している場合は、UI から判別できるようステータスを更新する
+                    ## 本来メタデータ解析に失敗した録画ファイルは DB には登録されないが、「録画中は問題なく解析できていたが、録画完了後に解析できなくなった」
+                    ## といったシチュエーションも稀に考えられなくもないため、そうした場合の保険として実装した
                     if existing_recorded_video_summary is not None:
                         await RecordedVideo.filter(id=existing_recorded_video_summary.id).update(status='AnalysisFailed')
                         existing_recorded_video_summary.status = 'AnalysisFailed'
@@ -688,15 +704,19 @@ class RecordedScanTask:
                     # status を Recorded に設定
                     # MetadataAnalyzer 側で既に Recorded に設定されているが、念のため
                     recorded_program.recorded_video.status = 'Recorded'
-                    # 録画完了後のバックグラウンド解析タスクを開始
-                    if file_path not in self._background_tasks:
-                        task = asyncio.create_task(self.__runBackgroundAnalysis(recorded_program))
-                        self._background_tasks[file_path] = task
 
                 # DB に永続化
                 # メタデータ解析後の最新のデータベース情報を使う
                 await self.__saveRecordedMetadataToDB(recorded_program, existing_db_recorded_video_after_analyze)
                 logging.info(f'{file_path}: {"Updated" if existing_db_recorded_video_after_analyze else "Saved"} metadata to DB. (status: {recorded_program.recorded_video.status})')
+
+                # DB への永続化が完了したら、録画完了後のバックグラウンド解析タスクを開始
+                ## "Recording" 状態の録画ファイルはまだ録画が完了していないので、サムネイル生成などの解析タスクは実行しない
+                ## DB 保存に失敗した状態で開始すると、RecordedVideo が存在しないままサムネイル生成だけが進んでしまうため、この処理は永続化後に実行する必要がある
+                if recorded_program.recorded_video.status == 'Recorded':
+                    if file_path not in self._background_tasks:
+                        task = asyncio.create_task(self.__runBackgroundAnalysis(recorded_program))
+                        self._background_tasks[file_path] = task
 
                 # wait_background_analysis が True の場合のみ、バックグラウンド解析タスクが完了するまで待つ
                 # 録画番組メタデータ再解析 API では、API レスポンスの返却をもってメタデータ再解析が完全に完了したことをユーザーに伝える必要があるため
@@ -788,13 +808,41 @@ class RecordedScanTask:
 
 
     @staticmethod
+    def __populateChannelModelFromSchema(db_channel: Channel, channel_schema: schemas.Channel) -> None:
+        """
+        Pydantic スキーマから Channel モデルへ属性を転写する
+
+        Args:
+            db_channel (Channel): 値を設定する DB モデル
+            channel_schema (schemas.Channel): 転写元のチャンネル情報
+        """
+
+        # 録画メタデータ解析結果のチャンネル情報を、そのまま DB モデルへ反映する
+        db_channel.id = channel_schema.id
+        db_channel.display_channel_id = channel_schema.display_channel_id
+        db_channel.network_id = channel_schema.network_id
+        db_channel.service_id = channel_schema.service_id
+        db_channel.transport_stream_id = channel_schema.transport_stream_id
+        db_channel.remocon_id = channel_schema.remocon_id
+        db_channel.channel_number = channel_schema.channel_number
+        db_channel.type = channel_schema.type
+        db_channel.name = channel_schema.name
+        db_channel.jikkyo_force = channel_schema.jikkyo_force
+        db_channel.is_subchannel = channel_schema.is_subchannel
+        db_channel.is_radiochannel = channel_schema.is_radiochannel
+        db_channel.is_watchable = channel_schema.is_watchable
+
+
     async def __saveRecordedMetadataToDB(
+        self,
         recorded_program: schemas.RecordedProgram,
         existing_db_recorded_video: RecordedVideo | None,
     ) -> None:
         """
         録画ファイルのメタデータ解析結果を DB に保存する
         既存レコードがある場合は更新し、ない場合は新規作成する
+        録画専用の地デジチャンネルは、保存直前にメインプロセス側で枝番を再計算する
+        並行保存時の枝番衝突を避けるため、録画専用の地デジチャンネル作成だけは直列化する
 
         Args:
             recorded_program (schemas.RecordedProgram): 保存する録画番組情報
@@ -809,21 +857,60 @@ class RecordedScanTask:
             if recorded_program.channel is not None:
                 db_channel = await Channel.get_or_none(id=recorded_program.channel.id)
                 if db_channel is None:
-                    db_channel = Channel()
-                    db_channel.id = recorded_program.channel.id
-                    db_channel.display_channel_id = recorded_program.channel.display_channel_id
-                    db_channel.network_id = recorded_program.channel.network_id
-                    db_channel.service_id = recorded_program.channel.service_id
+                    # 録画専用の地デジチャンネルは、地方違いの TS ファイルを並行解析すると枝番衝突が発生しうる
+                    ## そのため、ここで保存直前に最新の DB 状態を見て枝番を再計算し、保存処理自体も直列化する
+                    if recorded_program.channel.type == 'GR' and recorded_program.channel.is_watchable is False:
+                        async with self._recording_only_channels_lock:
+                            db_channel = await Channel.get_or_none(id=recorded_program.channel.id)
+                            if db_channel is None:
+                                # 同一プロセス内では lock で競合を防げているが、
+                                ## 別プロセスや想定外の外部介入で display_channel_id が衝突した場合に備えて 1 回だけ再試行する
+                                for retry_count in range(2):
+                                    recalculated_channel_number = await TSInformation.calculateChannelNumber(
+                                        recorded_program.channel.type,
+                                        recorded_program.channel.network_id,
+                                        recorded_program.channel.service_id,
+                                        recorded_program.channel.remocon_id,
+                                    )
+                                    recorded_program.channel.channel_number = recalculated_channel_number
+                                    recorded_program.channel.display_channel_id = (
+                                        recorded_program.channel.type.lower() + recalculated_channel_number
+                                    )
+
+                                    db_channel = Channel()
+                                    self.__populateChannelModelFromSchema(db_channel, recorded_program.channel)
+                                    try:
+                                        await db_channel.save()
+                                        # 初回の INSERT で競合した場合のみ、リトライで解消されたことをログに残す
+                                        if retry_count > 0:
+                                            logging.info(
+                                                f'{recorded_program.recorded_video.file_path}: '
+                                                f'Recorded-only channel save recovered after retry. '
+                                                f'retry_count: {retry_count}, '
+                                                f'display_channel_id: {db_channel.display_channel_id}'
+                                            )
+                                        break
+                                    except IntegrityError as ex:
+                                        if retry_count == 0:
+                                            logging.warning(
+                                                f'{recorded_program.recorded_video.file_path}: '
+                                                f'Retrying recording-only channel save due to display_channel_id conflict.'
+                                            )
+                                            continue
+                                        raise ex
+                    else:
+                        db_channel = Channel()
+                        self.__populateChannelModelFromSchema(db_channel, recorded_program.channel)
+                        await db_channel.save()
+                elif (
+                    db_channel.transport_stream_id is None and
+                    recorded_program.channel.transport_stream_id is not None
+                ):
+                    # 既存チャンネルに TSID がない場合だけ、録画メタデータから得た値で補完する
+                    ## Mirakurun のチャンネル情報には TSID が含まれないが、NID/SID/TSID の組は放送運用上ほぼ不変なので、
+                    ## 既知の TSID を失わず保持しておくことで MP4 再生時の psisimux 引数にも利用できる
                     db_channel.transport_stream_id = recorded_program.channel.transport_stream_id
-                    db_channel.remocon_id = recorded_program.channel.remocon_id
-                    db_channel.channel_number = recorded_program.channel.channel_number
-                    db_channel.type = recorded_program.channel.type
-                    db_channel.name = recorded_program.channel.name
-                    db_channel.jikkyo_force = recorded_program.channel.jikkyo_force
-                    db_channel.is_subchannel = recorded_program.channel.is_subchannel
-                    db_channel.is_radiochannel = recorded_program.channel.is_radiochannel
-                    db_channel.is_watchable = recorded_program.channel.is_watchable
-                    await db_channel.save()
+                    await db_channel.save(update_fields=['transport_stream_id'])
 
             # RecordedProgram の保存または更新
             if existing_db_recorded_video is not None:
@@ -882,12 +969,17 @@ class RecordedScanTask:
             db_recorded_video.video_frame_rate = recorded_program.recorded_video.video_frame_rate
             db_recorded_video.video_resolution_width = recorded_program.recorded_video.video_resolution_width
             db_recorded_video.video_resolution_height = recorded_program.recorded_video.video_resolution_height
+            db_recorded_video.has_video_stream_changes = recorded_program.recorded_video.has_video_stream_changes
             db_recorded_video.primary_audio_codec = recorded_program.recorded_video.primary_audio_codec
             db_recorded_video.primary_audio_channel = recorded_program.recorded_video.primary_audio_channel
             db_recorded_video.primary_audio_sampling_rate = recorded_program.recorded_video.primary_audio_sampling_rate
             db_recorded_video.secondary_audio_codec = recorded_program.recorded_video.secondary_audio_codec
             db_recorded_video.secondary_audio_channel = recorded_program.recorded_video.secondary_audio_channel
             db_recorded_video.secondary_audio_sampling_rate = recorded_program.recorded_video.secondary_audio_sampling_rate
+            # ファイル本体を再解析した場合、以前の再生開始位置キャッシュは別ファイル由来の可能性がある
+            ## 新規録画と同じ空状態へ戻し、次回再生時に現在のファイルからオンデマンドで解決する
+            db_recorded_video.key_frames = []
+            db_recorded_video.segment_map = []
             # この時点では CM 区間情報は未解析なので、明示的に未解析を表す None を設定する (デフォルトで None だが念のため)
             # 「解析したが CM 区間がなかった/検出に失敗した」場合、CMSectionsDetector 側で [] が設定される
             db_recorded_video.cm_sections = None
@@ -897,7 +989,6 @@ class RecordedScanTask:
     async def __runBackgroundAnalysis(self, recorded_program: schemas.RecordedProgram) -> None:
         """
         録画完了後のバックグラウンド解析タスク
-        - キーフレーム解析
         - サムネイル生成
         - CM区間検出
         など、時間のかかる処理を非同期に同時実行する
@@ -916,8 +1007,6 @@ class RecordedScanTask:
                 # DriveIOLimiter で同一 HDD に対してのバックグラウンドタスクの同時実行数を原則1セッションに制限
                 async with DriveIOLimiter.getSemaphore(file_path):
                     await asyncio.gather(
-                        # 録画ファイルのキーフレーム情報を解析し DB に保存
-                        KeyFrameAnalyzer(file_path, recorded_program.recorded_video.container_format).analyzeAndSave(),
                         # 録画ファイルの CM 区間を検出し DB に保存
                         CMSectionsDetector(file_path, recorded_program.recorded_video.duration).detectAndSave(),
                         # シークバー用サムネイルとリスト表示用の代表サムネイルの両方を生成
@@ -930,6 +1019,134 @@ class RecordedScanTask:
         finally:
             # 完了したタスクを管理対象から削除
             self._background_tasks.pop(file_path, None)
+
+
+    async def __migrateKeyFramesToSegmentMap(self) -> None:
+        """
+        旧 key_frames を再生開始位置キャッシュへ移行する
+
+        このメソッドは runBatchScan() から呼び出され、以下の処理を行う:
+        - TS コンテナは key_frames から segment_map を生成して保存
+        - MPEG-4 コンテナは moov の同期サンプル表を再生時に読むため key_frames だけ破棄
+        - 変換後の key_frames は空配列へ戻し、巨大な JSON が残り続けないようにする
+        """
+
+        logging.info('Starting keyframe to segment map migration...')
+
+        migrated_count = 0
+        repaired_count = 0
+        skipped_count = 0
+        last_seen_id = 0
+        next_progress_log_count = 500
+
+        while True:
+            # key_frames は ORM 取得時に list へ復元されるため、Python 側で空配列かどうかを判定する
+            ## DB 側で巨大 JSON の文字列比較を走らせず、ID 順に少量ずつ読み出して移行する
+            video_rows = await RecordedVideo.filter(
+                status = 'Recorded',
+                id__gt = last_seen_id,
+            ).order_by('id').limit(50).values(
+                'id',
+                'file_path',
+                'duration',
+                'container_format',
+                'video_frame_rate',
+                'key_frames',
+                'segment_map',
+            )
+            if len(video_rows) == 0:
+                break
+
+            for video_row in video_rows:
+                last_seen_id = video_row['id']
+
+                try:
+                    segment_map = video_row['segment_map']
+                    if not isinstance(segment_map, list):
+                        segment_map = []
+
+                    is_broken_segment_map = False
+                    # 旧変換ロジックで同じ入力位置が連続保存された MPEG-TS は、再生時に同じ映像を繰り返す
+                    ## key_frames が既に空でも検出できるよう、移行対象判定より先に segment_map を確認する
+                    if (
+                        video_row['container_format'] == 'MPEG-TS' and
+                        len(segment_map) > 0 and
+                        VideoSegmentPlanner.isSegmentMapProbablyBroken(cast(list[schemas.SegmentMapEntry], segment_map)) is True
+                    ):
+                        is_broken_segment_map = True
+
+                    key_frames = video_row['key_frames']
+                    if not isinstance(key_frames, list) or len(key_frames) == 0:
+                        # 壊れた既存キャッシュだけを空に戻し、通常の未キャッシュ状態としてオンデマンド探索へ戻す
+                        ## key_frames が空の録画は旧データから再変換できないため、誤った値を温存しない
+                        if is_broken_segment_map is True:
+                            await RecordedVideo.filter(id=video_row['id']).update(segment_map = [])
+                            repaired_count += 1
+                            logging.warning(
+                                f'{video_row["file_path"]}: Broken segment map was cleared. '
+                                f'[video_id: {video_row["id"]}]'
+                            )
+                        continue
+
+                    # TS コンテナは既存 key_frames をオンデマンド探索と同じ規則のキャッシュへ変換できる
+                    if video_row['container_format'] == 'MPEG-TS':
+                        if len(segment_map) == 0 or is_broken_segment_map is True:
+                            video_frame_rate = video_row['video_frame_rate']
+                            # 旧 DB に壊れたフレームレートが混じっている場合、セグメント長を復元できないため移行対象から外す
+                            if (
+                                isinstance(video_frame_rate, bool) is True or
+                                isinstance(video_frame_rate, int | float) is False
+                            ):
+                                skipped_count += 1
+                                logging.warning(
+                                    f'{video_row["file_path"]}: Invalid video frame rate. '
+                                    f'[video_id: {video_row["id"]}, video_frame_rate: {video_frame_rate}]'
+                                )
+                                continue
+                            # 0 以下のフレームレートは segment_map の時刻計算で除算できないため移行対象から外す
+                            if video_frame_rate <= 0:
+                                skipped_count += 1
+                                logging.warning(
+                                    f'{video_row["file_path"]}: Invalid video frame rate. '
+                                    f'[video_id: {video_row["id"]}, video_frame_rate: {video_frame_rate}]'
+                                )
+                                continue
+                            segment_map = VideoSegmentPlanner.convertKeyFramesToSegmentMap(
+                                key_frames = key_frames,
+                                video_frame_rate = float(video_frame_rate),
+                                duration_seconds = video_row['duration'],
+                            )
+
+                        await RecordedVideo.filter(id=video_row['id']).update(
+                            segment_map = segment_map,
+                            key_frames = [],
+                        )
+                        migrated_count += 1
+                    # MP4 は moov から同期サンプル DTS を短時間で復元できるため、巨大な旧キャッシュだけ破棄する
+                    else:
+                        await RecordedVideo.filter(id=video_row['id']).update(key_frames = [])
+                        migrated_count += 1
+                except Exception as ex:
+                    skipped_count += 1
+                    logging.error(f'{video_row["file_path"]}: Failed to migrate keyframes to segment map:', exc_info=ex)
+
+            # 大量の録画を持つ環境では起動直後に沈黙すると不安になるため、500件ごとに進捗をログへ出す
+            processed_count = migrated_count + repaired_count + skipped_count
+            if processed_count >= next_progress_log_count:
+                logging.info(
+                    f'Keyframe to segment map migration progress. '
+                    f'[processed: {processed_count}, migrated: {migrated_count}, repaired: {repaired_count}, '
+                    f'skipped: {skipped_count}]'
+                )
+                next_progress_log_count += 500
+
+            # 移行処理がイベントループを占有し続けないよう適宜制御を返す
+            await asyncio.sleep(0)
+
+        logging.info(
+            f'Keyframe to segment map migration completed. '
+            f'[migrated: {migrated_count}, repaired: {repaired_count}, skipped: {skipped_count}]'
+        )
 
 
     async def __migrateThumbnailInfo(self) -> None:

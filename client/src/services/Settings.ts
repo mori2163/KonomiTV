@@ -18,7 +18,8 @@ export interface IMutedCommentKeywords {
 export interface IClientSettings {
     last_synced_at: number;
     // showed_panel_last_time: 同期無効
-    // selected_twitter_account_id: 同期無効
+    // selected_twitter_panel_account: 同期無効
+    // twitter_panel_post_targets: 同期無効
     saved_twitter_hashtags: string[];
     mylist: {
         type: 'Series' | 'RecordedProgram';
@@ -59,10 +60,14 @@ export interface IClientSettings {
     // tv_data_saver_mode_cellular: 同期無効
     // tv_low_latency_mode: 同期無効
     // tv_low_latency_mode_cellular: 同期無効
+    // tv_24fps_mode: 同期無効
+    // tv_24fps_mode_cellular: 同期無効
     // video_streaming_quality: 同期無効
     // video_streaming_quality_cellular: 同期無効
     // video_data_saver_mode: 同期無効
     // video_data_saver_mode_cellular: 同期無効
+    // video_24fps_mode: 同期無効
+    // video_24fps_mode_cellular: 同期無効
     caption_font: string;
     always_border_caption_text: boolean;
     specify_caption_opacity: boolean;
@@ -92,6 +97,8 @@ export interface IClientSettings {
     fold_panel_after_sending_tweet: boolean;
     reset_hashtag_when_program_switches: boolean;
     auto_add_watching_channel_hashtag: boolean;
+    twitter_reply_thread_mode: 'PerHashtag' | 'PerDay' | 'Disabled';
+    bluesky_reply_thread_mode: 'PerHashtag' | 'PerDay' | 'Disabled';
     twitter_active_tab: 'Search' | 'Timeline' | 'Capture';
     tweet_hashtag_position: 'Prepend' | 'Append' | 'PrependWithLineBreak' | 'AppendWithLineBreak';
     tweet_capture_watermark_position: 'None' | 'TopLeft' | 'TopRight' | 'BottomLeft' | 'BottomRight';
