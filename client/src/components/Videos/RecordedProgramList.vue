@@ -1,7 +1,7 @@
 <template>
     <div class="recorded-program-list" :class="{'recorded-program-list--show-sort': !hideSort}">
         <div class="recorded-program-list__header" v-if="!hideHeader">
-            <h2 class="recorded-program-list__title">
+            <h2 class="recorded-program-list__title" :class="{'recorded-program-list__title--count-at-right': countAtRight}">
                 <div v-if="showBackButton" v-ripple class="recorded-program-list__title-back" @click="$router.back()">
                     <Icon icon="fluent:chevron-left-12-filled" width="27px" />
                 </div>
@@ -111,6 +111,7 @@ const props = withDefaults(defineProps<{
     isLoading?: boolean;
     isSearching?: boolean;
     countText?: string | null;
+    countAtRight?: boolean;
     forMylist?: boolean;
     forWatchedHistory?: boolean;
     forOffline?: boolean;
@@ -129,6 +130,7 @@ const props = withDefaults(defineProps<{
     isLoading: false,
     isSearching: false,
     countText: null,
+    countAtRight: false,
     forMylist: false,
     forWatchedHistory: false,
     forOffline: false,
@@ -211,6 +213,7 @@ const handleProgramDeleted = (id: number) => {
         justify-content: space-between;
         position: relative;
         width: 100%;
+        min-width: 0;  // 長いタイトルや件数表示があると幅を押し広げてしまうため、狭い画面では縮小できるようにする
         font-size: 24px;
         font-weight: 700;
         padding-top: 8px;
@@ -218,6 +221,12 @@ const handleProgramDeleted = (id: number) => {
         @include smartphone-vertical {
             font-size: 22px;
             padding-bottom: 16px;
+        }
+
+        // 件数/容量表示を右端に寄せる（オフライン視聴ページ用）
+        &--count-at-right {
+            flex: 1;
+            min-width: 0;  // flex: 1 でも自動最小サイズで縮まないため、明示的に縮小を許可する
         }
 
         &-back {
@@ -261,6 +270,14 @@ const handleProgramDeleted = (id: number) => {
                     transform: rotate(360deg);
                 }
             }
+        }
+
+        // タイトルは長い場合に省略表示（…）へ倒し、右側の件数/操作ボタンを画面内に残す
+        &-text {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
     }
 
