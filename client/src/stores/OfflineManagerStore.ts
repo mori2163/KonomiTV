@@ -341,15 +341,23 @@ const useOfflineManagerStore = defineStore('offlineManager', () => {
                     active_download_worker = null;
                 }
 
-                // 次の startDownload() を許可する
-                active_download_promise = null;
-
                 // Comlink callback proxy を明示的に解放する
                 callbacks_with_release[Comlink.releaseProxy]?.();
 
                 // pause/resume を連続で叩かれた場合でも Worker が残らないよう必ず解放する
-                await current_worker.terminate();
-                await refreshStorageEstimate();
+                // クリーンアップが完了するまで active_download_promise を保持し、
+                // pauseDownload() / resumeDownload() が完全なクリーンアップ完了まで待機できるようにする
+                try {
+                    await current_worker.terminate();
+                    await refreshStorageEstimate();
+                } catch (error) {
+                    // クリーンアップに失敗しても active_download_promise が null に戻るよう、
+                    // エラーはログに残して握りつぶし、後続のダウンロード開始を妨げないようにする
+                    console.error('Failed to cleanup offline download worker:', error);
+                }
+
+                // クリーンアップ完了後に次の startDownload() を許可する
+                active_download_promise = null;
             }
         })();
         // 非同期ダウンロード本体の失敗を未処理例外にしないため、ここで受け止める
