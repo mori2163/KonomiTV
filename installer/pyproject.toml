@@ -10,6 +10,9 @@ lint = "ruff check --fix . ; pyright"
 typecheck = "pyright"
 # KonomiTV-Installer.spec は PyInstaller によって自動生成された .spec をベースにカスタマイズしている
 build = "pyinstaller --clean KonomiTV-Installer.spec"
+# Windows インストーラー (Inno Setup) に同梱するインストールエンジンをビルドする
+## エンジンは KonomiTV-Installer-Engine.spec でビルドされる (--uac-admin なし)
+build-engine = "pyinstaller --clean KonomiTV-Installer-Engine.spec"
 
 [tool.poetry.dependencies]
 python = "3.11.*"

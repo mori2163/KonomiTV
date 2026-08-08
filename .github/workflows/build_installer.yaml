@@ -58,12 +58,51 @@ jobs:
         working-directory: installer/
         run: poetry run task build
 
+      # Windows インストーラー (Inno Setup) に同梱するインストールエンジンを PyInstaller でビルド
+      ## エンジンは --uac-admin なしでビルドされる (Inno Setup が管理者権限で実行済みのため)
+      - name: Build Installer Engine with PyInstaller
+        working-directory: installer/
+        run: poetry run task build-engine
+
+      # Inno Setup をインストール
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      # ウィザード形式の Windows インストーラー (KonomiTV-Setup.exe) を Inno Setup でビルド
+      ## 同梱するインストールエンジンは上でビルドした KonomiTV-Installer-Engine.exe を利用する
+      ## iscc のインストール先は Inno Setup のバージョンによって異なるため、PATH と一般的なパスから探す
+      - name: Build Setup Installer with Inno Setup
+        working-directory: installer/
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            $candidates = @(
+              "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+              "C:\Program Files (x86)\Inno Setup 7\ISCC.exe",
+              "C:\Program Files\Inno Setup 7\ISCC.exe"
+            )
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          } else {
+            $iscc = $iscc.Source
+          }
+          if (-not $iscc) {
+            throw "ISCC.exe が見つかりません。Inno Setup のインストールを確認してください。"
+          }
+          & $iscc "Windows\KonomiTV-Setup.iss"
+
       # 単一実行ファイルにビルドされたインストーラーを Artifact としてアップロード
       - name: Upload Installer Executable as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: KonomiTV-Installer.exe
           path: installer/dist/KonomiTV-Installer.exe
+
+      # ウィザード形式のインストーラーを Artifact としてアップロード
+      - name: Upload Setup Installer Executable as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KonomiTV-Setup.exe
+          path: installer/dist/KonomiTV-Setup-*.exe
 
   # Linux 向けのインストーラーのビルド
   build-linux:

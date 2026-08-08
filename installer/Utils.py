@@ -1,9 +1,12 @@
 
 import asyncio
 import datetime
+import json
 import os
+import platform
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from enum import IntEnum
@@ -364,6 +367,239 @@ class CtrlCmdConnectionCheckUtil:
         return v
 
 
+# NVIDIA GPU のうち、製品名だけで NVENC が搭載されていないと判定できる機種名
+## NVIDIA のサポート表にない古い機種もあるため、実機の報告と製品仕様を確認できた機種だけを列挙する
+## GT 705 は NVENC 対応リビジョンの日本国内での発売を確認できないため除外対象に含める
+## GT 630・GT 710・GT 720 は NVENC 対応の GK208 版が日本国内で発売されているため除外対象に含めない
+## GT 730 は NVENC 非搭載の Fermi 版と対応する Kepler 版が同じ製品名で日本国内に流通しているため除外対象に含めない
+NVIDIA_GPU_NAMES_WITHOUT_NVENC: tuple[str, ...] = (
+    'GeForce GT 610',
+    'GeForce GT 620',
+    'GeForce GT 625',
+    'GeForce GT 705',
+    'GeForce GT 1010',
+    'GeForce GT 1030',
+    'GeForce MX110',
+    'GeForce MX130',
+    'GeForce MX150',
+    'GeForce MX230',
+    'GeForce MX250',
+    'GeForce MX330',
+    'GeForce MX350',
+    'GeForce MX450',
+    'GeForce MX570 A',
+)
+
+
+class EncoderInfo(TypedDict):
+    """ エンコーダーの自動判定結果 """
+    gpu_names: list[str]  # 接続されている GPU 名のリスト
+    default_encoder: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc']  # 推奨エンコーダー
+    is_arm_device: bool  # ARM デバイスかどうか
+    qsvencc_available: str  # QSVEncC の利用可否 (表示用文字列)
+    nvencc_available: str  # NVEncC の利用可否 (表示用文字列)
+    vceencc_available: str  # VCEEncC の利用可否 (表示用文字列)
+    rkmppenc_available: str  # rkmppenc の利用可否 (表示用文字列)
+
+
+def DetectEncoderInfo() -> EncoderInfo:
+    """
+    接続されている GPU から利用可能なエンコーダーを自動判定する
+    Windows インストーラー (Inno Setup) のエンコーダー自動検出でも利用する
+
+    Returns:
+        EncoderInfo: エンコーダーの自動判定結果
+    """
+
+    # プラットフォームタイプ (Windows・Linux)
+    platform_type: Literal['Windows', 'Linux'] = 'Windows' if os.name == 'nt' else 'Linux'
+
+    # ARM デバイスかどうか
+    is_arm_device = platform.machine() == 'aarch64'
+
+    # PC に接続されている GPU の型番を取得し、そこから QSVEncC / NVEncC / VCEEncC の利用可否を大まかに判断する
+    gpu_names: list[str] = []
+    default_encoder: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc'] = 'FFmpeg'
+    qsvencc_available: str = '❌利用できません'
+    nvencc_available: str = '❌利用できません'
+    vceencc_available: str = '❌利用できません'
+    rkmppenc_available: str = '❌利用できません'
+
+    # Windows: PowerShell の Get-WmiObject と ConvertTo-Json の合わせ技で取得できる
+    if platform_type == 'Windows':
+        gpu_info_json = subprocess.run(
+            args = ['powershell', '-Command', 'Get-WmiObject Win32_VideoController | ConvertTo-Json'],
+            stdout = subprocess.PIPE,  # 標準出力をキャプチャする
+            stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
+            text = True,  # 出力をテキストとして取得する
+        )
+        # コマンド成功時のみ
+        if gpu_info_json.returncode == 0:
+            try:
+                # GPU が1個だけ搭載されている環境では直接 dict[str, Any] 、2個以上搭載されている環境は list[dict[str, Any]] の形で出力される
+                gpu_info_data = json.loads(gpu_info_json.stdout)
+                gpu_infos: list[dict[str, Any]]
+                if type(gpu_info_data) is dict:
+                    # GPU が1個だけ搭載されている環境
+                    gpu_infos = [gpu_info_data]
+                else:
+                    # GPU が2個以上搭載されている環境
+                    gpu_infos = gpu_info_data
+                # 搭載されている GPU 名を取得してリストに追加
+                for gpu_info in gpu_infos:
+                    if 'Name' in gpu_info:
+                        gpu_names.append(gpu_info['Name'])
+            except json.decoder.JSONDecodeError:
+                pass
+
+    # Linux: lshw コマンドを使って取得できる
+    else:
+        # もし lshw コマンドがインストールされていなかったらインストールする
+        if shutil.which('lshw') is None:
+            subprocess.run(
+                args = ['apt-get', 'install', '-y', 'lshw'],
+                stdout = subprocess.DEVNULL,  # 標準出力を表示しない
+                stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
+            )
+        # lshw コマンドを実行して GPU 情報を取得
+        gpu_info_json = subprocess.run(
+            args = ['lshw', '-class', 'display', '-json'],
+            stdout = subprocess.PIPE,  # 標準出力をキャプチャする
+            stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
+            text = True,  # 出力をテキストとして取得する
+        )
+        # コマンド成功時のみ
+        if gpu_info_json.returncode == 0:
+            try:
+                # GPU が1個だけ搭載されている環境では直接 dict[str, Any] 、2個以上搭載されている環境は list[dict[str, Any]] の形で出力される
+                gpu_info_data = json.loads(gpu_info_json.stdout)
+                gpu_infos: list[dict[str, Any]]
+                if type(gpu_info_data) is dict:
+                    # GPU が1個だけ搭載されている環境
+                    gpu_infos = [gpu_info_data]
+                else:
+                    # GPU が2個以上搭載されている環境
+                    gpu_infos = gpu_info_data
+                # 接続されている GPU 名を取得してリストに追加
+                for gpu_info in gpu_infos:
+                    if 'vendor' in gpu_info and 'product' in gpu_info:
+                        gpu_names.append(f'{gpu_info["vendor"]} {gpu_info["product"]}')
+            except (json.decoder.JSONDecodeError, TypeError, KeyError):
+                # 出力が壊れている場合 (JSON として不正・連結された JSON・想定外の構造) は無視し、
+                # GPU の自動検出を FFmpeg の検出にフォールバックする (検出処理をクラッシュさせない)
+                pass
+
+        # ARM 環境のみ、もし  /proc/device-tree/compatible が存在し、その中に "rockchip" と "rk35" という文字列が含まれていたら、
+        # Rockchip SoC 搭載の ARM SBC と判断して rkmppenc を利用可能とする
+        if is_arm_device is True and Path('/proc/device-tree/compatible').exists():
+            with open('/proc/device-tree/compatible', encoding='utf-8') as compatible_file:
+                compatible_data = compatible_file.read()
+                if 'rockchip' in compatible_data and 'rk35' in compatible_data:
+                    rkmppenc_available = '✅利用できます'
+                    default_encoder = 'rkmppenc'
+
+    # Intel 製 GPU なら QSVEncC が、NVIDIA 製 GPU (Geforce) なら NVEncC が、AMD 製 GPU (Radeon) なら VCEEncC が使える
+    # また、RK3588 などの Rockchip SoC 搭載の ARM SBC なら、rkmppenc が使える
+    ## もちろん機種によって例外はあるけど、ダウンロード前だとこれくらいの大雑把な判定しかできない…
+    ## VCEEncC は安定性があまり良くなく、NVEncC は性能は良いものの Geforce だと同時エンコード本数の制限があるので、
+    ## 複数の GPU が接続されている場合は QSVEncC が一番優先されるようにする
+    for gpu_name in gpu_names:
+        if 'AMD' in gpu_name or 'Radeon' in gpu_name:
+            vceencc_available = f'✅利用できます (AMD GPU: {gpu_name})'
+            default_encoder = 'VCEEncC'
+        elif 'NVIDIA' in gpu_name or 'Geforce' in gpu_name:
+            # NVIDIA GPU でも NVENC 自体を搭載していない機種は NVEncC の候補から除外
+            ## 機種名の表記揺れを吸収しつつ、未知の新製品を誤って除外しないよう既知の非対応機種との部分一致で判定する
+            normalized_gpu_name = gpu_name.casefold()
+            has_nvenc = all(
+                unsupported_gpu_name.casefold() not in normalized_gpu_name
+                for unsupported_gpu_name in NVIDIA_GPU_NAMES_WITHOUT_NVENC
+            )
+            if has_nvenc is True:
+                nvencc_available = f'✅利用できます (NVIDIA GPU: {gpu_name})'
+                default_encoder = 'NVEncC'
+        elif 'Intel' in gpu_name:
+            qsvencc_available = f'✅利用できます (Intel GPU: {gpu_name})'
+            default_encoder = 'QSVEncC'
+
+    # 自動判定の結果を返す
+    return {
+        'gpu_names': gpu_names,
+        'default_encoder': default_encoder,
+        'is_arm_device': is_arm_device,
+        'qsvencc_available': qsvencc_available,
+        'nvencc_available': nvencc_available,
+        'vceencc_available': vceencc_available,
+        'rkmppenc_available': rkmppenc_available,
+    }
+
+
+class ProgressFileReporter:
+    """
+    インストールの進捗をファイルに書き込むクラス
+    Windows インストーラー (Inno Setup) 側でこのファイルをポーリングし、進捗状況を表示する
+    対話モードでは使用しない (rich の Progress が進捗表示を担う)
+    書き込まれる行のフォーマット:
+        [STEP] <処理ステップの説明>
+        [PROGRESS] <進捗率 (0〜100)>
+        [DONE] インストール完了
+        [ERROR] <エラーメッセージ>
+    """
+
+    # 1 つのステップが受け持つ進捗率の割合
+    # ステップごとに「残りの区間の STEP_PROGRESS_RATIO 倍」を割り当てるため、
+    # ステップ数が事前に分からなくてもプログレスバーが必ず動き続け、100% に到達しない
+    # (プログレスバーが 100% になるのは、インストール完了 [DONE] を書き込んだときのみ)
+    STEP_PROGRESS_RATIO = 0.2
+
+    def __init__(self, progress_file_path: Path) -> None:
+        """
+        Args:
+            progress_file_path (Path): 進捗を書き込むファイルのパス
+        """
+        # 進捗を書き込むファイルのパス
+        self.progress_file_path = progress_file_path
+
+        # 書き込みの競合を避けるためのロック
+        self.write_lock = threading.Lock()
+
+        # 現在のステップが受け持つ進捗率の区間 (開始位置 / 終了位置)
+        ## step() が呼ばれるたびに区間を前方へずらしていき、現在のステップ内の進捗 (0〜100) は
+        ## progress() でこの区間内の位置にマッピングして全体進捗に反映する
+        self.current_step_start = 0.0
+        self.current_step_end = 0.0
+
+    def step(self, message: str) -> None:
+        """ 処理ステップの開始を記録する """
+        # 次のステップが受け持つ進捗率の区間を計算する (残りの区間の STEP_PROGRESS_RATIO 倍)
+        self.current_step_start = self.current_step_end
+        self.current_step_end = self.current_step_start + (100 - self.current_step_start) * self.STEP_PROGRESS_RATIO
+        # ステップの開始位置まで全体進捗を進める
+        self._write_line(f'[STEP] {message}')
+        self._write_line(f'[PROGRESS] {self.current_step_start:.1f}')
+
+    def progress(self, percent: float) -> None:
+        """ 処理の進捗率 (0〜100) を記録する """
+        # 現在のステップ内の進捗 (0〜100) を、ステップが受け持つ区間内の位置にマッピングして全体進捗に反映する
+        overall = self.current_step_start + (self.current_step_end - self.current_step_start) * (percent / 100)
+        self._write_line(f'[PROGRESS] {overall:.1f}')
+
+    def done(self) -> None:
+        """ インストールの完了を記録する (プログレスバーを 100% にする) """
+        self._write_line('[PROGRESS] 100.0')
+        self._write_line('[DONE]')
+
+    def error(self, message: str) -> None:
+        """ エラーの発生を記録する """
+        self._write_line(f'[ERROR] {message}')
+
+    def _write_line(self, line: str) -> None:
+        """ 進捗ファイルに行を追記する """
+        with self.write_lock:
+            with open(self.progress_file_path, mode='a', encoding='utf-8') as file:
+                file.write(line + '\n')
+
+
 def GetNetworkDriveList() -> list[dict[str, str]]:
     """
     レジストリからログオン中のユーザーがマウントしているネットワークドライブのリストを取得する
@@ -656,13 +892,16 @@ def CreateTable() -> Table:
     return Table(expand=True, box=box.SQUARE, border_style=Style(color='#E33157'))
 
 
-def RunKonomiTVServiceWaiter(platform_type: Literal['Windows', 'Linux', 'Linux-Docker'], base_path: Path) -> None:
+def RunKonomiTVServiceWaiter(platform_type: Literal['Windows', 'Linux', 'Linux-Docker'], base_path: Path) -> bool:
     """
     KonomiTV が起動するまで監視し、起動が完了するのを待つ
 
     Args:
         platform_type (Literal['Windows', 'Linux', 'Linux-Docker']): プラットフォームの種類
         base_path (Path): KonomiTV のベースパス
+
+    Returns:
+        bool: 起動の待機に成功したかどうか (エラーが発生した場合は False)
     """
 
     # サービスが起動したかのフラグ
@@ -732,7 +971,7 @@ def RunKonomiTVServiceWaiter(platform_type: Literal['Windows', 'Linux', 'Linux-D
                         'お手数をおかけしますが、イベントビューアーにエラーログが',
                         '出力されている場合は、そのログを開発者に報告してください。',
                     ])
-                    return  # 処理中断
+                    return False  # 処理中断
             time.sleep(0.1)
 
     # KonomiTV サーバーが起動するまで待つ
@@ -748,7 +987,7 @@ def RunKonomiTVServiceWaiter(platform_type: Literal['Windows', 'Linux', 'Linux-D
                         error_log_name = 'KonomiTV サーバーのログ',
                         error_log = log.read(),
                     )
-                    return  # 処理中断
+                    return False  # 処理中断
             time.sleep(0.1)
 
     # 番組情報更新が完了するまで待つ
@@ -764,8 +1003,11 @@ def RunKonomiTVServiceWaiter(platform_type: Literal['Windows', 'Linux', 'Linux-D
                         error_log_name = 'KonomiTV サーバーのログ',
                         error_log = log.read(),
                     )
-                    return  # 処理中断
+                    return False  # 処理中断
             time.sleep(0.1)
+
+    # 起動の待機に成功
+    return True
 
 
 def RunSubprocess(
