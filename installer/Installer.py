@@ -1,6 +1,5 @@
 
 import asyncio
-import json
 import os
 import platform
 import shutil
@@ -9,6 +8,7 @@ import tarfile
 import tempfile
 import urllib.parse
 import zipfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -28,10 +28,12 @@ from Utils import (
     CtrlCmdConnectionCheckUtil,
     CustomConfirm,
     CustomPrompt,
+    DetectEncoderInfo,
     GetNetworkInterfaceInformation,
     IsDockerComposeV2,
     IsDockerInstalled,
     IsGitInstalled,
+    ProgressFileReporter,
     RemoveEmojiIfLegacyTerminal,
     RunKonomiTVServiceWaiter,
     RunSubprocess,
@@ -41,36 +43,41 @@ from Utils import (
 )
 
 
-# NVIDIA GPU のうち、製品名だけで NVENC が搭載されていないと判定できる機種名
-## NVIDIA のサポート表にない古い機種もあるため、実機の報告と製品仕様を確認できた機種だけを列挙する
-## GT 705 は NVENC 対応リビジョンの日本国内での発売を確認できないため除外対象に含める
-## GT 630・GT 710・GT 720 は NVENC 対応の GK208 版が日本国内で発売されているため除外対象に含めない
-## GT 730 は NVENC 非搭載の Fermi 版と対応する Kepler 版が同じ製品名で日本国内に流通しているため除外対象に含めない
-NVIDIA_GPU_NAMES_WITHOUT_NVENC: tuple[str, ...] = (
-    'GeForce GT 610',
-    'GeForce GT 620',
-    'GeForce GT 625',
-    'GeForce GT 705',
-    'GeForce GT 1010',
-    'GeForce GT 1030',
-    'GeForce MX110',
-    'GeForce MX130',
-    'GeForce MX150',
-    'GeForce MX230',
-    'GeForce MX250',
-    'GeForce MX330',
-    'GeForce MX350',
-    'GeForce MX450',
-    'GeForce MX570 A',
-)
+@dataclass
+class InstallerSettings:
+    """
+    対話モードではなく、Windows インストーラー (Inno Setup) から引き渡されるインストール設定
+    インストール中にプロンプトを表示せず、これらの設定値を使ってインストールを実行する
+    """
+
+    install_path: str  # KonomiTV をインストールするフォルダのパス
+    backend: Literal['EDCB', 'Mirakurun']  # 利用するバックエンド
+    encoder: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC']  # 利用するエンコーダー
+    edcb_url: str = ''  # backend == 'EDCB' の場合の EDCB (EpgTimerNW) の TCP API の URL
+    mirakurun_url: str = ''  # backend == 'Mirakurun' の場合の Mirakurun / mirakc の HTTP API の URL
+    recorded_folders: list[str] = field(default_factory=list)  # 録画済み番組の保存先フォルダのリスト
+    capture_upload_folders: list[str] = field(default_factory=list)  # アップロードしたキャプチャ画像の保存先フォルダのリスト
+    service_username: str = ''  # Windows サービスの実行ユーザー名
+    service_password: str = ''  # Windows サービスの実行ユーザーのパスワード
 
 
-def Installer(version: str) -> None:
+def Installer(
+    version: str,
+    unattended_settings: InstallerSettings | None = None,
+    progress_reporter: ProgressFileReporter | None = None,
+) -> bool:
     """
     KonomiTV のインストーラーの実装
 
     Args:
         version (str): KonomiTV をインストールするバージョン
+        unattended_settings (InstallerSettings | None): 無人モード (Windows インストーラー) で使用するインストール設定。
+            指定すると各設定の入力をスキップしてインストールを実行する。None の場合は対話モード。
+        progress_reporter (ProgressFileReporter | None): 進捗をファイルに書き込むレポーター。
+            Windows インストーラー (Inno Setup) からの実行時に指定する。None の場合は書き込まない。
+
+    Returns:
+        bool: インストールに成功したかどうか
     """
 
     # プラットフォームタイプ
@@ -123,7 +130,7 @@ def Installer(version: str) -> None:
                     'PM2 は、KonomiTV サービスのプロセスマネージャーとして利用しています。',
                     'Node.js が導入されていれば、[cyan]sudo npm install -g pm2[/cyan] でインストールできます。',
                 ])
-                return  # 処理中断
+                return False  # 処理中断
 
     # Docker Compose V2 かどうかでコマンド名を変える
     ## Docker Compose V1 は docker-compose 、V2 は docker compose という違いがある
@@ -146,45 +153,50 @@ def Installer(version: str) -> None:
     print(Padding(table_02, (1, 2, 1, 2)))
 
     # インストール先のフォルダを取得
-    install_path: Path
-    while True:
+    ## 無人モード (Windows インストーラー) ではウィザードで選択済みのため、入力をスキップする
+    if unattended_settings is not None:
+        # インストール先のフォルダはウィザードで選択済み (バリデーションもウィザード側で実施済み)
+        install_path = Path(unattended_settings.install_path)
+    else:
+        install_path: Path
+        while True:
 
-        # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
-        install_path = Path(CustomPrompt.ask('KonomiTV をインストールするフォルダのパス'))
+            # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
+            install_path = Path(CustomPrompt.ask('KonomiTV をインストールするフォルダのパス'))
 
-        # バリデーション
-        if install_path.is_absolute() is False:
-            print(Padding('[red]インストール先のフォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
-            continue
-        if '#' in str(install_path):
-            print(Padding('[red]インストール先のパスには # を含めないでください。', (0, 2, 0, 2)))
-            continue
-        if install_path.exists():
-            # 指定されたフォルダが空フォルダだったときは、ユーザーがわざわざ手動でインストール先のフォルダを
-            # 作成してくれている可能性があるので、実装の都合上一度削除しつつ、バリデーションには引っかからないようにする
-            ## rmdir() が中身が空のフォルダしか削除できず、中身が空でないフォルダを削除しようとすると
-            ## OSError が発生するのを利用している
-            try:
-                # ここで削除が成功すれば空のフォルダだったことが確定するので、処理を続行
-                install_path.rmdir()
-            except OSError:
-                # 削除に失敗した場合は中身が空でないフォルダ (=インストールしてはいけないフォルダ) という事が
-                # 確定するので、もう一度パスを入力させる
-                ## 中身が空でないフォルダにインストールしようとすると、当然ながら大変なことになる
-                print(Padding('[red]インストール先のフォルダがすでに存在します。', (0, 2, 0, 2)))
+            # バリデーション
+            if install_path.is_absolute() is False:
+                print(Padding('[red]インストール先のフォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
                 continue
+            if '#' in str(install_path):
+                print(Padding('[red]インストール先のパスには # を含めないでください。', (0, 2, 0, 2)))
+                continue
+            if install_path.exists():
+                # 指定されたフォルダが空フォルダだったときは、ユーザーがわざわざ手動でインストール先のフォルダを
+                # 作成してくれている可能性があるので、実装の都合上一度削除しつつ、バリデーションには引っかからないようにする
+                ## rmdir() が中身が空のフォルダしか削除できず、中身が空でないフォルダを削除しようとすると
+                ## OSError が発生するのを利用している
+                try:
+                    # ここで削除が成功すれば空のフォルダだったことが確定するので、処理を続行
+                    install_path.rmdir()
+                except OSError:
+                    # 削除に失敗した場合は中身が空でないフォルダ (=インストールしてはいけないフォルダ) という事が
+                    # 確定するので、もう一度パスを入力させる
+                    ## 中身が空でないフォルダにインストールしようとすると、当然ながら大変なことになる
+                    print(Padding('[red]インストール先のフォルダがすでに存在します。', (0, 2, 0, 2)))
+                    continue
 
-        # インストール先のフォルダを作成できるかテスト
-        try:
-            install_path.mkdir(parents=True, exist_ok=False)
-        except Exception as ex:
-            print(ex)
-            print(Padding('[red]インストール先のフォルダを作成できませんでした。', (0, 2, 0, 2)))
-            continue
-        install_path.rmdir()  # フォルダを作成できるか試すだけなので一旦消す
+            # インストール先のフォルダを作成できるかテスト
+            try:
+                install_path.mkdir(parents=True, exist_ok=False)
+            except Exception as ex:
+                print(ex)
+                print(Padding('[red]インストール先のフォルダを作成できませんでした。', (0, 2, 0, 2)))
+                continue
+            install_path.rmdir()  # フォルダを作成できるか試すだけなので一旦消す
 
-        # すべてのバリデーションを通過したのでループを抜ける
-        break
+            # すべてのバリデーションを通過したのでループを抜ける
+            break
 
     # ***** 利用するバックエンド *****
 
@@ -202,7 +214,11 @@ def Installer(version: str) -> None:
     print(Padding(table_03, (1, 2, 1, 2)))
 
     # 利用するバックエンドを取得
-    backend = cast(Literal['EDCB', 'Mirakurun'], CustomPrompt.ask('利用するバックエンド', default='EDCB', choices=['EDCB', 'Mirakurun']))
+    ## 無人モード (Windows インストーラー) ではウィザードで選択済みのため、入力をスキップする
+    if unattended_settings is not None:
+        backend = unattended_settings.backend
+    else:
+        backend = cast(Literal['EDCB', 'Mirakurun'], CustomPrompt.ask('利用するバックエンド', default='EDCB', choices=['EDCB', 'Mirakurun']))
 
     # ***** EDCB (EpgTimerNW) の TCP API の URL *****
 
@@ -220,40 +236,44 @@ def Installer(version: str) -> None:
         print(Padding(table_04, (1, 2, 1, 2)))
 
         # EDCB (EpgTimerNW) の TCP API の URL を取得
-        while True:
+        ## 無人モード (Windows インストーラー) ではウィザードで自動検出済みのため、入力をスキップする
+        if unattended_settings is not None:
+            edcb_url = unattended_settings.edcb_url
+        else:
+            while True:
 
-            # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
-            ## 末尾のスラッシュは常に付与する
-            edcb_url: str = CustomPrompt.ask('EDCB (EpgTimerNW) の TCP API の URL').rstrip('/') + '/'
-            ## localhost を 127.0.0.1 に置き換え (localhost だと一部 Windows 環境で TCP API への接続が遅くなる)
-            edcb_url = edcb_url.replace('localhost', '127.0.0.1')
+                # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
+                ## 末尾のスラッシュは常に付与する
+                edcb_url = CustomPrompt.ask('EDCB (EpgTimerNW) の TCP API の URL').rstrip('/') + '/'
+                ## localhost を 127.0.0.1 に置き換え (localhost だと一部 Windows 環境で TCP API への接続が遅くなる)
+                edcb_url = edcb_url.replace('localhost', '127.0.0.1')
 
-            # バリデーション
-            ## 入力された URL がちゃんとパースできるかを確認
-            edcb_url_parse = urllib.parse.urlparse(edcb_url)
-            if edcb_url_parse.scheme != 'tcp':
-                print(Padding('[red]URL が不正です。EDCB の URL を間違えている可能性があります。', (0, 2, 0, 2)))
-                continue
-            if ((edcb_url_parse.hostname is None) or
-                (edcb_url_parse.port is None and edcb_url_parse.hostname != 'edcb-namedpipe')):
-                print(Padding('[red]URL 内にホスト名またはポートが指定されていません。\nEDCB の URL を間違えている可能性があります。', (0, 2, 0, 2)))
-                continue
-            edcb_host = edcb_url_parse.hostname
-            edcb_port = edcb_url_parse.port
-            ## 接続できたかの確認として、現在の EpgTimerSrv の動作ステータスを取得できるか試してみる
-            edcb = CtrlCmdConnectionCheckUtil(edcb_host, edcb_port)
-            result = asyncio.run(edcb.sendGetNotifySrvStatus())
-            if result is None:
-                print(Padding(str(
-                    f'[red]EDCB ({edcb_url}) にアクセスできませんでした。\n'
-                    'EDCB が起動していないか、URL を間違えている可能性があります。\n'
-                    'また、EDCB の設定で [ネットワーク接続を許可する (EpgTimerNW 用)] に\n'
-                    'チェックが入っているか確認してください。',
-                ), (0, 2, 0, 2)))
-                continue
+                # バリデーション
+                ## 入力された URL がちゃんとパースできるかを確認
+                edcb_url_parse = urllib.parse.urlparse(edcb_url)
+                if edcb_url_parse.scheme != 'tcp':
+                    print(Padding('[red]URL が不正です。EDCB の URL を間違えている可能性があります。', (0, 2, 0, 2)))
+                    continue
+                if ((edcb_url_parse.hostname is None) or
+                    (edcb_url_parse.port is None and edcb_url_parse.hostname != 'edcb-namedpipe')):
+                    print(Padding('[red]URL 内にホスト名またはポートが指定されていません。\nEDCB の URL を間違えている可能性があります。', (0, 2, 0, 2)))
+                    continue
+                edcb_host = edcb_url_parse.hostname
+                edcb_port = edcb_url_parse.port
+                ## 接続できたかの確認として、現在の EpgTimerSrv の動作ステータスを取得できるか試してみる
+                edcb = CtrlCmdConnectionCheckUtil(edcb_host, edcb_port)
+                result = asyncio.run(edcb.sendGetNotifySrvStatus())
+                if result is None:
+                    print(Padding(str(
+                        f'[red]EDCB ({edcb_url}) にアクセスできませんでした。\n'
+                        'EDCB が起動していないか、URL を間違えている可能性があります。\n'
+                        'また、EDCB の設定で [ネットワーク接続を許可する (EpgTimerNW 用)] に\n'
+                        'チェックが入っているか確認してください。',
+                    ), (0, 2, 0, 2)))
+                    continue
 
-            # すべてのバリデーションを通過したのでループを抜ける
-            break
+                # すべてのバリデーションを通過したのでループを抜ける
+                break
 
     # ***** Mirakurun / mirakc の HTTP API の URL *****
 
@@ -267,130 +287,48 @@ def Installer(version: str) -> None:
         print(Padding(table_04, (1, 2, 1, 2)))
 
         # Mirakurun / mirakc の HTTP API の URL を取得
-        while True:
+        ## 無人モード (Windows インストーラー) ではウィザードで自動検出済みのため、入力をスキップする
+        if unattended_settings is not None:
+            mirakurun_url = unattended_settings.mirakurun_url
+        else:
+            while True:
 
-            # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
-            ## 末尾のスラッシュは常に付与する
-            mirakurun_url = CustomPrompt.ask('Mirakurun / mirakc の HTTP API の URL').rstrip('/') + '/'
-            ## localhost を 127.0.0.1 に置き換え (localhost だと一部 Windows 環境で TCP API への接続が遅くなる)
-            mirakurun_url = mirakurun_url.replace('localhost', '127.0.0.1')
+                # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
+                ## 末尾のスラッシュは常に付与する
+                mirakurun_url = CustomPrompt.ask('Mirakurun / mirakc の HTTP API の URL').rstrip('/') + '/'
+                ## localhost を 127.0.0.1 に置き換え (localhost だと一部 Windows 環境で TCP API への接続が遅くなる)
+                mirakurun_url = mirakurun_url.replace('localhost', '127.0.0.1')
 
-            # バリデーション
-            ## 試しにリクエストを送り、200 (OK) が返ってきたときだけ有効な URL とみなす
-            ## 10秒でタイムアウト
-            try:
-                response = requests.get(f'{mirakurun_url.rstrip("/")}/api/version', timeout=20)
-            except Exception:
-                print(Padding(str(
-                    f'[red]Mirakurun / mirakc ({mirakurun_url}) にアクセスできませんでした。\n'
-                    'Mirakurun / mirakc が起動していないか、URL を間違えている可能性があります。',
-                ), (0, 2, 0, 2)))
-                continue
-            if response.status_code != 200:
-                print(Padding(str(
-                    f'[red]{mirakurun_url} は Mirakurun / mirakc の URL ではありません。\n'
-                    'Mirakurun / mirakc の URL を間違えている可能性があります。',
-                ), (0, 2, 0, 2)))
-                continue
+                # バリデーション
+                ## 試しにリクエストを送り、200 (OK) が返ってきたときだけ有効な URL とみなす
+                ## 10秒でタイムアウト
+                try:
+                    response = requests.get(f'{mirakurun_url.rstrip("/")}/api/version', timeout=20)
+                except Exception:
+                    print(Padding(str(
+                        f'[red]Mirakurun / mirakc ({mirakurun_url}) にアクセスできませんでした。\n'
+                        'Mirakurun / mirakc が起動していないか、URL を間違えている可能性があります。',
+                    ), (0, 2, 0, 2)))
+                    continue
+                if response.status_code != 200:
+                    print(Padding(str(
+                        f'[red]{mirakurun_url} は Mirakurun / mirakc の URL ではありません。\n'
+                        'Mirakurun / mirakc の URL を間違えている可能性があります。',
+                    ), (0, 2, 0, 2)))
+                    continue
 
-            # すべてのバリデーションを通過したのでループを抜ける
-            break
+                # すべてのバリデーションを通過したのでループを抜ける
+                break
 
     # ***** 利用するエンコーダー *****
 
-    # PC に接続されている GPU の型番を取得し、そこから QSVEncC / NVEncC / VCEEncC の利用可否を大まかに判断する
-    gpu_names: list[str] = []
-    default_encoder: Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC', 'rkmppenc'] = 'FFmpeg'
-    qsvencc_available: str = '❌利用できません'
-    nvencc_available: str = '❌利用できません'
-    vceencc_available: str = '❌利用できません'
-    rkmppenc_available: str = '❌利用できません'
-
-    # Windows: PowerShell の Get-WmiObject と ConvertTo-Json の合わせ技で取得できる
-    if platform_type == 'Windows':
-        gpu_info_json = subprocess.run(
-            args = ['powershell', '-Command', 'Get-WmiObject Win32_VideoController | ConvertTo-Json'],
-            stdout = subprocess.PIPE,  # 標準出力をキャプチャする
-            stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
-            text = True,  # 出力をテキストとして取得する
-        )
-        # コマンド成功時のみ
-        if gpu_info_json.returncode == 0:
-            try:
-                # GPU が1個だけ搭載されている環境では直接 dict[str, Any] 、2個以上搭載されている環境は list[dict[str, Any]] の形で出力される
-                gpu_info_data = json.loads(gpu_info_json.stdout)
-                gpu_infos: list[dict[str, Any]]
-                if type(gpu_info_data) is dict:
-                    # GPU が1個だけ搭載されている環境
-                    gpu_infos = [gpu_info_data]
-                else:
-                    # GPU が2個以上搭載されている環境
-                    gpu_infos = gpu_info_data
-                # 搭載されている GPU 名を取得してリストに追加
-                for gpu_info in gpu_infos:
-                    if 'Name' in gpu_info:
-                        gpu_names.append(gpu_info['Name'])
-            except json.decoder.JSONDecodeError:
-                pass
-
-    # Linux / Linux-Docker: lshw コマンドを使って取得できる
-    elif platform_type == 'Linux' or platform_type == 'Linux-Docker':
-        # もし lshw コマンドがインストールされていなかったらインストールする
-        if shutil.which('lshw') is None:
-            subprocess.run(
-                args = ['apt-get', 'install', '-y', 'lshw'],
-                stdout = subprocess.DEVNULL,  # 標準出力を表示しない
-                stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
-            )
-        # lshw コマンドを実行して GPU 情報を取得
-        gpu_info_json = subprocess.run(
-            args = ['lshw', '-class', 'display', '-json'],
-            stdout = subprocess.PIPE,  # 標準出力をキャプチャする
-            stderr = subprocess.DEVNULL,  # 標準エラー出力を表示しない
-            text = True,  # 出力をテキストとして取得する
-        )
-        # コマンド成功時のみ
-        if gpu_info_json.returncode == 0:
-            try:
-                # 接続されている GPU 名を取得してリストに追加
-                for gpu_info in json.loads(gpu_info_json.stdout):
-                    if 'vendor' in gpu_info and 'product' in gpu_info:
-                        gpu_names.append(f'{gpu_info["vendor"]} {gpu_info["product"]}')
-            except json.decoder.JSONDecodeError:
-                pass
-
-        # ARM 環境のみ、もし  /proc/device-tree/compatible が存在し、その中に "rockchip" と "rk35" という文字列が含まれていたら、
-        # Rockchip SoC 搭載の ARM SBC と判断して rkmppenc を利用可能とする
-        if platform_type == 'Linux' and Path('/proc/device-tree/compatible').exists():
-            with open('/proc/device-tree/compatible', encoding='utf-8') as compatible_file:
-                compatible_data = compatible_file.read()
-                if 'rockchip' in compatible_data and 'rk35' in compatible_data:
-                    rkmppenc_available = '✅利用できます'
-                    default_encoder = 'rkmppenc'
-
-    # Intel 製 GPU なら QSVEncC が、NVIDIA 製 GPU (Geforce) なら NVEncC が、AMD 製 GPU (Radeon) なら VCEEncC が使える
-    # また、RK3588 などの Rockchip SoC 搭載の ARM SBC なら、rkmppenc が使える
-    ## もちろん機種によって例外はあるけど、ダウンロード前だとこれくらいの大雑把な判定しかできない…
-    ## VCEEncC は安定性があまり良くなく、NVEncC は性能は良いものの Geforce だと同時エンコード本数の制限があるので、
-    ## 複数の GPU が接続されている場合は QSVEncC が一番優先されるようにする
-    for gpu_name in gpu_names:
-        if 'AMD' in gpu_name or 'Radeon' in gpu_name:
-            vceencc_available = f'✅利用できます (AMD GPU: {gpu_name})'
-            default_encoder = 'VCEEncC'
-        elif 'NVIDIA' in gpu_name or 'Geforce' in gpu_name:
-            # NVIDIA GPU でも NVENC 自体を搭載していない機種は NVEncC の候補から除外
-            ## 機種名の表記揺れを吸収しつつ、未知の新製品を誤って除外しないよう既知の非対応機種との部分一致で判定する
-            normalized_gpu_name = gpu_name.casefold()
-            has_nvenc = all(
-                unsupported_gpu_name.casefold() not in normalized_gpu_name
-                for unsupported_gpu_name in NVIDIA_GPU_NAMES_WITHOUT_NVENC
-            )
-            if has_nvenc is True:
-                nvencc_available = f'✅利用できます (NVIDIA GPU: {gpu_name})'
-                default_encoder = 'NVEncC'
-        elif 'Intel' in gpu_name:
-            qsvencc_available = f'✅利用できます (Intel GPU: {gpu_name})'
-            default_encoder = 'QSVEncC'
+    # PC に接続されている GPU から利用可能なエンコーダーを自動判定する
+    encoder_info = DetectEncoderInfo()
+    default_encoder = encoder_info['default_encoder']
+    qsvencc_available = encoder_info['qsvencc_available']
+    nvencc_available = encoder_info['nvencc_available']
+    vceencc_available = encoder_info['vceencc_available']
+    rkmppenc_available = encoder_info['rkmppenc_available']
 
     table_05 = CreateTable()
     if is_arm_device is False:
@@ -414,7 +352,10 @@ def Installer(version: str) -> None:
     print(Padding(table_05, (1, 2, 1, 2)))
 
     # 利用するエンコーダーを取得
-    if is_arm_device is False:
+    ## 無人モード (Windows インストーラー) ではウィザードで選択済みのため、入力をスキップする
+    if unattended_settings is not None:
+        encoder = unattended_settings.encoder
+    elif is_arm_device is False:
         encoder = cast(
             Literal['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC'],
             CustomPrompt.ask('利用するエンコーダー', default=default_encoder, choices=['FFmpeg', 'QSVEncC', 'NVEncC', 'VCEEncC']),
@@ -441,35 +382,39 @@ def Installer(version: str) -> None:
     recorded_folders: list[str] = []
 
     # 録画フォルダを1つずつ入力
-    while True:
-        # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
-        recorded_folder = CustomPrompt.ask('録画フォルダのパス')
+    ## 無人モード (Windows インストーラー) では録画フォルダの入力をスキップする (後から設定画面で追加できる)
+    if unattended_settings is not None:
+        recorded_folders = unattended_settings.recorded_folders
+    else:
+        while True:
+            # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
+            recorded_folder = CustomPrompt.ask('録画フォルダのパス')
 
-        # 何も入力されなかった場合は入力を終了
-        if recorded_folder == '':
-            # 1つも入力されていない場合は再度入力を促す
-            if len(recorded_folders) == 0:
-                print(Padding('[red]少なくとも1つの録画フォルダを指定してください。', (0, 2, 0, 2)))
+            # 何も入力されなかった場合は入力を終了
+            if recorded_folder == '':
+                # 1つも入力されていない場合は再度入力を促す
+                if len(recorded_folders) == 0:
+                    print(Padding('[red]少なくとも1つの録画フォルダを指定してください。', (0, 2, 0, 2)))
+                    continue
+                break
+
+            # 入力されたパスを Path オブジェクトに変換
+            recorded_folder_path = Path(recorded_folder)
+
+            # バリデーション
+            if recorded_folder_path.is_absolute() is False:
+                print(Padding('[red]録画フォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
                 continue
-            break
+            if recorded_folder_path.exists() is False:
+                print(Padding('[red]指定された録画フォルダが存在しません。', (0, 2, 0, 2)))
+                continue
+            if recorded_folder_path.is_dir() is False:
+                print(Padding('[red]指定されたパスはフォルダではありません。', (0, 2, 0, 2)))
+                continue
 
-        # 入力されたパスを Path オブジェクトに変換
-        recorded_folder_path = Path(recorded_folder)
-
-        # バリデーション
-        if recorded_folder_path.is_absolute() is False:
-            print(Padding('[red]録画フォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
-            continue
-        if recorded_folder_path.exists() is False:
-            print(Padding('[red]指定された録画フォルダが存在しません。', (0, 2, 0, 2)))
-            continue
-        if recorded_folder_path.is_dir() is False:
-            print(Padding('[red]指定されたパスはフォルダではありません。', (0, 2, 0, 2)))
-            continue
-
-        # 現在指定されているフォルダの一覧を表示
-        recorded_folders.append(str(recorded_folder_path))
-        print(Padding(f'[green]現在指定されている録画フォルダ: {", ".join(recorded_folders)}', (0, 2, 0, 2)))
+            # 現在指定されているフォルダの一覧を表示
+            recorded_folders.append(str(recorded_folder_path))
+            print(Padding(f'[green]現在指定されている録画フォルダ: {", ".join(recorded_folders)}', (0, 2, 0, 2)))
 
     # ***** アップロードしたキャプチャ画像の保存先フォルダのパス *****
 
@@ -488,38 +433,154 @@ def Installer(version: str) -> None:
     # キャプチャ画像の保存フォルダのリスト
     capture_upload_folders: list[str] = []
 
-    # 録画フォルダを1つずつ入力
-    while True:
-        # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
-        capture_upload_folder = CustomPrompt.ask('アップロードしたキャプチャ画像の保存先フォルダのパス')
+    # キャプチャ画像の保存フォルダを1つずつ入力
+    ## 無人モード (Windows インストーラー) ではキャプチャ画像の保存フォルダの入力をスキップする (後から設定画面で追加できる)
+    if unattended_settings is not None:
+        capture_upload_folders = unattended_settings.capture_upload_folders
+    else:
+        while True:
+            # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
+            capture_upload_folder = CustomPrompt.ask('アップロードしたキャプチャ画像の保存先フォルダのパス')
 
-        # 何も入力されなかった場合は入力を終了
-        if capture_upload_folder == '':
-            # 1つも入力されていない場合は再度入力を促す
-            if len(capture_upload_folders) == 0:
-                print(Padding('[red]少なくとも1つのキャプチャ画像の保存先フォルダを指定してください。', (0, 2, 0, 2)))
+            # 何も入力されなかった場合は入力を終了
+            if capture_upload_folder == '':
+                # 1つも入力されていない場合は再度入力を促す
+                if len(capture_upload_folders) == 0:
+                    print(Padding('[red]少なくとも1つのキャプチャ画像の保存先フォルダを指定してください。', (0, 2, 0, 2)))
+                    continue
+                break
+
+            # 入力されたパスを Path オブジェクトに変換
+            capture_upload_folder_path = Path(capture_upload_folder)
+
+            # バリデーション
+            if capture_upload_folder_path.is_absolute() is False:
+                print(Padding('[red]キャプチャ画像の保存先フォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
                 continue
-            break
+            if capture_upload_folder_path.exists() is False:
+                print(Padding('[red]指定されたキャプチャ画像の保存先フォルダが存在しません。', (0, 2, 0, 2)))
+                continue
+            if capture_upload_folder_path.is_dir() is False:
+                print(Padding('[red]指定されたパスはフォルダではありません。', (0, 2, 0, 2)))
+                continue
 
-        # 入力されたパスを Path オブジェクトに変換
-        capture_upload_folder_path = Path(capture_upload_folder)
+            # 現在指定されているフォルダの一覧を表示
+            capture_upload_folders.append(str(capture_upload_folder_path))
+            print(Padding(f'[green]現在指定されているキャプチャ画像の保存先フォルダ: {", ".join(capture_upload_folders)}', (0, 2, 0, 2)))
 
-        # バリデーション
-        if capture_upload_folder_path.is_absolute() is False:
-            print(Padding('[red]キャプチャ画像の保存先フォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
-            continue
-        if capture_upload_folder_path.exists() is False:
-            print(Padding('[red]指定されたキャプチャ画像の保存先フォルダが存在しません。', (0, 2, 0, 2)))
-            continue
-        if capture_upload_folder_path.is_dir() is False:
-            print(Padding('[red]指定されたパスはフォルダではありません。', (0, 2, 0, 2)))
-            continue
+    # ***** インストール先フォルダの準備 (無人モードのみ) *****
 
-        # 現在指定されているフォルダの一覧を表示
-        capture_upload_folders.append(str(capture_upload_folder_path))
-        print(Padding(f'[green]現在指定されているキャプチャ画像の保存先フォルダ: {", ".join(capture_upload_folders)}', (0, 2, 0, 2)))
+    # 無人モード (Windows インストーラー) の場合のみ、インストール先フォルダを準備する
+    ## 対話モードでは入力時のバリデーションでインストール先フォルダが空 (または存在しない) ことが保証されているが、
+    ## 無人モードではウィザード側でフォルダ選択のみ行われるため、ここで改めてフォルダを準備する必要がある
+    ## 既に KonomiTV がインストールされている場合は、ユーザーデータ (config.yaml・.venv・データベース・ログ) を
+    ## 一時フォルダに退避してからソースコードを展開し、展開後に元の場所へ戻すことで上書きインストールを実現する
+    backup_path: Path | None = None
+    preserved_relative_paths: list[Path] = []
+
+    # 退避していたユーザーデータを元の場所へ戻す
+    ## ダウンロードに失敗した場合やインストール先フォルダの準備に失敗した場合でも、
+    ## 既存のユーザーデータが失われないようにするためのヘルパー関数
+    def restore_backup() -> None:
+        if backup_path is not None:
+            # ダウンロードに失敗してインストール先フォルダが存在しない場合に備え、先に作成してから戻す
+            install_path.mkdir(parents=True, exist_ok=True)
+            for relative_path in preserved_relative_paths:
+                # server/data や server/logs のような入れ子パスは移動先の親フォルダが存在しないため、先に作成してから移動する
+                (install_path / relative_path).parent.mkdir(parents=True, exist_ok=True)
+                if (backup_path / relative_path).exists():
+                    shutil.move(str(backup_path / relative_path), str(install_path / relative_path))
+            shutil.rmtree(backup_path)
+
+    if unattended_settings is not None and install_path.exists():
+
+        # 進捗を記録 (Windows インストーラー用)
+        ## 上書きインストール時はユーザーデータの退避などに時間がかかるため、進捗ステップとして表示する
+        if progress_reporter is not None:
+            progress_reporter.step('インストール先のフォルダを準備しています…')
+
+        # Inno Setup がインストール先フォルダに自動作成するアンインストーラー関連ファイル
+        ## Windows インストーラー (Inno Setup) は、インストール開始時にインストール先フォルダへ
+        ## アンインストーラー (unins000.exe / unins000.dat) を必ず作成する
+        ## そのため、このファイルは「KonomiTV 以外のファイル」と誤判定しないようにする
+        ## また、アンインストーラーを削除してしまうとアンインストールができなくなるため、
+        ## 一時退避してインストール完了後に元の場所へ戻す
+        inno_setup_uninstaller_files = ('unins000.exe', 'unins000.dat', 'unins000.msg')
+
+        # 既に KonomiTV がインストールされている場合 (config.yaml と server/ フォルダがある場合)
+        if (install_path / 'config.yaml').exists() and (install_path / 'server/').exists():
+
+            # 上書きインストール時に保持するファイル/フォルダ
+            ## config.yaml: サーバー設定 (ウィザードで選択した設定は後で反映する)
+            ## server/.venv: Python 仮想環境 (poetry install で依存パッケージを更新して使い回す)
+            ## server/data: データベースなど (録画メタデータ・ユーザー情報)
+            ## server/logs: ログ
+            ## unins000.exe / unins000.dat / unins000.msg: Inno Setup のアンインストーラー (アンインストールに必要)
+            preserved_relative_paths = [
+                Path('config.yaml'),
+                Path('server/.venv'),
+                Path('server/data'),
+                Path('server/logs'),
+                *[Path(filename) for filename in inno_setup_uninstaller_files],
+            ]
+
+            # 保持するファイル/フォルダを一時フォルダに退避する
+            backup_path = Path(tempfile.mkdtemp())
+            for relative_path in preserved_relative_paths:
+                if (install_path / relative_path).exists():
+                    # server/data や server/logs のような入れ子パスは移動先の親フォルダが存在しないため、先に作成してから移動する
+                    (backup_path / relative_path).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(install_path / relative_path), str(backup_path / relative_path))
+
+        # KonomiTV がインストールされているわけではないが、フォルダに何か入っている場合
+        ## Inno Setup のアンインストーラー関連ファイルのみが存在する場合は、実質的に空のフォルダとして扱う
+        elif any(item.name not in inno_setup_uninstaller_files for item in install_path.iterdir()):
+            # KonomiTV がインストールされていないフォルダに上書きインストールするのは危険なので中断する
+            ShowPanel([
+                '[red]インストール先のフォルダに KonomiTV 以外のファイルが存在します。[/red]',
+                'インストール先のフォルダは空にするか、別のフォルダを指定してください。',
+            ])
+            if progress_reporter is not None:
+                progress_reporter.error('インストール先のフォルダに KonomiTV 以外のファイルが存在します。')
+            return False  # 処理中断
+
+        # フォルダを空にして削除する (ソースコードの展開で新しく作成されるようにする)
+        ## アンインストーラー関連ファイルは削除せず、一時フォルダへ退避してインストール後に元の場所へ戻す
+        ## (上書きインストール時は上でユーザーデータと一緒に退避済みのため、ここでは新規インストール時のみ退避する)
+        if backup_path is None:
+            if any((install_path / filename).exists() for filename in inno_setup_uninstaller_files):
+                backup_path = Path(tempfile.mkdtemp())
+                for filename in inno_setup_uninstaller_files:
+                    if (install_path / filename).exists():
+                        shutil.move(str(install_path / filename), str(backup_path / filename))
+                        preserved_relative_paths.append(Path(filename))
+
+        # フォルダを空にして削除する
+        ## 削除に失敗した場合は退避していたユーザーデータを元の場所へ戻し、インストールを中断する
+        ## (ignore_errors=True で削除失敗を握りつぶさず、既存のユーザーデータが失われないようにする)
+        try:
+            for item in install_path.iterdir():
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink(missing_ok=True)
+            install_path.rmdir()
+        except OSError:
+            # 削除に失敗した場合は退避していたユーザーデータを元の場所へ戻す
+            restore_backup()
+            ShowPanel([
+                '[red]インストール先のフォルダを空にできませんでした。[/red]',
+                '使用中のファイルやフォルダを閉じてから、もう一度お試しください。',
+            ])
+            if progress_reporter is not None:
+                progress_reporter.error('インストール先のフォルダを空にできませんでした。')
+            return False  # 処理中断
 
     # ***** ソースコードのダウンロード *****
+
+    # 進捗を記録 (Windows インストーラー用)
+    if progress_reporter is not None:
+        progress_reporter.step('KonomiTV のソースコードをダウンロードしています…')
 
     # Git コマンドがインストールされているかどうか
     is_git_installed = IsGitInstalled()
@@ -538,41 +599,58 @@ def Installer(version: str) -> None:
             error_log_name = 'Git のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            if progress_reporter is not None:
+                progress_reporter.error('KonomiTV のソースコードのダウンロードに失敗しました。')
+            # 退避していたユーザーデータを元の場所へ戻す
+            restore_backup()
+            return False  # 処理中断
 
     # Git コマンドがインストールされていない場合: zip でダウンロード
     else:
 
-        # ソースコードを随時ダウンロードし、進捗を表示
-        # ref: https://github.com/Textualize/rich/blob/master/examples/downloader.py
-        print(Padding('KonomiTV のソースコードをダウンロードしています…', (1, 2, 0, 2)))
-        progress = CreateDownloadInfiniteProgress()
+        # ダウンロード中にエラーが発生した場合は、退避していたユーザーデータを元の場所へ戻してから中断する
+        try:
 
-        # GitHub からソースコードをダウンロード
-        ## latest の場合は master ブランチを、それ以外は指定されたバージョンのタグをダウンロード
-        if version == 'latest':
-            source_code_response = requests.get('https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/heads/master')
-        else:
-            source_code_response = requests.get(f'https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/tags/v{version}')
-        task_id = progress.add_task('', total=None)
+            # ソースコードを随時ダウンロードし、進捗を表示
+            # ref: https://github.com/Textualize/rich/blob/master/examples/downloader.py
+            print(Padding('KonomiTV のソースコードをダウンロードしています…', (1, 2, 0, 2)))
+            progress = CreateDownloadInfiniteProgress()
 
-        # ダウンロードしたデータを随時一時ファイルに書き込む
-        source_code_file = tempfile.NamedTemporaryFile(mode='wb', delete=False)
-        with progress:
-            for chunk in source_code_response.iter_content(chunk_size=1024):
-                source_code_file.write(chunk)
-                progress.update(task_id, advance=len(chunk))
-            source_code_file.seek(0, os.SEEK_END)
-            progress.update(task_id, total=source_code_file.tell())
-        source_code_file.close()  # 解凍する前に close() してすべて書き込ませておくのが重要
+            # GitHub からソースコードをダウンロード
+            ## latest の場合は master ブランチを、それ以外は指定されたバージョンのタグをダウンロード
+            if version == 'latest':
+                source_code_response = requests.get('https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/heads/master')
+            else:
+                source_code_response = requests.get(f'https://codeload.github.com/tsukumijima/KonomiTV/zip/refs/tags/v{version}')
+            task_id = progress.add_task('', total=None)
 
-        # ソースコードを解凍して展開
-        shutil.unpack_archive(source_code_file.name, install_path.parent, format='zip')
-        if version == 'latest':
-            shutil.move(install_path.parent / 'KonomiTV-master/', install_path)
-        else:
-            shutil.move(install_path.parent / f'KonomiTV-{version}/', install_path)
-        Path(source_code_file.name).unlink()
+            # ダウンロードしたデータを随時一時ファイルに書き込む
+            source_code_file = tempfile.NamedTemporaryFile(mode='wb', delete=False)
+            with progress:
+                for chunk in source_code_response.iter_content(chunk_size=1024):
+                    source_code_file.write(chunk)
+                    progress.update(task_id, advance=len(chunk))
+                source_code_file.seek(0, os.SEEK_END)
+                progress.update(task_id, total=source_code_file.tell())
+            source_code_file.close()  # 解凍する前に close() してすべて書き込ませておくのが重要
+
+            # ソースコードを解凍して展開
+            shutil.unpack_archive(source_code_file.name, install_path.parent, format='zip')
+            if version == 'latest':
+                shutil.move(install_path.parent / 'KonomiTV-master/', install_path)
+            else:
+                shutil.move(install_path.parent / f'KonomiTV-{version}/', install_path)
+            Path(source_code_file.name).unlink()
+
+        except Exception:
+            # 退避していたユーザーデータを元の場所へ戻してから、エラーをそのまま送出する
+            if progress_reporter is not None:
+                progress_reporter.error('KonomiTV のソースコードのダウンロードに失敗しました。')
+            restore_backup()
+            raise
+
+    # 退避していたユーザーデータを元の場所に戻す (上書きインストール時のみ)
+    restore_backup()
 
     # ***** リッスンポートの重複チェック *****
 
@@ -609,8 +687,14 @@ def Installer(version: str) -> None:
     progress.add_task('', total=None)
     with progress:
 
-        # config.example.yaml を config.yaml にコピー
-        shutil.copyfile(install_path / 'config.example.yaml', install_path / 'config.yaml')
+        # config.yaml を用意する
+        ## 上書きインストール時は既存の config.yaml が退避から元の場所へ戻されているため、それをそのまま使う
+        ## 新規インストール時は config.example.yaml を config.yaml にコピーする
+        if (install_path / 'config.yaml').exists():
+            pass  # 既存の config.yaml を使う (上書きインストール時)
+        else:
+            # config.example.yaml を config.yaml にコピー
+            shutil.copyfile(install_path / 'config.example.yaml', install_path / 'config.yaml')
 
         # config.yaml から既定の設定値を取得
         config_dict: dict[str, dict[str, Any]]
@@ -626,8 +710,13 @@ def Installer(version: str) -> None:
             config_dict['general']['mirakurun_url'] = mirakurun_url
         config_dict['general']['encoder'] = encoder
         config_dict['server']['port'] = server_port
-        config_dict['video']['recorded_folders'] = recorded_folders
-        config_dict['capture']['upload_folders'] = capture_upload_folders
+        # 録画フォルダ・キャプチャフォルダは、指定されている場合のみ置き換える
+        ## 無人モード (Windows インストーラー) で未指定 (空リスト) の場合は既存の config.yaml の値を上書きせずに保持する
+        ## (上書きインストール時に、既存のフォルダ設定をそのまま引き継ぐため)
+        if len(recorded_folders) > 0:
+            config_dict['video']['recorded_folders'] = recorded_folders
+        if len(capture_upload_folders) > 0:
+            config_dict['capture']['upload_folders'] = capture_upload_folders
 
         # サーバー設定データを保存
         SaveConfig(install_path / 'config.yaml', config_dict)
@@ -641,6 +730,9 @@ def Installer(version: str) -> None:
 
         # サードパーティーライブラリを随時ダウンロードし、進捗を表示
         # ref: https://github.com/Textualize/rich/blob/master/examples/downloader.py
+        # 進捗を記録 (Windows インストーラー用)
+        if progress_reporter is not None:
+            progress_reporter.step('サードパーティーライブラリをダウンロードしています…')
         print(Padding('サードパーティーライブラリをダウンロードしています…', (1, 2, 0, 2)))
         progress = CreateDownloadProgress()
 
@@ -658,7 +750,8 @@ def Installer(version: str) -> None:
         if version == 'latest':
             thirdparty_url = thirdparty_url + '.zip'
         thirdparty_response = requests.get(thirdparty_url, stream=True)
-        task_id = progress.add_task('', total=float(thirdparty_response.headers['Content-length']))
+        thirdparty_total_size = int(thirdparty_response.headers['Content-length'])
+        task_id = progress.add_task('', total=float(thirdparty_total_size))
 
         # ダウンロードしたデータを随時一時ファイルに書き込む
         thirdparty_compressed_file = tempfile.NamedTemporaryFile(mode='wb', delete=False)
@@ -666,9 +759,15 @@ def Installer(version: str) -> None:
             for chunk in thirdparty_response.iter_content(chunk_size=1048576):  # サイズが大きいので1MBごとに読み込み
                 thirdparty_compressed_file.write(chunk)
                 progress.update(task_id, advance=len(chunk))
+                # 進捗率を記録 (Windows インストーラー用)
+                if progress_reporter is not None:
+                    progress_reporter.progress(thirdparty_compressed_file.tell() / thirdparty_total_size * 100)
         thirdparty_compressed_file.close()  # 解凍する前に close() してすべて書き込ませておくのが重要
 
         # サードパーティーライブラリを解凍して展開
+        # 進捗を記録 (Windows インストーラー用)
+        if progress_reporter is not None:
+            progress_reporter.step('サードパーティーライブラリを展開しています…')
         print(Padding('サードパーティーライブラリを展開しています… (数秒～数十秒かかります)', (1, 2, 0, 2)))
         progress = CreateBasicInfiniteProgress()
         progress.add_task('', total=None)
@@ -705,6 +804,9 @@ def Installer(version: str) -> None:
             python_executable_path = install_path / 'server/thirdparty/Python/bin/python'
 
         # poetry env use を実行
+        # 進捗を記録 (Windows インストーラー用)
+        if progress_reporter is not None:
+            progress_reporter.step('Python の仮想環境を作成しています…')
         result = RunSubprocessDirectLogOutput(
             'Python の仮想環境を作成しています…',
             [python_executable_path, '-m', 'poetry', 'env', 'use', python_executable_path],
@@ -713,10 +815,15 @@ def Installer(version: str) -> None:
             error_message = 'Python の仮想環境の作成中に予期しないエラーが発生しました。',
         )
         if result is False:
-            return  # 処理中断
+            if progress_reporter is not None:
+                progress_reporter.error('Python の仮想環境の作成に失敗しました。')
+            return False  # 処理中断
 
         # poetry install を実行
         # --no-root: プロジェクトのルートパッケージをインストールしない
+        # 進捗を記録 (Windows インストーラー用)
+        if progress_reporter is not None:
+            progress_reporter.step('依存パッケージをインストールしています…')
         result = RunSubprocessDirectLogOutput(
             '依存パッケージをインストールしています…',
             [python_executable_path, '-m', 'poetry', 'install', '--only', 'main', '--no-root'],
@@ -725,7 +832,9 @@ def Installer(version: str) -> None:
             error_message = '依存パッケージのインストール中に予期しないエラーが発生しました。',
         )
         if result is False:
-            return  # 処理中断
+            if progress_reporter is not None:
+                progress_reporter.error('依存パッケージのインストールに失敗しました。')
+            return False  # 処理中断
 
     # Linux-Docker: docker-compose.yaml を生成し、Docker イメージをビルド
     elif platform_type == 'Linux-Docker':
@@ -800,7 +909,7 @@ def Installer(version: str) -> None:
             error_message = 'Docker イメージのビルド中に予期しないエラーが発生しました。',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
     # ***** Linux / Linux-Docker: QSVEncC / NVEncC / VCEEncC の動作チェック *****
 
@@ -1008,6 +1117,9 @@ def Installer(version: str) -> None:
 
     if platform_type == 'Windows':
 
+        # 進捗を記録 (Windows インストーラー用)
+        if progress_reporter is not None:
+            progress_reporter.step('Windows Defender ファイアウォールに受信規則を追加しています…')
         print(Padding('Windows Defender ファイアウォールに受信規則を追加しています…', (1, 2, 0, 2)))
         progress = CreateBasicInfiniteProgress()
         progress.add_task('', total=None)
@@ -1056,7 +1168,12 @@ def Installer(version: str) -> None:
         print(Padding(table_08, (0, 2, 0, 2)))
 
         # ユーザー名を入力
-        current_user_name: str = CustomPrompt.ask('KonomiTV の Windows サービスの実行ユーザー名', default=current_user_name_default)
+        ## 無人モード (Windows インストーラー) ではウィザードで入力済みのため、入力をスキップする
+        current_user_name: str
+        if unattended_settings is not None:
+            current_user_name = unattended_settings.service_username
+        else:
+            current_user_name = CustomPrompt.ask('KonomiTV の Windows サービスの実行ユーザー名', default=current_user_name_default)
 
         table_09 = CreateTable()
         table_09.add_column(f'09. ユーザー ({current_user_name}) のパスワードを入力してください。')
@@ -1081,14 +1198,26 @@ def Installer(version: str) -> None:
 
             # 入力プロンプト (サービスのインストールに失敗し続ける限り何度でも表示される)
             ## バリデーションのしようがないので、バリデーションは行わない
-            current_user_password = CustomPrompt.ask(f'ログオン中のユーザー ({current_user_name}) のパスワード')
+            ## 無人モード (Windows インストーラー) ではウィザードで入力済みのため、入力をスキップする
+            if unattended_settings is not None:
+                current_user_password = unattended_settings.service_password
+            else:
+                current_user_password = CustomPrompt.ask(f'ログオン中のユーザー ({current_user_name}) のパスワード')
 
             if current_user_password == '':
                 print(Padding(f'[red]ログオン中のユーザー ({current_user_name}) のパスワードが空です。', (0, 2, 0, 2)))
+                # 無人モードでは再入力できないので中断する
+                if unattended_settings is not None:
+                    if progress_reporter is not None:
+                        progress_reporter.error('ログオン中のユーザーのパスワードが空です。')
+                    return False  # 処理中断
                 continue
 
             # 入力された資格情報をもとに、Windows サービスをインストール
             ## すでに KonomiTV Service がインストールされている場合は上書きされる
+            # 進捗を記録 (Windows インストーラー用)
+            if progress_reporter is not None:
+                progress_reporter.step('Windows サービスをインストールしています…')
             print(Padding('Windows サービスをインストールしています…', (1, 2, 0, 2)))
             progress = CreateBasicInfiniteProgress()
             progress.add_task('', total=None)
@@ -1110,9 +1239,17 @@ def Installer(version: str) -> None:
                     'すでに KonomiTV がインストールされている可能性があります。',
                 ), (1, 2, 0, 2)))
                 print(Padding('[red]エラーログ:\n' + service_install_result.stdout.strip(), (1, 2, 1, 2)))
+                # 無人モードでは再入力できないので中断する
+                if unattended_settings is not None:
+                    if progress_reporter is not None:
+                        progress_reporter.error('Windows サービスのインストールに失敗しました。')
+                    return False  # 処理中断
                 continue
 
             # Windows サービスを起動
+            # 進捗を記録 (Windows インストーラー用)
+            if progress_reporter is not None:
+                progress_reporter.step('Windows サービスを起動しています…')
             print(Padding('Windows サービスを起動しています…', (1, 2, 0, 2)))
             progress = CreateBasicInfiniteProgress()
             progress.add_task('', total=None)
@@ -1131,6 +1268,11 @@ def Installer(version: str) -> None:
                     'すでに KonomiTV がインストールされている可能性があります。',
                 ), (1, 2, 0, 2)))
                 print(Padding('[red]エラーログ:\n' + service_start_result.stdout.strip(), (1, 2, 1, 2)))
+                # 無人モードでは再入力できないので中断する
+                if unattended_settings is not None:
+                    if progress_reporter is not None:
+                        progress_reporter.error('Windows サービスの起動に失敗しました。')
+                    return False  # 処理中断
                 continue
 
             # エラーが出ていなければおそらく正常にサービスがインストールできているはずなので、ループを抜ける
@@ -1151,7 +1293,7 @@ def Installer(version: str) -> None:
             error_log_name = 'PM2 のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
         # PM2 のスタートアップ設定を行う
         ## これにより、PM2 サービスは OS 起動時に自動的に起動されるようになる
@@ -1163,7 +1305,7 @@ def Installer(version: str) -> None:
             error_log_name = 'PM2 のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
         # PM2 への変更を保存
         result = RunSubprocess(
@@ -1174,7 +1316,7 @@ def Installer(version: str) -> None:
             error_log_name = 'PM2 のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
         # PM2 サービスを起動
         result = RunSubprocess(
@@ -1185,7 +1327,7 @@ def Installer(version: str) -> None:
             error_log_name = 'PM2 のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
     # ***** Linux-Docker: Docker コンテナの起動 *****
 
@@ -1200,12 +1342,18 @@ def Installer(version: str) -> None:
             error_log_name = 'Docker Compose のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
     # ***** サービスの起動を待機 *****
 
     # KonomiTV サービスの起動を監視して起動完了を待機する処理はアップデーターと共通
-    RunKonomiTVServiceWaiter(platform_type, install_path)
+    # 進捗を記録 (Windows インストーラー用)
+    if progress_reporter is not None:
+        progress_reporter.step('サービスの起動を待っています…')
+    if RunKonomiTVServiceWaiter(platform_type, install_path) is False:
+        if progress_reporter is not None:
+            progress_reporter.error('KonomiTV サービスの起動に失敗しました。')
+        return False  # 処理中断
 
     # ***** インストール完了 *****
 
@@ -1231,3 +1379,6 @@ def Installer(version: str) -> None:
         table_done.add_row(f'[bright_blue]{url: <{urls_max_length}}[/bright_blue] ({nic_infos[index][1]})')
 
     print(Padding(table_done, (1, 2, 0, 2)))
+
+    # インストール成功
+    return True

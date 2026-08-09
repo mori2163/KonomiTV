@@ -1,11 +1,14 @@
 
+import argparse
 import ctypes
 import os
 import platform
 import signal
 import subprocess
+import sys
 import threading
 import traceback
+from pathlib import Path
 from typing import Any
 
 import distro
@@ -16,6 +19,7 @@ from rich.prompt import Prompt
 from rich.rule import Rule
 from rich.style import Style
 
+import WindowsInstaller
 from Installer import Installer
 from Uninstaller import Uninstaller
 from Updater import Updater
@@ -53,7 +57,9 @@ def main():
         for network_drive in GetNetworkDriveList():
 
             # net use コマンドでネットワークドライブをマウントするスレッドを作成し、リストに追加
-            def run():
+            ## ループ変数 network_drive はループのたびに再代入されるため、デフォルト引数として現在の値をバインドする
+            ## これをしないと、スレッドの実行開始時に参照される network_drive が最後のループの値になってしまう (遅延束縛の問題)
+            def run(network_drive: dict[str, str] = network_drive):
                 try:
                     subprocess.run(
                         ['net', 'use', f'{network_drive["drive_letter"]}:', network_drive['remote_path']],
@@ -153,6 +159,52 @@ def main():
 
 
 if __name__ == '__main__':
+
+    # コマンドライン引数を解析する
+    ## Windows インストーラー (Inno Setup) から実行されるエンジンモードと、従来の対話モードを切り替える
+    ## エンジンモードは権限の昇格を行わない (自動検出は昇格不要・無人インストールは Inno Setup が管理者権限で実行済みのため)
+    parser = argparse.ArgumentParser(description='KonomiTV Installer')
+    parser.add_argument('--detect-backend', metavar='IP', help='バックエンド (EDCB / Mirakurun) を自動検出する (Windows インストーラー用)')
+    parser.add_argument('--detect-encoder', action='store_true', help='エンコーダーを自動検出する (Windows インストーラー用)')
+    parser.add_argument('--install', action='store_true', help='無人モードでインストールを実行する (Windows インストーラー用)')
+    parser.add_argument('--output-file', metavar='PATH', help='自動検出の結果を書き込むファイルのパス')
+    parser.add_argument('--settings-file', metavar='PATH', help='無人モードで使用する設定ファイルのパス')
+    parser.add_argument('--progress-file', metavar='PATH', help='進捗を書き込むファイルのパス')
+    args = parser.parse_args()
+
+    # ***** Windows インストーラー (Inno Setup) から実行されるエンジンモード *****
+
+    # バックエンドの自動検出
+    if args.detect_backend is not None:
+        # 検出結果を key=value 形式で出力ファイルに書き込む (Inno Setup 側でパースされる)
+        if args.output_file is None:
+            print('--output-file は必須です。')
+            sys.exit(1)
+        result = WindowsInstaller.DetectBackend(args.detect_backend)
+        WindowsInstaller.WriteKeyValue(Path(args.output_file), result)
+        sys.exit(0)
+
+    # エンコーダーの自動検出
+    elif args.detect_encoder is True:
+        # 検出結果を key=value 形式で出力ファイルに書き込む (Inno Setup 側でパースされる)
+        if args.output_file is None:
+            print('--output-file は必須です。')
+            sys.exit(1)
+        result = WindowsInstaller.DetectEncoder()
+        WindowsInstaller.WriteKeyValue(Path(args.output_file), result)
+        sys.exit(0)
+
+    # 無人モードでのインストール
+    elif args.install is True:
+        # 設定ファイルと進捗ファイルは必須
+        if args.settings_file is None or args.progress_file is None:
+            print('--settings-file と --progress-file は必須です。')
+            sys.exit(1)
+        # Inno Setup が管理者権限で実行済みのため、ここでは権限の昇格を行わずにインストールを実行する
+        exit_code = WindowsInstaller.InstallUnattended(TARGET_VERSION, Path(args.settings_file), Path(args.progress_file))
+        sys.exit(exit_code)
+
+    # ***** 対話モード *****
 
     ## KeyboardInterrupt が複数回送出されないようにする
     ## ref: https://github.com/Nuitka/Nuitka/issues/1477
