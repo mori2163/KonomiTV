@@ -127,6 +127,12 @@ declare global {
         reload(forceReload?: boolean): void;
     }
 
+    // ManagedMediaSource API
+    // ref: https://github.com/w3c/media-source/issues/320
+    interface Window {
+        ManagedMediaSource?: typeof MediaSource;
+    }
+
     // View Transitions API
     // ref: https://developer.mozilla.org/ja/docs/Web/API/View_Transitions_API
     interface Document {
@@ -136,6 +142,34 @@ declare global {
             ready: Promise<void>;
             skipTransition: () => void;
         }
+    }
+
+    // User-Agent Client Hints API
+    // ref: https://wicg.github.io/ua-client-hints/
+    interface Navigator {
+        readonly userAgentData?: NavigatorUAData;
+    }
+    interface NavigatorUAData {
+        readonly brands: NavigatorUABrandVersion[];
+        readonly mobile: boolean;
+        readonly platform: string;
+        getHighEntropyValues(hints: string[]): Promise<NavigatorUAHighEntropyValues>;
+    }
+    interface NavigatorUABrandVersion {
+        brand: string;
+        version: string;
+    }
+    interface NavigatorUAHighEntropyValues {
+        architecture?: string;
+        bitness?: string;
+        brands?: NavigatorUABrandVersion[];
+        fullVersionList?: NavigatorUABrandVersion[];
+        mobile?: boolean;
+        model?: string;
+        platform?: string;
+        platformVersion?: string;
+        uaFullVersion?: string;
+        wow64?: boolean;
     }
 
     // Virtual Keyboard API

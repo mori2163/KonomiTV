@@ -33,12 +33,12 @@ from app.constants import (
     BASE_DIR,
     DATABASE_CONFIG,
     KONOMITV_ACCESS_LOG_PATH,
-    KONOMITV_SERVER_LOG_PATH,
     LIBRARY_PATH,
     LOGGING_CONFIG,
     RESTART_REQUIRED_LOCK_PATH,
     VERSION,
 )
+from app.utils.LogRotation import SplitServerLogByDate
 
 
 # passlib が送出する bcrypt のバージョン差異による警告を無視
@@ -58,16 +58,19 @@ def main(
     version: bool = typer.Option(None, '--version', callback=version, is_eager=True, help='Show version information.'),
 ):
 
-    # 前回のログをすべて削除する
+    # 前回のログのうち、アクセスログと Akebi のログのみ削除する
+    ## サーバーログは起動時に日付別分割されるため、ここでは削除しない
     try:
-        if KONOMITV_SERVER_LOG_PATH.exists():
-            KONOMITV_SERVER_LOG_PATH.unlink()
         if KONOMITV_ACCESS_LOG_PATH.exists():
             KONOMITV_ACCESS_LOG_PATH.unlink()
         if AKEBI_LOG_PATH.exists():
             AKEBI_LOG_PATH.unlink()
     except PermissionError:
         pass
+
+    # サーバーログに過去日付のエントリが含まれている場合、日付別アーカイブに分割する
+    ## DailyRotatingFileHandler がファイルを開く前に分割を完了させるために、ロガーの初期化前に実行する必要がある
+    SplitServerLogByDate()
 
     # もし何らかの理由でロックファイルが残っていた場合は削除する
     if RESTART_REQUIRED_LOCK_PATH.exists():
@@ -135,46 +138,61 @@ def main(
 
     # ***** KonomiTV サーバーを起動 *****
 
-    # カスタム HTTPS 証明書/秘密鍵が指定されているとき
-    custom_https_certificate: list[str] = []
-    if CONFIG.server.custom_https_certificate is not None and CONFIG.server.custom_https_private_key is not None:
-        custom_https_certificate = [
-            '--custom-certificate', str(CONFIG.server.custom_https_certificate),
-            '--custom-private-key', str(CONFIG.server.custom_https_private_key),
-        ]
+    # Cloudflare Zero Trust モードが有効な場合、Akebi HTTPS Server を起動せず、
+    # Uvicorn が内部向けループバックアドレスで HTTP 待ち受けを行う
+    # ※ 既存の Windows サービス停止処理や Maintenance API のローカルバイパスは
+    #    127.0.0.77:{port+10} を前提としているため、Zero Trust モードでも維持する
+    if CONFIG.server.cloudflare_zero_trust:
+        logging.info('Cloudflare Zero Trust mode is enabled. Akebi HTTPS Server will not be started.')
+        logging.info(f'Uvicorn will listen on 127.0.0.77:{CONFIG.server.port + 10} (HTTP, internal).')
+        reverse_proxy_process = None
+        uvicorn_host = '127.0.0.77'
+        uvicorn_port = CONFIG.server.port + 10
+    else:
+        # カスタム HTTPS 証明書/秘密鍵が指定されているとき
+        custom_https_certificate: list[str] = []
+        if CONFIG.server.custom_https_certificate is not None and CONFIG.server.custom_https_private_key is not None:
+            custom_https_certificate = [
+                '--custom-certificate', str(CONFIG.server.custom_https_certificate),
+                '--custom-private-key', str(CONFIG.server.custom_https_private_key),
+            ]
 
-    # Akebi HTTPS Server (HTTPS リバースプロキシ) を起動
-    ## HTTP/2 対応と HTTPS 化を一手に行う Golang 製の特殊なリバースプロキシサーバー
-    ## ログは server/logs/Akebi-HTTPS-Server.log に出力する
-    ## ref: https://github.com/tsukumijima/Akebi
-    with open(AKEBI_LOG_PATH, mode='w', encoding='utf-8') as file:
-        reverse_proxy_process = subprocess.Popen(
-            [
-                LIBRARY_PATH['Akebi'],
-                '--listen-address', f'0.0.0.0:{CONFIG.server.port}',
-                '--proxy-pass-url', f'http://127.0.0.77:{CONFIG.server.port + 10}/',
-                '--keyless-server-url', 'https://akebi.konomi.tv/',
-                *custom_https_certificate,  # カスタム HTTPS 証明書/秘密鍵を指定する引数を追加（指定されているときのみ）
-            ],
-            stdout = file,
-            stderr = file,
-            creationflags = (subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0),  # コンソールなしで実行 (Windows)
-        )
+        # Akebi HTTPS Server (HTTPS リバースプロキシ) を起動
+        ## HTTP/2 対応と HTTPS 化を一手に行う Golang 製の特殊なリバースプロキシサーバー
+        ## ログは server/logs/Akebi-HTTPS-Server.log に出力する
+        ## ref: https://github.com/tsukumijima/Akebi
+        with open(AKEBI_LOG_PATH, mode='w', encoding='utf-8') as file:
+            reverse_proxy_process = subprocess.Popen(
+                [
+                    LIBRARY_PATH['Akebi'],
+                    '--listen-address', f'0.0.0.0:{CONFIG.server.port}',
+                    '--proxy-pass-url', f'http://127.0.0.77:{CONFIG.server.port + 10}/',
+                    '--keyless-server-url', 'https://akebi.konomi.tv/',
+                    *custom_https_certificate,  # カスタム HTTPS 証明書/秘密鍵を指定する引数を追加（指定されているときのみ）
+                ],
+                stdout = file,
+                stderr = file,
+                creationflags = (subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0),  # コンソールなしで実行 (Windows)
+            )
 
-    # このプロセスが終了されたときに、HTTPS リバースプロキシも一緒に終了する
-    atexit.register(lambda: reverse_proxy_process.terminate())
+        # このプロセスが終了されたときに、HTTPS リバースプロキシも一緒に終了する
+        atexit.register(lambda: reverse_proxy_process.terminate())
+        uvicorn_host = '127.0.0.77'
+        uvicorn_port = CONFIG.server.port + 10
 
     # Uvicorn の設定
     server_config = uvicorn.Config(
         # 起動するアプリケーション
         app = 'app.app:app',
         # リッスンするアドレス
-        ## サーバーへのすべてのアクセスには一度 Akebi のリバースプロキシを通す
+        ## Cloudflare Zero Trust モードでは Akebi を介さず、内部向けループバックで直接リッスンする
+        ## 通常モードではサーバーへのすべてのアクセスには一度 Akebi のリバースプロキシを通す
         ## 混乱を避けるため、容易にアクセスされないだろう 127.0.0.77 のみでリッスンしている
-        host = '127.0.0.77',
+        host = uvicorn_host,
         # リッスンするポート番号
-        ## 指定されたポートに 10 を足したもの
-        port = CONFIG.server.port + 10,
+        ## 通常モード/Cloudflare Zero Trust モードのどちらでも指定されたポートに 10 を足したもの
+        ## Zero Trust モードでも内部通信仕様との互換性維持のため、port + 10 を利用する
+        port = uvicorn_port,
         # 自動リロードモードモードで起動するか
         reload = reload,
         # リロードするフォルダ
@@ -231,8 +249,9 @@ def main(
         # 少し前の Uvicorn は KeyboardInterrupt を内部で握り潰していたが、最近のバージョンから送出するようになった
         pass
 
-    # HTTPS リバースプロキシを終了
-    reverse_proxy_process.terminate()
+    # HTTPS リバースプロキシを終了 (Cloudflare Zero Trust モードでは起動していないのでスキップ)
+    if reverse_proxy_process is not None:
+        reverse_proxy_process.terminate()
 
     # この時点ではタイミングの関係でまだロックファイルが作成されていないことがあるので、1秒待機する
     time.sleep(1)

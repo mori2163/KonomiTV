@@ -1,6 +1,6 @@
 
 import asyncio
-import configparser
+import math
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, cast
@@ -38,6 +38,7 @@ router = APIRouter(
 # Bitrate.ini のキャッシュ (TTL: 15分)
 _bitrate_ini_cache: dict[str, int] | None = None
 _bitrate_ini_cache_timestamp: float | None = None
+_bitrate_ini_cache_lock: asyncio.Lock | None = None
 
 
 async def DecodeEDCBReserveData(
@@ -73,7 +74,10 @@ async def DecodeEDCBReserveData(
             int: ビットレート (kbps)
         """
 
-        global _bitrate_ini_cache, _bitrate_ini_cache_timestamp
+        global _bitrate_ini_cache, _bitrate_ini_cache_timestamp, _bitrate_ini_cache_lock
+
+        if _bitrate_ini_cache_lock is None:
+            _bitrate_ini_cache_lock = asyncio.Lock()
 
         # 常時マルチチャンネル放送のため、例外的に決め打ちの値を使うチャンネルリスト
         # キー: (NID, SID), 値: ビットレート (kbps)
@@ -112,63 +116,77 @@ async def DecodeEDCBReserveData(
             # デフォルト値を返す
             return 19456
 
-        try:
-            # EDCB から Bitrate.ini を取得
-            files = await CtrlCmdUtil().sendFileCopy2(['Bitrate.ini'])
-            if files is None or len(files) == 0:
-                logging.warning('[ReservationsRouter][GetBitrateFromEDCB] Failed to get Bitrate.ini from EDCB.')
+        async with _bitrate_ini_cache_lock:
+            # ロック取得後、再度キャッシュが存在するかチェックする (キャッシュスタンピード対策)
+            current_time = time.time()
+            if (_bitrate_ini_cache is not None and
+                _bitrate_ini_cache_timestamp is not None and
+                current_time - _bitrate_ini_cache_timestamp < 900):  # 900秒 = 15分
+                # 段階的に検索: 全指定 -> SID=0xFFFF -> TSID=0xFFFF -> ONID=0xFFFF
+                for i in range(4):
+                    onid = 0xFFFF if i > 2 else network_id
+                    tsid = 0xFFFF if i > 1 else transport_stream_id
+                    sid = 0xFFFF if i > 0 else service_id
+
+                    # EpgTimer の Create64Key ロジックを移植: (onid << 32 | tsid << 16 | sid)
+                    key = f"{(onid << 32 | tsid << 16 | sid):012X}"
+
+                    if key in _bitrate_ini_cache and _bitrate_ini_cache[key] > 0:
+                        return _bitrate_ini_cache[key]
+
+                # デフォルト値を返す
                 return 19456
 
-            # ファイルデータをテキストとして解析
-            bitrate_ini_data = files[0]['data']
-            if not bitrate_ini_data:
-                logging.warning('[ReservationsRouter][GetBitrateFromEDCB] Bitrate.ini is empty.')
-                return 19456
-
-            # バイナリデータを文字列に変換 (UTF-16 BOM つきまたは UTF-8)
             try:
-                # UTF-16 BOM つきの場合
-                if bitrate_ini_data.startswith(b'\xff\xfe'):
-                    ini_text = bitrate_ini_data.decode('utf-16')
-                else:
-                    # UTF-8 として試行
-                    ini_text = bitrate_ini_data.decode('utf-8')
-            except UnicodeDecodeError:
-                # システムデフォルトエンコーディングで試行
-                ini_text = bitrate_ini_data.decode('shift_jis', errors='ignore')
+                # EDCB から Bitrate.ini を取得
+                files = await CtrlCmdUtil().sendFileCopy2(['Bitrate.ini'])
+                if files is None or len(files) == 0:
+                    logging.warning('[ReservationsRouter][GetBitrateFromEDCB] Failed to get Bitrate.ini from EDCB.')
+                    return 19456
 
-            # ConfigParser で解析
-            config = configparser.ConfigParser()
-            config.read_string(ini_text)
+                # ファイルデータをテキストとして解析
+                bitrate_ini_data = files[0]['data']
+                if not bitrate_ini_data:
+                    logging.warning('[ReservationsRouter][GetBitrateFromEDCB] Bitrate.ini is empty.')
+                    return 19456
 
-            # BITRATE セクションからビットレート情報を取得してキャッシュに保存
-            _bitrate_ini_cache = {}
-            _bitrate_ini_cache_timestamp = current_time
-            if 'BITRATE' in config:
-                for key, value in config['BITRATE'].items():
-                    try:
-                        _bitrate_ini_cache[key.upper()] = int(value)
-                    except ValueError:
-                        continue
+                # バイナリデータを文字列に変換
+                ## Linux 版 EDCB では UTF-8 (BOM なし) で返る場合があるため、
+                ## EDCBUtil 側の BOM 判定 + UTF-8 優先 + 既定エンコーディングフォールバックに統一する
+                ini_text = EDCBUtil.convertBytesToString(bitrate_ini_data)
 
-            # 段階的に検索: 全指定 -> SID=0xFFFF -> TSID=0xFFFF -> ONID=0xFFFF
-            for i in range(4):
-                onid = 0xFFFF if i > 2 else network_id
-                tsid = 0xFFFF if i > 1 else transport_stream_id
-                sid = 0xFFFF if i > 0 else service_id
+                # EDCB 由来の ini を重複キーを許容して解析
+                ## Bitrate.ini のキーは後段で大文字に変換してから参照するため、ここでは大文字小文字を保持しない
+                config = EDCBUtil.parseEDCBIni(ini_text)
 
-                # EpgTimer の Create64Key ロジックを移植: (onid << 32 | tsid << 16 | sid)
-                key = f"{(onid << 32 | tsid << 16 | sid):012X}"
+                # BITRATE セクションからビットレート情報を取得してキャッシュに保存
+                _bitrate_ini_cache = {}
+                _bitrate_ini_cache_timestamp = current_time
+                if 'BITRATE' in config:
+                    for key, value in config['BITRATE'].items():
+                        try:
+                            _bitrate_ini_cache[key.upper()] = int(value)
+                        except ValueError:
+                            continue
 
-                if key in _bitrate_ini_cache and _bitrate_ini_cache[key] > 0:
-                    return _bitrate_ini_cache[key]
+                # 段階的に検索: 全指定 -> SID=0xFFFF -> TSID=0xFFFF -> ONID=0xFFFF
+                for i in range(4):
+                    onid = 0xFFFF if i > 2 else network_id
+                    tsid = 0xFFFF if i > 1 else transport_stream_id
+                    sid = 0xFFFF if i > 0 else service_id
 
-            # 見つからない場合はデフォルト値を返す
-            return 19456
+                    # EpgTimer の Create64Key ロジックを移植: (onid << 32 | tsid << 16 | sid)
+                    key = f"{(onid << 32 | tsid << 16 | sid):012X}"
 
-        except Exception as ex:
-            logging.error('[ReservationsRouter][GetBitrateFromEDCB] Failed to parse Bitrate.ini:', exc_info=ex)
-            return 19456
+                    if key in _bitrate_ini_cache and _bitrate_ini_cache[key] > 0:
+                        return _bitrate_ini_cache[key]
+
+                # 見つからない場合はデフォルト値を返す
+                return 19456
+
+            except Exception as ex:
+                logging.error('[ReservationsRouter][GetBitrateFromEDCB] Failed to parse Bitrate.ini:', exc_info=ex)
+                return 19456
 
 
     def CalculateEstimatedFileSize(duration_seconds: float, bitrate_kbps: int, recording_mode: str) -> int:
@@ -711,18 +729,20 @@ async def GetRequiredProgramsForReservations(reserve_data_list: list[ReserveData
 
     # SQL の検索条件を生成
     ## network_id, service_id, event_id は整数値で SQL インジェクションの心配はないので直接埋め込む
-    ## Tortoise ORM の Model.raw() がパラメーターバインディング自体に対応していないのも理由
-    safe_conditions = []
+    ## 以前は OR 条件を大量に連結していたが、完全全録環境のように予約件数が多いと
+    ## SQLite の式木深さ上限 (maximum depth 1000) に到達して予約一覧 API が 500 エラーになる
+    ## そのため、同じ複合キー検索を row-value IN で表現し、式木が深くなりすぎないようにする
+    safe_program_keys = []
     for network_id, service_id, event_id in program_keys:
-        safe_conditions.append(f'(network_id = {network_id} AND service_id = {service_id} AND event_id = {event_id})')
-    if not safe_conditions:
+        safe_program_keys.append(f'({network_id}, {service_id}, {event_id})')
+    if not safe_program_keys:
         return {}
 
     # 高速化のため生 SQL クエリを実行
     sql = f'''
         SELECT *
         FROM programs
-        WHERE {' OR '.join(safe_conditions)}
+        WHERE (network_id, service_id, event_id) IN ({', '.join(safe_program_keys)})
     '''
     programs = cast(list[Program], await Program.raw(sql))
 
@@ -962,6 +982,18 @@ async def ReservationsAPI(
         # None が返ってきた場合は空のリストを返す
         return schemas.Reservations(total=0, reservations=[])
 
+    # 録画中判定が必要な予約のみ EDCB へ問い合わせる
+    ## 必要最小限の予約に絞ることで、視聴中の定期更新時の EDCB 負荷を抑える
+    ## データベーストランザクション外で実行し、かつ並列にリクエストすることで通信によるトランザクションの長時間ブロックを防ぐ
+    is_recording_in_progress_tasks = []
+    for reserve_data in reserve_data_list:
+        is_recording_in_progress_tasks.append(GetIsRecordingInProgress(reserve_data, edcb))
+
+    is_recording_in_progress_results = await asyncio.gather(*is_recording_in_progress_tasks)
+    is_recording_in_progress_by_reserve_id: dict[int, bool] = {}
+    for i, reserve_data in enumerate(reserve_data_list):
+        is_recording_in_progress_by_reserve_id[reserve_data['reserve_id']] = is_recording_in_progress_results[i]
+
     # データベースアクセスを伴うので、トランザクション下に入れた上で並行して行う
     async with transactions.in_transaction():
 
@@ -970,12 +1002,6 @@ async def ReservationsAPI(
 
         # 高速化のため、録画予約に必要な番組情報を一括取得しておく
         programs = await GetRequiredProgramsForReservations(reserve_data_list)
-
-        # 録画中判定が必要な予約のみ EDCB へ問い合わせる
-        # 必要最小限の予約に絞ることで、視聴中の定期更新時の EDCB 負荷を抑える
-        is_recording_in_progress_by_reserve_id: dict[int, bool] = {}
-        for reserve_data in reserve_data_list:
-            is_recording_in_progress_by_reserve_id[reserve_data['reserve_id']] = await GetIsRecordingInProgress(reserve_data, edcb)
 
         # EDCB の ReserveData オブジェクトを schemas.Reservation オブジェクトに変換
         reserves = await asyncio.gather(*(
@@ -1007,27 +1033,6 @@ async def AddReservationAPI(
     録画予約を追加する。
     """
 
-    # 指定された番組 ID の番組があるかを確認
-    program = await Program.filter(id=reserve_add_request.program_id).get_or_none()
-    if program is None:
-        logging.error(f'[ReservesRouter][AddReserveAPI] Specified program was not found. [program_id: {reserve_add_request.program_id}]')
-        raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail = 'Specified program was not found',
-        )
-
-    # 指定された番組 ID に関連付けられたチャンネルがあるかを確認
-    channel = await Channel.filter(id=program.channel_id).get_or_none()
-    if channel is None:
-        logging.error(f'[ReservesRouter][AddReserveAPI] Specified channel was not found. [channel_id: {program.channel_id}]')
-        raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail = 'Specified channel was not found',
-        )
-
-    # EDCB バックエンド利用時は必ずチャンネル情報に transport_stream_id が含まれる
-    assert channel.transport_stream_id is not None, 'transport_stream_id is missing.'
-
     def HasSameReservation(
         reserve_data_list: list[ReserveDataRequired],
         network_id: int,
@@ -1057,48 +1062,154 @@ async def AddReservationAPI(
                 return True
         return False
 
-    # すでに同じ番組 ID の録画予約が存在するかを確認
-    reserve_data_list = await GetReserveDataList(edcb)
-    if HasSameReservation(
-        reserve_data_list,
-        channel.network_id,
-        channel.transport_stream_id,
-        channel.service_id,
-        program.event_id,
-    ) is True:
-        logging.error(f'[ReservationsRouter][AddReserveAPI] The same program_id is already reserved. [program_id: {reserve_add_request.program_id}]')
-        raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail = 'The same program_id is already reserved',
-        )
+    # 指定された番組 ID の番組が DB にある場合は、従来通り EDCB の EPG 情報で補正する
+    program = await Program.filter(id=reserve_add_request.program_id).get_or_none()
+    if program is not None:
+        # 指定された番組 ID に関連付けられたチャンネルがあるかを確認
+        channel = await Channel.filter(id=program.channel_id).get_or_none()
+        if channel is None:
+            logging.error(f'[ReservesRouter][AddReserveAPI] Specified channel was not found. [channel_id: {program.channel_id}]')
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified channel was not found',
+            )
 
-    # EDCB から録画予約対象の番組に一致する ServiceEventInfo を取得
-    ## KonomiTV のデータベースに保存されているチャンネル名・番組名は表示上に半角に加工されているため、EDCB に設定するには不適切
-    ## 内部仕様がわからないけど予約に設定されている番組名と EPG 上の番組名が異なると予期せぬ問題が発生しそうな気もする
-    ## それ以外にも KonomiTV 側に保存されている情報が古くなっている可能性もあるため、毎回 EDCB から最新の情報を取得する
-    service_event_info, event_info = await GetServiceEventInfo(channel, program, edcb)
+        # EDCB に予約を投入するには TSID が必須
+        # 通常 EDCB バックエンドであればチャンネル情報に必ず TSID が設定されているはずなので通常発生し得ないエラー
+        if channel.transport_stream_id is None:
+            logging.error(f'[ReservationsRouter][AddReserveAPI] Specified channel does not have transport_stream_id. [channel_id: {channel.id}]')
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified channel does not have transport_stream_id',
+            )
 
-    # ReserveData オブジェクトに設定するチャンネル情報・番組情報を取得
-    ## 放送時間未定運用などでごく稀に取得できないことも考えられるため、その場合は KonomiTV 側が持っている情報にフォールバックする
-    ## 当然 TSInformation.formatString() はかけずにそのままの情報を使う
-    ## ref: https://github.com/EMWUI/EDCB_Material_WebUI/blob/master/HttpPublic/api/SetReserve#L4-L39
-    title: str = program.title
-    start_time: datetime = NormalizeToJSTDatetime(program.start_time)
-    duration_second: int = max(int(program.duration), 1)
-    station_name: str = service_event_info['service_info']['service_name']
-    event_id: int = program.event_id
-    if 'short_info' in event_info and 'event_name' in event_info['short_info']:
-        title = event_info['short_info']['event_name']
-    if 'start_time' in event_info:
-        start_time = NormalizeToJSTDatetime(event_info['start_time'])
-    if 'duration_sec' in event_info:
-        duration_second = max(event_info['duration_sec'], 1)
-    if 'eid' in event_info:
-        event_id = event_info['eid']
+        # すでに同じ番組 ID の録画予約が存在するかを確認
+        reserve_data_list = await GetReserveDataList(edcb)
+        if HasSameReservation(
+            reserve_data_list,
+            channel.network_id,
+            channel.transport_stream_id,
+            channel.service_id,
+            program.event_id,
+        ) is True:
+            logging.error(f'[ReservationsRouter][AddReserveAPI] The same program_id is already reserved. [program_id: {reserve_add_request.program_id}]')
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'The same program_id is already reserved',
+            )
+
+        # EDCB から録画予約対象の番組に一致する ServiceEventInfo を取得
+        ## KonomiTV のデータベースに保存されているチャンネル名・番組名は表示上に半角に加工されているため、EDCB に設定するには不適切
+        ## 内部仕様がわからないけど予約に設定されている番組名と EPG 上の番組名が異なると予期せぬ問題が発生しそうな気もする
+        ## それ以外にも KonomiTV 側に保存されている情報が古くなっている可能性もあるため、毎回 EDCB から最新の情報を取得する
+        service_event_info, event_info = await GetServiceEventInfo(channel, program, edcb)
+
+        # ReserveData オブジェクトに設定するチャンネル情報・番組情報を取得
+        ## 放送時間未定運用などでごく稀に取得できないことも考えられるため、その場合は KonomiTV 側が持っている情報にフォールバックする
+        ## 当然 TSInformation.formatString() はかけずにそのままの情報を使う
+        ## ref: https://github.com/EMWUI/EDCB_Material_WebUI/blob/master/HttpPublic/api/SetReserve#L4-L39
+        title: str = program.title
+        start_time: datetime = NormalizeToJSTDatetime(program.start_time)
+        duration_second: int = max(int(program.duration), 1)
+        station_name: str = service_event_info['service_info']['service_name']
+        event_id: int = program.event_id
+        requested_event_id: int = program.event_id
+        if 'short_info' in event_info and 'event_name' in event_info['short_info']:
+            title = event_info['short_info']['event_name']
+        if 'start_time' in event_info:
+            start_time = NormalizeToJSTDatetime(event_info['start_time'])
+        if 'duration_sec' in event_info:
+            duration_second = max(event_info['duration_sec'], 1)
+        if 'eid' in event_info:
+            event_id = event_info['eid']
+    else:
+        # DB に未反映の EIT[p/f] 由来番組は、クライアントから渡された最小情報で ReserveData を作る
+        ## EpgTimerSrv は EPG データベースに番組情報が登録されていなくても録画予約を投入できる仕様らしい（実際どの程度動くのか不明）
+        program_payload = reserve_add_request.program
+        if program_payload is None:
+            logging.error(f'[ReservesRouter][AddReserveAPI] Specified program was not found. [program_id: {reserve_add_request.program_id}]')
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified program was not found',
+            )
+
+        # TSID は IProgram には含まれないため、必ず DB の Channel から取得する
+        channel = await Channel.filter(id=program_payload.channel_id).get_or_none()
+        if channel is None:
+            logging.error(f'[ReservesRouter][AddReserveAPI] Specified channel was not found. [channel_id: {program_payload.channel_id}]')
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified channel was not found',
+            )
+
+        # EDCB に予約を投入するには TSID が必須
+        # 通常 EDCB バックエンドであればチャンネル情報に必ず TSID が設定されているはずなので通常発生し得ないエラー
+        if channel.transport_stream_id is None:
+            logging.error(f'[ReservationsRouter][AddReserveAPI] Specified channel does not have transport_stream_id. [channel_id: {channel.id}]')
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified channel does not have transport_stream_id',
+            )
+
+        # クライアントから送られたペイロードと DB 上の Channel が食い違う場合は、別チャンネルの番組を誤予約するため拒否する
+        if (program_payload.id != reserve_add_request.program_id or
+            program_payload.channel_id != channel.id or
+            program_payload.network_id != channel.network_id or
+            program_payload.service_id != channel.service_id):
+            logging.error(
+                f'[ReservationsRouter][AddReserveAPI] Program payload does not match channel. [program_id: {reserve_add_request.program_id} / payload_channel_id: {program_payload.channel_id} / channel_id: {channel.id} / payload_network_id: {program_payload.network_id} / channel_network_id: {channel.network_id} / payload_service_id: {program_payload.service_id} / channel_service_id: {channel.service_id}]',
+            )
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Program payload does not match channel',
+            )
+
+        # duration が未定の EIT[p/f] は EDCB に投入する録画時間を決められないため、サーバー側でも拒否する
+        if math.isfinite(program_payload.duration) is False or program_payload.duration <= 0:
+            logging.error(
+                f'[ReservationsRouter][AddReserveAPI] Specified program duration is unknown. [program_id: {reserve_add_request.program_id} / duration: {program_payload.duration}]',
+            )
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified program duration is unknown',
+            )
+
+        title = program_payload.title
+        start_time = NormalizeToJSTDatetime(program_payload.start_time)
+        duration_second = int(program_payload.duration)
+        station_name = channel.name
+        event_id = program_payload.event_id
+        requested_event_id = program_payload.event_id  # この後の処理での比較用
+        reserve_end_time = start_time + timedelta(seconds=duration_second)
+
+        # 放送終了後の ReserveData は EpgTimerSrv 側で拒否されるため、送る前に明示的に止める
+        if datetime.now(JST) >= reserve_end_time:
+            logging.error(
+                f'[ReservationsRouter][AddReserveAPI] Specified program has already ended. [program_id: {reserve_add_request.program_id} / event_id: {event_id} / start_time: {start_time.isoformat()} / duration_second: {duration_second}]',
+            )
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'Specified program has already ended',
+            )
+
+        # すでに同じ ONID/TSID/SID/EID の録画予約が存在するかを確認
+        reserve_data_list = await GetReserveDataList(edcb)
+        if HasSameReservation(
+            reserve_data_list,
+            channel.network_id,
+            channel.transport_stream_id,
+            channel.service_id,
+            event_id,
+        ) is True:
+            logging.error(f'[ReservationsRouter][AddReserveAPI] The same program_id is already reserved. [program_id: {reserve_add_request.program_id}]')
+            raise HTTPException(
+                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail = 'The same program_id is already reserved',
+            )
 
     # 実際に予約するイベント ID がリクエストされたイベント ID と異なる場合は重複チェックをやり直す
     ## EPG 更新の遅延でフロントエンドが持つ EID が古い場合で、現在放送中のイベントへフェイルオーバーした時に二重予約を防ぐ
-    if event_id != program.event_id:
+    if event_id != requested_event_id:
         if HasSameReservation(
             reserve_data_list,
             channel.network_id,
@@ -1107,7 +1218,7 @@ async def AddReservationAPI(
             event_id,
         ) is True:
             logging.error(
-                f'[ReservationsRouter][AddReserveAPI] The fallback event is already reserved. [program_id: {reserve_add_request.program_id} / requested_event_id: {program.event_id} / resolved_event_id: {event_id}]',
+                f'[ReservationsRouter][AddReserveAPI] The fallback event is already reserved. [program_id: {reserve_add_request.program_id} / requested_event_id: {requested_event_id} / resolved_event_id: {event_id}]',
             )
             raise HTTPException(
                 status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1187,7 +1298,7 @@ async def AddReservationAPI(
             )
 
         logging.error(
-            f'[ReservationsRouter][AddReserveAPI] Failed to add a recording reservation. [program_id: {reserve_add_request.program_id} / requested_event_id: {program.event_id} / resolved_event_id: {event_id} / start_time: {start_time.isoformat()} / duration_second: {duration_second}]',
+            f'[ReservationsRouter][AddReserveAPI] Failed to add a recording reservation. [program_id: {reserve_add_request.program_id} / requested_event_id: {requested_event_id} / resolved_event_id: {event_id} / start_time: {start_time.isoformat()} / duration_second: {duration_second}]',
         )
         raise HTTPException(
             status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,

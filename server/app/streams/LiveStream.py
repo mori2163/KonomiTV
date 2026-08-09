@@ -15,6 +15,7 @@ from app.constants import QUALITY_TYPES
 from app.schemas import LiveStreamStatus
 from app.streams.LiveEncodingTask import LiveEncodingTask
 from app.streams.LivePSIDataArchiver import LivePSIDataArchiver
+from app.streams.StreamEncodingOptions import StreamEncodingOptions
 from app.utils.edcb.EDCBTuner import EDCBTuner
 
 
@@ -108,11 +109,18 @@ class LiveStream:
 
 
     # 必ずライブストリーム ID ごとに1つのインスタンスになるように (Singleton)
-    def __new__(cls, display_channel_id: str, quality: QUALITY_TYPES) -> LiveStream:
+    def __new__(
+        cls,
+        display_channel_id: str,
+        quality: QUALITY_TYPES,
+        encoding_options: StreamEncodingOptions | None = None,
+    ) -> LiveStream:
 
         # まだ同じライブストリーム ID のインスタンスがないときだけ、インスタンスを生成する
-        # (チャンネルID)-(映像の品質) で一意な ID になる
-        live_stream_id = f'{display_channel_id}-{quality}'
+        # (チャンネル ID)-(映像の品質)-(追加エンコードオプション) で一意な ID になる
+        if encoding_options is None:
+            encoding_options = StreamEncodingOptions()
+        live_stream_id = f'{display_channel_id}-{quality}{encoding_options.buildSuffix()}'
         if live_stream_id not in cls.__instances:
 
             # 新しいライブストリームのインスタンスを生成する
@@ -124,6 +132,7 @@ class LiveStream:
             # チャンネル ID と映像の品質を設定
             instance.display_channel_id = display_channel_id
             instance.quality = quality
+            instance.encoding_options = encoding_options
 
             # ライブストリームクライアントが入るリスト
             ## クライアントの接続が切断された場合、このリストからも削除される
@@ -149,8 +158,14 @@ class LiveStream:
             instance._stream_data_written_at = 0
 
             # 実行中の LiveEncodingTask のタスクへの参照
+            ## ライブ再生では LiveEncodingTask.run() 自体が再起動制御まで内包しており、
+            ## self._live_encoding_task_ref.cancel() は停止が間に合わなかった場合の保険としての非同期タスクキャンセルなので、
+            ## VideoStream と異なり LiveEncodingTask インスタンス自体の参照は保持しない設計としている
             # ref: https://docs.astral.sh/ruff/rules/asyncio-dangling-task/
             instance._live_encoding_task_ref = None
+            # 終了待機がタイムアウトした古い LiveEncodingTask のタスクへの参照
+            # イベントループ上の Task は弱参照で管理されるため、自然終了するまでここで強参照を保持する
+            instance._detached_live_encoding_task_refs = set()
 
             # PSI/SI データアーカイバーのインスタンス
             ## LiveStreamsRouter からアクセスする必要があるためここに設置している
@@ -171,13 +186,19 @@ class LiveStream:
         return cls.__instances[live_stream_id]
 
 
-    def __init__(self, display_channel_id: str, quality: QUALITY_TYPES) -> None:
+    def __init__(
+        self,
+        display_channel_id: str,
+        quality: QUALITY_TYPES,
+        encoding_options: StreamEncodingOptions | None = None,
+    ) -> None:
         """
         ライブストリームのインスタンスを取得する
 
         Args:
             display_channel_id (str): チャンネルID
             quality (QUALITY_TYPES): 映像の品質 (1080p-60fps ~ 240p)
+            encoding_options (StreamEncodingOptions | None): ベース画質に追加するエンコードオプション
         """
 
         # インスタンス変数の型ヒントを定義
@@ -185,6 +206,7 @@ class LiveStream:
         self.live_stream_id: str
         self.display_channel_id: str
         self.quality: QUALITY_TYPES
+        self.encoding_options: StreamEncodingOptions
         self._clients: list[LiveStreamClient]
         self._status: Literal['Offline', 'Standby', 'ONAir', 'Idling', 'Restart']
         self._detail: str
@@ -192,9 +214,52 @@ class LiveStream:
         self._updated_at: float
         self._stream_data_written_at: float
         self._live_encoding_task_ref: asyncio.Task[None] | None
+        self._detached_live_encoding_task_refs: set[asyncio.Task[None]]
         self.psi_data_archiver: LivePSIDataArchiver | None
         self.tuner: EDCBTuner | None
         self._tuner_lock: asyncio.Lock
+
+
+    @property
+    def log_prefix(self) -> str:
+        """
+        ログのプレフィックス
+        """
+
+        return f'[Live: {self.live_stream_id}]'
+
+
+    def __registerLiveEncodingTaskRef(self, live_encoding_task_ref: asyncio.Task[None]) -> None:
+        """
+        LiveEncodingTask の完了時に不要な参照を解放するコールバックを登録する
+
+        Args:
+            live_encoding_task_ref (asyncio.Task[None]): 参照管理対象の LiveEncodingTask
+        """
+
+        def OnLiveEncodingTaskDone(done_task: asyncio.Task[None]) -> None:
+            self._detached_live_encoding_task_refs.discard(done_task)
+            # 現在実行中の LiveEncodingTask のタスクが終了待機を打ち切ったタスクだった場合は、その参照を None にする
+            if self._live_encoding_task_ref == done_task:
+                self._live_encoding_task_ref = None
+
+        live_encoding_task_ref.add_done_callback(OnLiveEncodingTaskDone)
+
+
+    def __detachLiveEncodingTaskRef(self, live_encoding_task_ref: asyncio.Task[None]) -> None:
+        """
+        終了待機を打ち切った LiveEncodingTask のタスクへの参照を保持する
+
+        Args:
+            live_encoding_task_ref (asyncio.Task[None]): 自然終了待ちに移行する LiveEncodingTask
+        """
+
+        # すでに完了済みのタスクなら done callback 側で参照は解放済みなので、保持し直す必要はない
+        if live_encoding_task_ref.done() is True:
+            return
+
+        # 終了待機を打ち切った LiveEncodingTask のタスクへの参照を保持する
+        self._detached_live_encoding_task_refs.add(live_encoding_task_ref)
 
 
     @classmethod
@@ -370,20 +435,23 @@ class LiveStream:
 
                         # 実行中のタスクがあればキャンセルする
                         if live_stream._live_encoding_task_ref is not None:
-                            live_stream._live_encoding_task_ref.cancel()
+                            old_live_encoding_task = live_stream._live_encoding_task_ref
+                            old_live_encoding_task.cancel()
 
                             # タスクの完了を最大 10 秒待つ
                             ## エンコーダープロセスの kill とバックグラウンドタスクの完了を含め、通常は 0.5 秒程度で完了する
                             ## EDCB との通信ハングなどで無期限にブロックされることを防ぐためにタイムアウトを設ける
                             ## asyncio.wait() はタスクの状態を変更しないため、タイムアウトしても旧タスクは自然終了を続ける
                             done, _ = await asyncio.wait(
-                                {live_stream._live_encoding_task_ref},
+                                {old_live_encoding_task},
                                 timeout=10.0,
                             )
                             if not done:
-                                logging.warning(f'[Live: {live_stream.live_stream_id}] Encoding task cleanup did not complete within 10 seconds.')
+                                live_stream.__detachLiveEncodingTaskRef(old_live_encoding_task)
+                                logging.warning(f'{live_stream.log_prefix} Encoding task cleanup did not complete within 10 seconds.')
 
-                            live_stream._live_encoding_task_ref = None
+                            if live_stream._live_encoding_task_ref == old_live_encoding_task:
+                                live_stream._live_encoding_task_ref = None
 
                         # チューナーインスタンスを移譲する
                         self.tuner = live_stream.tuner
@@ -425,6 +493,7 @@ class LiveStream:
             if should_start_task is True:
                 instance = LiveEncodingTask(self)
                 self._live_encoding_task_ref = asyncio.create_task(instance.run())
+                self.__registerLiveEncodingTaskRef(self._live_encoding_task_ref)
 
         # ***** クライアントの登録 *****
 
@@ -432,7 +501,7 @@ class LiveStream:
         async with self._tuner_lock:
             client = LiveStreamClient(self, client_type)
             self._clients.append(client)
-            logging.info(f'[Live: {self.live_stream_id}] Client Connected. Client ID: {client.client_id}')
+            logging.info(f'{self.log_prefix} Client Connected. Client ID: {client.client_id}')
 
         # ***** アイドリングからの復帰 *****
 
@@ -458,7 +527,7 @@ class LiveStream:
         ## すでにタイムアウトなどで削除されていたら何もしない
         try:
             self._clients.remove(client)
-            logging.info(f'[Live: {self.live_stream_id}] Client Disconnected. Client ID: {client.client_id}')
+            logging.info(f'{self.log_prefix} Client Disconnected. Client ID: {client.client_id}')
         except ValueError:
             pass
         del client
@@ -535,11 +604,11 @@ class LiveStream:
 
         # ステータス変更のログを出力
         if quiet is False:
-            logging.info(f'[Live: {self.live_stream_id}] [Status: {status}] {detail}')
+            logging.info(f'{self.log_prefix} [Status: {status}] {detail}')
 
         # ストリーム起動完了時 (Standby → ONAir) 時のみ、ストリームの起動にかかった時間も出力
         if self._status == 'Standby' and status == 'ONAir':
-            logging.info(f'[Live: {self.live_stream_id}] Startup complete. ({round(time.time() - self._started_at, 2)} sec)')
+            logging.info(f'{self.log_prefix} Startup complete. ({round(time.time() - self._started_at, 2)} sec)')
 
         # ログ出力を待ってからステータスと詳細をライブストリームにセット
         self._status = status
@@ -573,7 +642,7 @@ class LiveStream:
         return self._stream_data_written_at
 
 
-    async def writeStreamData(self, stream_data: bytes) -> None:
+    def writeStreamData(self, stream_data: bytes) -> None:
         """
         接続している全ての mpegts クライアントの Queue にストリームデータを書き込む
         同時にストリームデータの最終書き込み時刻を更新し、クライアントがタイムアウトしていたら削除する
@@ -595,7 +664,7 @@ class LiveStream:
             ## 主にネットワークが切断されたなどの理由で発生する
             if now - client.stream_data_read_at > timeout:
                 self._clients.remove(client)
-                logging.info(f'[Live: {self.live_stream_id}] Client Disconnected (Timeout). Client ID: {client.client_id}')
+                logging.info(f'{self.log_prefix} Client Disconnected (Timeout). Client ID: {client.client_id}')
                 del client
                 continue
 

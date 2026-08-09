@@ -8,6 +8,8 @@ on:
       - master
     paths:
       - '.github/workflows/build_thirdparty.yaml'
+      - '.github/workflows/scripts/build_intel_media_stack_standalone.sh'
+      - '.github/workflows/patches/**'
   workflow_call:
   workflow_dispatch:
 
@@ -15,42 +17,42 @@ on:
 env:
   # Python のバージョン (Python Standalone Builds のリリースを指定する)
   ## ref: https://github.com/indygreg/python-build-standalone/releases
-  PYTHON_TAG: '20251031'
+  PYTHON_TAG: '20260610'
   PYTHON_MAJOR_VERSION: '3.11'
-  PYTHON_VERSION: '3.11.14'
+  PYTHON_VERSION: '3.11.15'
   # Poetry のバージョン
   POETRY_VERSION: '1.8.5'
   # FFmpeg のバージョン (FFmpeg-Builds のリリースを指定する)
   ## FFmpeg-Builds は毎月末のリリースが長期間保持されるため、基本毎月末のリリースを指定する
-  ## FFMPEG_HWENCC_* は QSVEncC・NVEncC・VCEEncC (for Ubuntu 20.04 LTS) が依存する FFmpeg のバージョンを示す
-  ## FFmpeg-Builds の最新リリースでは FFmpeg 4.4 系がビルドされなくなったため、FFMPEG_HWENCC_* は 4.4 系の最終ビルドで固定されている
-  ## (正確には Ubuntu 20.04 LTS で入る FFmpeg は 4.2 系だが、FFmpeg 4.x 系であれば ABI 互換性があるため 4.4 系でも動作する)
+  ## Linux 版の最新 HWEncC バイナリは libav* を静的リンクするようになり、FFmpeg 共有ライブラリの別途同梱は不要になった
   ## ref: https://github.com/BtbN/FFmpeg-Builds/releases
-  FFMPEG_TAG: 'autobuild-2025-12-31-14-28'
+  FFMPEG_TAG: 'autobuild-2026-05-31-13-22'
   FFMPEG_MAJOR_VERSION: '7.1'
-  FFMPEG_VERSION: '7.1.3-22-g40b336e650'
-  FFMPEG_HWENCC_TAG: 'autobuild-2024-03-31-17-28'
-  FFMPEG_HWENCC_MAJOR_VERSION: '4.4'
-  FFMPEG_HWENCC_VERSION: '4.4.4-94-g5d07afd482'
+  FFMPEG_VERSION: '7.1.4-7-gadcf20da26'
   # QSVEncC・NVEncC・VCEEncC・rkmppenc のバージョン
   ## ref: https://github.com/rigaya/QSVEnc/releases
   ## ref: https://github.com/rigaya/NVEnc/releases
   ## ref: https://github.com/rigaya/VCEEnc/releases
   ## ref: https://github.com/rigaya/rkmppenc/releases
-  QSVENCC_VERSION: '8.04'
-  NVENCC_VERSION: '9.10'
-  VCEENCC_VERSION: '9.01'  # ドライバのバージョン要件が上げられているので当面 9.01 で固定
-  RKMPPENC_VERSION: '0.17'
-  # libmediainfo のバージョン
-  ## Windows 版の pymediainfo (ビルド済みの MediaInfo.dll が同梱されている) とバージョンを合わせる
-  ## ref: https://github.com/sbraz/pymediainfo/blob/v6.0.1/appveyor.yml#L6
-  LIBMEDIAINFO_VERSION: '22.09'
+  QSVENCC_VERSION: '8.16'
+  NVENCC_VERSION: '9.19'
+  VCEENCC_VERSION: '9.06'
+  RKMPPENC_VERSION: '0.18'
+  # QSVEncC 向け Intel Media Stack の固定バージョン
+  ## 旧世代 iGPU との後方互換性を鑑み、各ライブラリのバージョンを動作検証済みの組み合わせへ固定する
+  ## 概ね 2026/04 時点で Intel の APT リポジトリにて公開されている最新バージョンと同一
+  ## Intel Media Driver には Arrow Lake 環境で --vpp-deinterlace がクラッシュする問題の修正パッチを適用した状態でビルドする
+  INTEL_GMMLIB_TAG: 'intel-gmmlib-22.7.2'
+  INTEL_LIBVA_TAG: '2.22.0'
+  INTEL_MEDIA_DRIVER_TAG: 'intel-media-25.2.4'
+  INTEL_MEDIASDK_TAG: 'intel-mediasdk-23.2.2'
+  INTEL_ONEVPL_GPU_TAG: 'intel-onevpl-25.4.6'
   # Akebi HTTPS Server ビルド用の Golang のバージョン
   GOLANG_VERSION: '1.23.8'
   # ビルド対象の tsreadex・psisiarc・psisimux・Akebi のコミットハッシュ
-  TSREADEX_COMMIT_HASH: 'eddc8bca0de99627d3867259e7a6e777cbd3b3c6'
+  TSREADEX_COMMIT_HASH: 'a82528ccb698fcd07b4da1bb2243e63d685c34a7'
   PSISIARC_COMMIT_HASH: '6593a0f63aedaaecfac7682b51e267874a8ec549'
-  PSISIMUX_COMMIT_HASH: '1a01a38886dc41bac81d547ba31fa9eef1bad46b'
+  PSISIMUX_COMMIT_HASH: '18c3c020e51e16804340c834835e0cfd72c8b50d'
   AKEBI_COMMIT_HASH: 'be986980f7a560b4f74eefcfa2cd474f892f3bc7'
 
 # ジョブの定義
@@ -127,7 +129,7 @@ jobs:
         run: |
 
           # FFmpeg のアーカイブのダウンロード
-          curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.zip
+          curl -fSLO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.zip
           7z x -y ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.zip
           mkdir thirdparty/FFmpeg/
           cp ffmpeg-n${{ env.FFMPEG_VERSION }}-win64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/bin/* thirdparty/FFmpeg/
@@ -135,32 +137,32 @@ jobs:
           rm thirdparty/FFmpeg/ffplay.exe
 
           # QSVEncC のアーカイブのダウンロード
-          curl -LO https://github.com/rigaya/QSVEnc/releases/download/${{ env.QSVENCC_VERSION }}/QSVEncC_${{ env.QSVENCC_VERSION }}_x64.7z
+          curl -fSLO https://github.com/rigaya/QSVEnc/releases/download/${{ env.QSVENCC_VERSION }}/QSVEncC_${{ env.QSVENCC_VERSION }}_x64.7z
           7z x -y -o"thirdparty/QSVEncC" QSVEncC_${{ env.QSVENCC_VERSION }}_x64.7z
           rm -Force thirdparty/QSVEncC/hdr10plus_gen.exe -ErrorAction SilentlyContinue
           mv thirdparty/QSVEncC/QSVEncC64.exe thirdparty/QSVEncC/QSVEncC.exe
-          curl -L -o thirdparty/QSVEncC/License.txt https://raw.githubusercontent.com/rigaya/QSVEnc/master/license.txt
+          curl -fSL -o thirdparty/QSVEncC/License.txt https://raw.githubusercontent.com/rigaya/QSVEnc/master/license.txt
 
           # NVEncC のアーカイブのダウンロード
-          curl -LO https://github.com/rigaya/NVEnc/releases/download/${{ env.NVENCC_VERSION }}/NVEncC_${{ env.NVENCC_VERSION }}_x64.7z
+          curl -fSLO https://github.com/rigaya/NVEnc/releases/download/${{ env.NVENCC_VERSION }}/NVEncC_${{ env.NVENCC_VERSION }}_x64.7z
           7z x -y -o"thirdparty/NVEncC" NVEncC_${{ env.NVENCC_VERSION }}_x64.7z
           rm -Force thirdparty/NVEncC/hdr10plus_gen.exe -ErrorAction SilentlyContinue
           mv thirdparty/NVEncC/NVEncC64.exe thirdparty/NVEncC/NVEncC.exe
-          curl -L -o thirdparty/NVEncC/License.txt https://raw.githubusercontent.com/rigaya/NVEnc/master/NVEnc_license.txt
+          curl -fSL -o thirdparty/NVEncC/License.txt https://raw.githubusercontent.com/rigaya/NVEnc/master/NVEnc_license.txt
 
           # VCEEncC のアーカイブのダウンロード
-          curl -LO https://github.com/rigaya/VCEEnc/releases/download/${{ env.VCEENCC_VERSION }}/VCEEncC_${{ env.VCEENCC_VERSION }}_x64.7z
+          curl -fSLO https://github.com/rigaya/VCEEnc/releases/download/${{ env.VCEENCC_VERSION }}/VCEEncC_${{ env.VCEENCC_VERSION }}_x64.7z
           7z x -y -o"thirdparty/VCEEncC" VCEEncC_${{ env.VCEENCC_VERSION }}_x64.7z
           rm -Force thirdparty/VCEEncC/hdr10plus_gen.exe -ErrorAction SilentlyContinue
           mv thirdparty/VCEEncC/VCEEncC64.exe thirdparty/VCEEncC/VCEEncC.exe
-          curl -L -o thirdparty/VCEEncC/License.txt https://raw.githubusercontent.com/rigaya/VCEEnc/master/VCEEnc_license.txt
+          curl -fSL -o thirdparty/VCEEncC/License.txt https://raw.githubusercontent.com/rigaya/VCEEnc/master/VCEEnc_license.txt
 
       # Python Standalone Builds のダウンロードと poetry のインストール
       - name: Install Python Standalone Builds & pip & poetry
         run: |
 
           # Python 本体のダウンロード
-          curl -L -o python.tar.gz https://github.com/indygreg/python-build-standalone/releases/download/${{ env.PYTHON_TAG }}/cpython-${{ env.PYTHON_VERSION }}+${{ env.PYTHON_TAG }}-x86_64-pc-windows-msvc-install_only_stripped.tar.gz
+          curl -fSL -o python.tar.gz https://github.com/indygreg/python-build-standalone/releases/download/${{ env.PYTHON_TAG }}/cpython-${{ env.PYTHON_VERSION }}+${{ env.PYTHON_TAG }}-x86_64-pc-windows-msvc-install_only_stripped.tar.gz
           tar xvf python.tar.gz
           mv python/ thirdparty/Python/
           Rename-Item thirdparty/Python/LICENSE.txt License.txt
@@ -204,6 +206,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
 
+      # build_thirdparty.yaml から参照する script / patch を使うため、リポジトリをチェックアウト
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       # Docker Buildx のセットアップ
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -234,6 +240,15 @@ jobs:
       # サードパーティーライブラリの配置フォルダを作成
       - name: Create Thirdparty Folder
         run: mkdir thirdparty/
+
+      # Intel Media Stack ビルド成果物のキャッシュを復元 (x64 のみ)
+      # 同一バージョン構成であれば再ビルドを省略し、CI 時間を短縮する
+      - name: Restore Intel Media Stack Build Cache (for x64)
+        if: matrix.arch == 'amd64'
+        uses: actions/cache@v4
+        with:
+          path: intel-media-stack/artifact
+          key: intel-media-stack-${{ matrix.arch }}-${{ env.INTEL_GMMLIB_TAG }}-${{ env.INTEL_LIBVA_TAG }}-${{ env.INTEL_MEDIA_DRIVER_TAG }}-${{ env.INTEL_MEDIASDK_TAG }}-${{ env.INTEL_ONEVPL_GPU_TAG }}-${{ hashFiles('.github/workflows/scripts/build_intel_media_stack_standalone.sh', '.github/workflows/patches/**') }}
 
       # tsreadex のビルド
       - name: Build tsreadex
@@ -298,7 +313,7 @@ jobs:
           chmod a+x ../thirdparty/Akebi/akebi-https-server.elf
           cp License.txt ../thirdparty/Akebi/
 
-      # FFmpeg・QSVEncC・NVEncC・VCEEncC のアーカイブのダウンロードと配置
+      # FFmpeg・QSVEncC・NVEncC・VCEEncC のアーカイブのダウンロードと配置 (x64 のみ)
       # ドライバさえ入っていればスタンドアローンで実行できるように構成を工夫している
       - name: Download and Deploy Encoder Archives (for x64)
         if: matrix.arch == 'amd64'
@@ -312,7 +327,7 @@ jobs:
           sudo apt-get install -y p7zip-full patchelf
 
           # FFmpeg のアーカイブのダウンロード
-          curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
+          curl -fSLO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
           tar xvf ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
           mkdir thirdparty/FFmpeg/
           cp ffmpeg-n${{ env.FFMPEG_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/bin/* thirdparty/FFmpeg/
@@ -327,59 +342,82 @@ jobs:
           chmod a+x thirdparty/FFmpeg/ffprobe.elf
           patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/FFmpeg/ffprobe.elf
 
-          # QSV/NV/VCEEncC が依存しているライブラリをダウンロードしてまとめる
-          ## ref: https://stackoverflow.com/questions/13756800/how-to-download-all-dependencies-and-packages-to-directory
-          ## ref: https://askubuntu.com/questions/1260559/how-to-install-deb-packages-in-a-custom-folder-different-from-root-using-dp
+          # QSV/NV/VCEEncC 向けの共有ライブラリ配置先を作成
+          ## 最新の Linux 版 HWEncC バイナリは libav* を静的リンクしているため、
+          ## ここでは QSVEncC 向け Intel Media Stack を同梱する
           mkdir thirdparty/Library/
-          curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_HWENCC_TAG }}/ffmpeg-n${{ env.FFMPEG_HWENCC_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_HWENCC_MAJOR_VERSION }}.tar.xz
-          tar xvf ffmpeg-n${{ env.FFMPEG_HWENCC_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_HWENCC_MAJOR_VERSION }}.tar.xz
-          cp -ar ffmpeg-n${{ env.FFMPEG_HWENCC_VERSION }}-linux64-gpl-shared-${{ env.FFMPEG_HWENCC_MAJOR_VERSION }}/lib/* thirdparty/Library/
-          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c 'apt-get update && apt-get download libass9 libbrotli1 libexpat1 libfontconfig1 libfreetype6 libfribidi0 libglib2.0-0 libgraphite2-3 libharfbuzz0b libpcre3 libpng16-16 libuuid1 zlib1g'
-          ls -1 | grep [.]deb >> all_debs.txt && cat all_debs.txt | while read fn; do dpkg-deb -x $fn `pwd`/thirdparty/Library; done && rm all_debs.txt
-          cp -ar thirdparty/Library/lib/x86_64-linux-gnu/* thirdparty/Library/
-          rm -rf thirdparty/Library/lib/
-          cp -ar thirdparty/Library/usr/lib/x86_64-linux-gnu/* thirdparty/Library/
-          rm -rf thirdparty/Library/usr/
-          rm -rf thirdparty/Library/pkgconfig
-          find thirdparty/Library/*.so* -not -type l -not -type d | while read fn; do patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' $fn; done
-          find thirdparty/Library/*.so* -not -type l -not -type d | xargs chmod a+x
+
+          # QSVEncC が依存する Intel Media Stack を Ubuntu 20.04 ベースで自前ビルドして同梱
+          ## QSVEncC 本体は再ビルドせず、Intel 系ライブラリのみを glibc 互換の同梱構成としてまとめる
+          ## libva には同梱ディレクトリ基準の相対探索へ切り替えるパッチを適用し、
+          ## 旧世代 GPU 向けの libmfxhw64.so と新世代 GPU 向けの libmfx-gen.so.1.2 を同梱して後方互換性を維持する
+          ## thirdparty/Library/ 自体を /lib/x86_64-linux-gnu 相当の配置先として扱い、
+          ## サブディレクトリとして dri/ と libmfx-gen/ のみを許容する
+          if [ ! -e intel-media-stack/artifact/Library/dri/iHD_drv_video.so ] || [ ! -e intel-media-stack/artifact/Library/libva.so.2 ] || [ ! -e intel-media-stack/artifact/Library/libmfxhw64.so.1 ] || [ ! -e intel-media-stack/artifact/Library/libmfx-gen.so.1.2 ] || [ ! -e intel-media-stack/artifact/Library/libmfx-gen/enctools.so ]; then
+            docker run --rm -i \
+              -v "$(pwd):/work" \
+              -w /work \
+              -e HOST_UID=$(id -u) \
+              -e HOST_GID=$(id -g) \
+              -e INTEL_GMMLIB_TAG=${{ env.INTEL_GMMLIB_TAG }} \
+              -e INTEL_LIBVA_TAG=${{ env.INTEL_LIBVA_TAG }} \
+              -e INTEL_MEDIA_DRIVER_TAG=${{ env.INTEL_MEDIA_DRIVER_TAG }} \
+              -e INTEL_MEDIASDK_TAG=${{ env.INTEL_MEDIASDK_TAG }} \
+              -e INTEL_ONEVPL_GPU_TAG=${{ env.INTEL_ONEVPL_GPU_TAG }} \
+              ubuntu:20.04-custom \
+              bash /work/.github/workflows/scripts/build_intel_media_stack_standalone.sh /work/intel-media-stack
+          else
+            echo 'Intel Media Stack build cache hit. Skip rebuilding Intel Media Stack.'
+          fi
+
+          # Intel Media Stack の成果物レイアウトを検証
+          ## 万が一 thirdparty/Library/ 以下にさらに lib/ や usr/ のような余計なネストが残っていた場合はその場で失敗させる
+          if [ -d intel-media-stack/artifact/Library/lib ] || [ -d intel-media-stack/artifact/Library/usr ]; then
+            echo 'Unexpected Intel Media Stack artifact layout. Only dri/ and libmfx-gen/ are allowed under Library/.' >&2
+            find intel-media-stack/artifact/Library -maxdepth 2 -type d | sort >&2
+            exit 1
+          fi
+
+          # Intel Media Stack の成果物を thirdparty/Library にコピー
+          mkdir -p thirdparty/Library/dri
+          mkdir -p thirdparty/Library/libmfx-gen
+          cp -a intel-media-stack/artifact/Library/. thirdparty/Library/
+          find thirdparty/Library -maxdepth 1 -name '*.so*' -not -type l -not -type d -print0 | while IFS= read -r -d '' fn; do patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' "$fn"; done
+          find thirdparty/Library/libmfx-gen -name '*.so*' -not -type l -not -type d -print0 | while IFS= read -r -d '' fn; do patchelf --set-rpath '$ORIGIN:$ORIGIN/..' "$fn"; done
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/..' thirdparty/Library/dri/iHD_drv_video.so
+          find thirdparty/Library -name '*.so*' -not -type l -not -type d -exec chmod a+x {} +
 
           # QSVEncC のアーカイブのダウンロード
-          curl -LO https://github.com/rigaya/QSVEnc/releases/download/${{ env.QSVENCC_VERSION }}/qsvencc_${{ env.QSVENCC_VERSION }}_Ubuntu20.04_amd64.deb
-          7z x -y qsvencc_${{ env.QSVENCC_VERSION }}_Ubuntu20.04_amd64.deb && tar xvf data.tar
+          curl -fSLO https://github.com/rigaya/QSVEnc/releases/download/${{ env.QSVENCC_VERSION }}/qsvencc_${{ env.QSVENCC_VERSION }}_amd64.deb
+          7z x -y qsvencc_${{ env.QSVENCC_VERSION }}_amd64.deb && tar xvf data.tar
           mkdir thirdparty/QSVEncC/
           cp usr/bin/qsvencc thirdparty/QSVEncC/QSVEncC.elf
+          # ダウンロードした QSVEncC.elf にパッチを当て、QSVEncC に静的リンクされているディスパッチャーが /usr/lib* を優先的に探索するのを防ぎ、
+          # 同梱した自前ビルドの libmfx-gen.so / libmfxhw64.so が優先的に探索されるようにする
+          perl -0pi -e 's#/usr/lib/x86_64-linux-gnu#/bundle/disabled/path/001#g; s#/usr/lib64#/bad/path9#g; s#/usr/lib#/bad/lib#g' thirdparty/QSVEncC/QSVEncC.elf
           chmod a+x thirdparty/QSVEncC/QSVEncC.elf
-          patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/QSVEncC/QSVEncC.elf
-          curl -L -o thirdparty/QSVEncC/License.txt https://raw.githubusercontent.com/rigaya/QSVEnc/master/license.txt
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/../Library' thirdparty/QSVEncC/QSVEncC.elf
+          curl -fSL -o thirdparty/QSVEncC/License.txt https://raw.githubusercontent.com/rigaya/QSVEnc/master/license.txt
 
           # NVEncC のアーカイブのダウンロード
-          curl -LO https://github.com/rigaya/NVEnc/releases/download/${{ env.NVENCC_VERSION }}/nvencc_${{ env.NVENCC_VERSION }}_Ubuntu20.04_amd64.deb
-          7z x -y nvencc_${{ env.NVENCC_VERSION }}_Ubuntu20.04_amd64.deb && tar xvf data.tar
+          curl -fSLO https://github.com/rigaya/NVEnc/releases/download/${{ env.NVENCC_VERSION }}/nvencc_${{ env.NVENCC_VERSION }}_amd64.deb
+          7z x -y nvencc_${{ env.NVENCC_VERSION }}_amd64.deb && tar xvf data.tar
           mkdir thirdparty/NVEncC/
           cp usr/bin/nvencc thirdparty/NVEncC/NVEncC.elf
           chmod a+x thirdparty/NVEncC/NVEncC.elf
           patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/NVEncC/NVEncC.elf
-          curl -L -o thirdparty/NVEncC/License.txt https://raw.githubusercontent.com/rigaya/NVEnc/master/NVEnc_license.txt
+          curl -fSL -o thirdparty/NVEncC/License.txt https://raw.githubusercontent.com/rigaya/NVEnc/master/NVEnc_license.txt
 
           # VCEEncC のアーカイブのダウンロード
-          curl -LO https://github.com/rigaya/VCEEnc/releases/download/${{ env.VCEENCC_VERSION }}/vceencc_${{ env.VCEENCC_VERSION }}_Ubuntu20.04_amd64.deb
-          7z x -y vceencc_${{ env.VCEENCC_VERSION }}_Ubuntu20.04_amd64.deb && tar xvf data.tar
+          curl -fSLO https://github.com/rigaya/VCEEnc/releases/download/${{ env.VCEENCC_VERSION }}/vceencc_${{ env.VCEENCC_VERSION }}_amd64.deb
+          7z x -y vceencc_${{ env.VCEENCC_VERSION }}_amd64.deb && tar xvf data.tar
           mkdir thirdparty/VCEEncC/
           cp usr/bin/vceencc thirdparty/VCEEncC/VCEEncC.elf
           chmod a+x thirdparty/VCEEncC/VCEEncC.elf
           patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/VCEEncC/VCEEncC.elf
-          curl -L -o thirdparty/VCEEncC/License.txt https://raw.githubusercontent.com/rigaya/VCEEnc/master/VCEEnc_license.txt
+          curl -fSL -o thirdparty/VCEEncC/License.txt https://raw.githubusercontent.com/rigaya/VCEEnc/master/VCEEnc_license.txt
 
-          # libmediainfo のアーカイブのダウンロード
-          ## AWS Lambda 向けのビルドが完全な Static Build で扱いやすそうだったので、それを使う
-          curl -L -o libmediainfo.zip https://mediaarea.net/download/binary/libmediainfo0/${{ env.LIBMEDIAINFO_VERSION }}/MediaInfo_DLL_${{ env.LIBMEDIAINFO_VERSION }}_Lambda_x86_64.zip
-          7z x -y libmediainfo.zip
-          cp -a lib/* thirdparty/Library/
-          rm -rf lib/
-          chmod a+x thirdparty/Library/libmediainfo.so*
-
-      # FFmpeg・rkmppenc のアーカイブのダウンロードと配置
+      # FFmpeg・rkmppenc のアーカイブのダウンロードと配置 (arm64 のみ)
       # ドライバさえ入っていればスタンドアローンで実行できるように構成を工夫している
       - name: Download and Deploy Encoder Archives (for arm64)
         if: matrix.arch == 'arm64'
@@ -393,7 +431,7 @@ jobs:
           sudo apt-get install -y p7zip-full patchelf
 
           # FFmpeg のアーカイブのダウンロード
-          curl -LO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
+          curl -fSLO https://github.com/BtbN/FFmpeg-Builds/releases/download/${{ env.FFMPEG_TAG }}/ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
           tar xvf ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}.tar.xz
           mkdir thirdparty/FFmpeg/
           cp ffmpeg-n${{ env.FFMPEG_VERSION }}-linuxarm64-gpl-shared-${{ env.FFMPEG_MAJOR_VERSION }}/bin/* thirdparty/FFmpeg/
@@ -414,8 +452,8 @@ jobs:
           ## ref: https://askubuntu.com/questions/1260559/how-to-install-deb-packages-in-a-custom-folder-different-from-root-using-dp
           mkdir thirdparty/Library/
           docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c 'apt-get update && apt-get download libasound2 libass9 libbluray2 libexpat1 libfontconfig1 libfreetype6 libfribidi0 libglib2.0-0 libgomp1 libgraphite2-3 libharfbuzz0b libicu66 liblzma5 libmp3lame0 libogg0 libopus0 libpcre3 libpng16-16 libsoxr0 libspeex1 libssl1.1 libtwolame0 libuuid1 libvorbis0a libvorbisenc2 libvpx6 libxml2 zlib1g'
-          curl -LO https://github.com/tsukumijima/mpp/releases/download/v1.5.0-1-20250110-194af18/librockchip-mpp1_1.5.0-1_arm64.deb
-          curl -LO https://github.com/tsukumijima/librga-rockchip/releases/download/v2.2.0-1-20260105-bfd411b/librga2_2.2.0-1_arm64.deb
+          curl -fSLO https://github.com/tsukumijima/mpp-rockchip/releases/download/v1.5.0-1-20250110-194af18/librockchip-mpp1_1.5.0-1_arm64.deb
+          curl -fSLO https://github.com/tsukumijima/librga-rockchip/releases/download/v2.2.0-1-20260105-bfd411b/librga2_2.2.0-1_arm64.deb
           ls -1 | grep [.]deb >> all_debs.txt && cat all_debs.txt | while read fn; do dpkg-deb -x $fn `pwd`/thirdparty/Library; done && rm all_debs.txt
           cp -ar thirdparty/Library/lib/aarch64-linux-gnu/* thirdparty/Library/
           rm -rf thirdparty/Library/lib/
@@ -426,28 +464,20 @@ jobs:
           find thirdparty/Library/*.so* -not -type l -not -type d | xargs chmod a+x
 
           # rkmppenc のアーカイブのダウンロード
-          curl -LO https://github.com/rigaya/rkmppenc/releases/download/${{ env.RKMPPENC_VERSION }}/rkmppenc_${{ env.RKMPPENC_VERSION }}_Ubuntu20.04_arm64.deb
-          7z x -y rkmppenc_${{ env.RKMPPENC_VERSION }}_Ubuntu20.04_arm64.deb && tar xvf data.tar
+          curl -fSLO https://github.com/rigaya/rkmppenc/releases/download/${{ env.RKMPPENC_VERSION }}/rkmppenc_${{ env.RKMPPENC_VERSION }}_arm64.deb
+          7z x -y rkmppenc_${{ env.RKMPPENC_VERSION }}_arm64.deb && tar xvf data.tar
           mkdir thirdparty/rkmppenc/
           cp usr/bin/rkmppenc thirdparty/rkmppenc/rkmppenc.elf
           chmod a+x thirdparty/rkmppenc/rkmppenc.elf
           patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/rkmppenc/rkmppenc.elf
-          curl -L -o thirdparty/rkmppenc/License.txt https://raw.githubusercontent.com/rigaya/rkmppenc/master/rkmppenc_license.txt
-
-          # libmediainfo のアーカイブのダウンロード
-          ## AWS Lambda 向けのビルドが完全な Static Build で扱いやすそうだったので、それを使う
-          curl -L -o libmediainfo.zip https://mediaarea.net/download/binary/libmediainfo0/${{ env.LIBMEDIAINFO_VERSION }}/MediaInfo_DLL_${{ env.LIBMEDIAINFO_VERSION }}_Lambda_arm64.zip
-          7z x -y libmediainfo.zip
-          cp -a lib/* thirdparty/Library/
-          rm -rf lib/
-          chmod a+x thirdparty/Library/libmediainfo.so*
+          curl -fSL -o thirdparty/rkmppenc/License.txt https://raw.githubusercontent.com/rigaya/rkmppenc/master/rkmppenc_license.txt
 
       # Python Standalone Builds のダウンロードと poetry のインストール
       - name: Install Python Standalone Builds & pip & poetry
         run: |
 
           # Python 本体のダウンロード
-          curl -L -o python.tar.gz https://github.com/indygreg/python-build-standalone/releases/download/${{ env.PYTHON_TAG }}/cpython-${{ env.PYTHON_VERSION }}+${{ env.PYTHON_TAG }}-${{ matrix.python_arch_name }}-unknown-linux-gnu-install_only_stripped.tar.gz
+          curl -fSL -o python.tar.gz https://github.com/indygreg/python-build-standalone/releases/download/${{ env.PYTHON_TAG }}/cpython-${{ env.PYTHON_VERSION }}+${{ env.PYTHON_TAG }}-${{ matrix.python_arch_name }}-unknown-linux-gnu-install_only_stripped.tar.gz
           tar xvf python.tar.gz
           mv python/ thirdparty/Python/
 

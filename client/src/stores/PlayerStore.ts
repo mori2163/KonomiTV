@@ -52,6 +52,10 @@ export type PlayerEvents = {
     PlaybackPositionChanged: {
         playback_position: number;  // 再生位置 (秒)
     }
+    // 録画再生時: UI コンポーネントからプレイヤーに指定秒数へのシークを要求する
+    SeekRequest: {
+        playback_position: number;  // シーク先の再生位置 (秒)
+    }
 };
 
 
@@ -74,7 +78,7 @@ const usePlayerStore = defineStore('player', {
 
         // 現在視聴中の録画番組の情報
         // 視聴中の録画番組がない場合は IRecordedProgramDefault を設定すべき (初期値も IRecordedProgramDefault にしている)
-        recorded_program: IRecordedProgramDefault as IRecordedProgram,
+        recorded_program: structuredClone(IRecordedProgramDefault) as IRecordedProgram,
 
         // 仮想キーボードが表示されているか
         // 既定で表示されていない想定
@@ -121,6 +125,10 @@ const usePlayerStore = defineStore('player', {
 
         // DPlayer の設定パネルが開いているか
         is_player_setting_panel_open: false,
+
+        // 視聴画面内で手動選択された画質プロファイル
+        // null の間は回線種別から選び、チャンネル切り替えなどでプレイヤーを作り直すときは手動選択を引き継ぐ
+        selected_quality_profile_type: null as 'Wi-Fi' | 'Cellular' | null,
 
         // プレイヤーのローディング状態
         // 既定でローディングとする
@@ -203,7 +211,7 @@ const usePlayerStore = defineStore('player', {
         reset(): void {
             this.is_watching = false;
             this.is_player_initialized = false;
-            this.recorded_program = IRecordedProgramDefault;
+            this.recorded_program = structuredClone(IRecordedProgramDefault);
             this.is_virtual_keyboard_display = false;
             this.is_fullscreen = false;
             this.is_document_pip = false;
@@ -225,6 +233,7 @@ const usePlayerStore = defineStore('player', {
             this.is_remocon_display = false;
             this.is_zapping = false;
             this.is_player_setting_panel_open = false;
+            this.selected_quality_profile_type = null;
             this.is_loading = true;
             this.is_video_buffering = true;
             this.is_video_paused = false;

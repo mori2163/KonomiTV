@@ -1,0 +1,103 @@
+diff --git a/_studio/mfx_lib/encode_hw/hevc/agnostic/base/hevcehw_base_enctools.cpp b/_studio/mfx_lib/encode_hw/hevc/agnostic/base/hevcehw_base_enctools.cpp
+index 0d5c23c..49b36a9 100644
+--- a/_studio/mfx_lib/encode_hw/hevc/agnostic/base/hevcehw_base_enctools.cpp
++++ b/_studio/mfx_lib/encode_hw/hevc/agnostic/base/hevcehw_base_enctools.cpp
+@@ -32,6 +32,19 @@
+ using namespace HEVCEHW;
+ using namespace HEVCEHW::Base;
+ 
++namespace
++{
++inline bool IsMain10Encode(const mfxVideoParam& video)
++{
++    const mfxExtCodingOption3* pExtOpt3 = ExtBuffer::Get(video);
++
++    return video.mfx.CodecProfile == MFX_PROFILE_HEVC_MAIN10 ||
++        video.mfx.FrameInfo.BitDepthLuma == 10 ||
++        (pExtOpt3 != nullptr && pExtOpt3->TargetBitDepthLuma == 10);
++}
++
++}
++
+ void HevcEncTools::SetSupported(ParamSupport& blocks)
+ {
+     blocks.m_ebCopySupported[MFX_EXTBUFF_ENCTOOLS_CONFIG].emplace_back(
+@@ -433,9 +446,20 @@ mfxU32 HevcEncTools::CorrectVideoParams(mfxVideoParam & video, mfxExtEncToolsCon
+     mfxExtBRC             *pBRC = ExtBuffer::Get(video);
+     mfxExtEncToolsConfig  *pConfig = ExtBuffer::Get(video);
+ 
+-    bool bIsEncToolsEnabled = CheckEncToolsCondition(video);
+     mfxU32 changed = 0;
+ 
++    // Workaround: enabling AdaptiveCQM together with HEVC Main10 encoding
++    // on Arrow Lake can produce non-deterministic GPU hangs during long
++    // encode runs. Force AdaptiveCQM off for this configuration. The
++    // 8-bit HEVC path is unaffected because the HuC BRC update DMEM
++    // CqmEnable is already forced to 0 on Arrow Lake.
++    if (m_hwType == MFX_HW_ARL && IsMain10Encode(video) && pExtOpt3 != nullptr)
++    {
++        changed += SetIf(pExtOpt3->AdaptiveCQM, pExtOpt3->AdaptiveCQM != MFX_CODINGOPTION_OFF, mfxU16(MFX_CODINGOPTION_OFF));
++    }
++
++    bool bIsEncToolsEnabled = CheckEncToolsCondition(video);
++
+ #ifdef MFX_ENABLE_ENCTOOLS_LPLA
+     if (IsGameStreaming(video))
+     {
+diff --git a/_studio/mfx_lib/encode_hw/hevc/agnostic/base/hevcehw_base_enctools_com.cpp b/_studio/mfx_lib/encode_hw/hevc/agnostic/base/hevcehw_base_enctools_com.cpp
+index da47acc..db3bdda 100644
+--- a/_studio/mfx_lib/encode_hw/hevc/agnostic/base/hevcehw_base_enctools_com.cpp
++++ b/_studio/mfx_lib/encode_hw/hevc/agnostic/base/hevcehw_base_enctools_com.cpp
+@@ -188,13 +188,14 @@ mfxStatus HevcEncToolsCommon::SubmitPreEncTask(StorageW&  /*global*/, StorageW&
+ void HevcEncToolsCommon::Query1NoCaps(const FeatureBlocks& blocks, TPushQ1 Push)
+ {
+     Push(BLK_Check,
+-        [this, &blocks](const mfxVideoParam&, mfxVideoParam& par, StorageW&) -> mfxStatus
++        [this, &blocks](const mfxVideoParam&, mfxVideoParam& par, StorageW& strg) -> mfxStatus
+         {
+             MFX_CHECK(isFeatureEnabled(par), MFX_ERR_NONE);
+ 
+             bool bEncTools = isEncTools(par);
+             mfxU32 changed = 0;
+             MFX_CHECK(bEncTools, MFX_ERR_NONE);
++            m_hwType = Glob::VideoCore::Get(strg).GetHWType();
+             mfxEncTools* pEncTools = GetEncTools(par);
+             bool bCreated = false;
+             if (!pEncTools)
+@@ -225,6 +226,7 @@ void HevcEncToolsCommon::SetDefaults(const FeatureBlocks& /*blocks*/, TPushSD Pu
+ 
+         mfxExtEncToolsConfig *pConfig = ExtBuffer::Get(par);
+         auto& caps = Glob::EncodeCaps::Get(global);
++        m_hwType = Glob::VideoCore::Get(global).GetHWType();
+         if (pConfig)
+             SetDefaultConfig(par, *pConfig, caps.MBBRCSupport);
+     });
+@@ -279,6 +281,7 @@ void HevcEncToolsCommon::QueryIOSurf(const FeatureBlocks&, TPushQIS Push)
+             bool bEncTools = isEncTools(par);
+             mfxU32 changed = 0;
+             MFX_CHECK(bEncTools, MFX_ERR_NONE);
++            m_hwType = Glob::VideoCore::Get(strg).GetHWType();
+ 
+             mfxEncTools* pEncTools = GetEncTools(par);
+             bool bCreated = false;
+diff --git a/_studio/mfx_lib/vpp/src/mfx_vpp_hw.cpp b/_studio/mfx_lib/vpp/src/mfx_vpp_hw.cpp
+index 963dd99..7b0e9c8 100644
+--- a/_studio/mfx_lib/vpp/src/mfx_vpp_hw.cpp
++++ b/_studio/mfx_lib/vpp/src/mfx_vpp_hw.cpp
+@@ -7169,6 +7169,16 @@ mfxStatus ConfigureExecuteParams(
+             config.m_extConfig.mode = FRC_DISABLED | FRC_DISTRIBUTED_TIMESTAMP;
+         }
+     }
++    // When bob 60p (30i->60p) mode is active but distributed timestamp was
++    // not explicitly requested, enable distributed timestamp metadata so
++    // that both bob output frames carry valid timestamps and monotonically
++    // increasing FrameOrder values. Without this, the odd-side bob output
++    // receives MFX_FRAMEORDER_UNKNOWN, which can disrupt HEVC reference
++    // management that depends on FrameOrder for DPB lookup.
++    if (config.m_bMode30i60pEnable && !(config.m_extConfig.mode & FRC_DISTRIBUTED_TIMESTAMP))
++    {
++        config.m_extConfig.mode = FRC_DISABLED | FRC_DISTRIBUTED_TIMESTAMP;
++    }
+ 
+     if ( (0 == memcmp(&videoParam.vpp.In, &videoParam.vpp.Out, sizeof(mfxFrameInfo))) &&
+          executeParams.IsDoNothing() )

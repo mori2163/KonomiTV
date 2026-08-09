@@ -124,7 +124,7 @@ const props = withDefaults(defineProps<{
     showMoreButton: false,
     showBackButton: false,
     showEmptyMessage: true,
-    emptyIcon: 'fluent:warning-20-regular',
+    emptyIcon: 'fluent:search-20-regular',
     emptyMessage: '録画番組が見つかりませんでした。',
     emptySubMessage: 'サーバー設定で録画フォルダのパスを<br class="d-sm-none">正しく設定できているか確認してください。',
     isLoading: false,
@@ -190,6 +190,8 @@ const handleProgramDeleted = (id: number) => {
     flex-direction: column;
     width: 100%;
     height: 100%;
+    min-width: 0;  // 親ページ側が縮んだとき、録画番組リスト自身も横幅を押し広げないようにする
+    max-width: 100%;
 
     &--show-sort {
         .recorded-program-list__grid {
@@ -202,6 +204,7 @@ const handleProgramDeleted = (id: number) => {
     &__header {
         display: flex;
         align-items: center;
+        min-width: 0;  // タイトルと操作ボタンの合計幅が狭い画面で親を押し広げないようにする
         @include smartphone-vertical {
             padding: 0px 8px;
         }
@@ -284,6 +287,7 @@ const handleProgramDeleted = (id: number) => {
     &__actions {
         display: flex;
         align-items: center;
+        flex-shrink: 0;
         margin-left: auto;
         :deep(.v-field) {
             padding-right: 4px !important;
@@ -295,6 +299,7 @@ const handleProgramDeleted = (id: number) => {
 
         .v-select {
             width: 103px;
+            margin-left: 12px;
         }
         &--mylist {
             .v-select {
@@ -327,6 +332,8 @@ const handleProgramDeleted = (id: number) => {
         flex-direction: column;
         position: relative;
         width: 100%;
+        min-width: 0;  // 仮想スクローラー領域も親幅に追従させ、内部カードの最小幅で膨らまないようにする
+        max-width: 100%;
         background: rgb(var(--v-theme-background-lighten-1));
         border-radius: 8px;
         overflow: hidden;
@@ -377,6 +384,8 @@ const handleProgramDeleted = (id: number) => {
         justify-content: center;
         align-items: center;
         padding-top: 28px;
+        padding-left: 12px;
+        padding-right: 12px;
         padding-bottom: 40px;
         flex-grow: 1;
         visibility: hidden;

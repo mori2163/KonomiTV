@@ -27,6 +27,7 @@
 </template>
 <script lang="ts" setup>
 import { onMounted, onUnmounted, ref } from 'vue';
+
 import Breadcrumbs from '@/components/Breadcrumbs.vue';
 import CaptureList from '@/components/Captures/CaptureList.vue';
 import HeaderBar from '@/components/HeaderBar.vue';

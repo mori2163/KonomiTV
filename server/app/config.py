@@ -42,7 +42,8 @@ from app.utils.TSInformation import TerrestrialRegion
 class ClientSettings(BaseModel):
     last_synced_at: Annotated[float, PositiveFloat] = 0.0
     # showed_panel_last_time: 同期無効
-    # selected_twitter_account_id: 同期無効
+    # selected_twitter_panel_account: 同期無効
+    # twitter_panel_post_targets: 同期無効
     saved_twitter_hashtags: list[str] = []
     mylist: list[dict[str, Any]] = []
     watched_history: list[dict[str, Any]] = []
@@ -76,6 +77,8 @@ class ClientSettings(BaseModel):
     }
     show_player_background_image: bool = True
     use_pure_black_player_background: bool = False
+    tv_channel_sort_by_jikkyo_force: bool = False
+    tv_channel_up_down_buttons_reverse: bool = False
     tv_channel_selection_requires_alt_key: bool = False
     use_28hour_clock: bool = False
     show_original_broadcast_time_during_playback: bool = False
@@ -89,10 +92,14 @@ class ClientSettings(BaseModel):
     # tv_data_saver_mode_cellular: 同期無効
     # tv_low_latency_mode: 同期無効
     # tv_low_latency_mode_cellular: 同期無効
+    # tv_24fps_mode: 同期無効
+    # tv_24fps_mode_cellular: 同期無効
     # video_streaming_quality: 同期無効
     # video_streaming_quality_cellular: 同期無効
     # video_data_saver_mode: 同期無効
     # video_data_saver_mode_cellular: 同期無効
+    # video_24fps_mode: 同期無効
+    # video_24fps_mode_cellular: 同期無効
     caption_font: str = 'Windows TV MaruGothic'
     always_border_caption_text: bool = True
     specify_caption_opacity: bool = False
@@ -116,11 +123,14 @@ class ClientSettings(BaseModel):
     mute_fixed_comments: bool = False
     mute_colored_comments: bool = False
     mute_consecutive_same_characters_comments: bool = False
+    mute_comment_keywords_normalize_alphanumeric_width_case: bool = True
     muted_comment_keywords: list[dict[str, str]] = []
     muted_niconico_user_ids: list[str] = []
     fold_panel_after_sending_tweet: bool = False
     reset_hashtag_when_program_switches: bool = True
     auto_add_watching_channel_hashtag: bool = True
+    twitter_reply_thread_mode: Literal['PerHashtag', 'PerDay', 'Disabled'] = 'PerHashtag'
+    bluesky_reply_thread_mode: Literal['PerHashtag', 'PerDay', 'Disabled'] = 'Disabled'
     twitter_active_tab: Literal['Search', 'Timeline', 'Capture'] = 'Capture'
     tweet_hashtag_position: Literal['Prepend', 'Append', 'PrependWithLineBreak', 'AppendWithLineBreak'] = 'Append'
     tweet_capture_watermark_position: Literal['None', 'TopLeft', 'TopRight', 'BottomLeft', 'BottomRight'] = 'None'
@@ -283,6 +293,7 @@ class _ServerSettingsServer(BaseModel):
     port: PositiveInt = 7000
     custom_https_certificate: FilePath | None = None
     custom_https_private_key: FilePath | None = None
+    cloudflare_zero_trust: bool = False
 
     @field_validator('port')
     def validate_port(cls, port: int, info: ValidationInfo) -> int:

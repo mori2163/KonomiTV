@@ -24,6 +24,7 @@ from app.metadata.RecordedScanTask import RecordedScanTask
 from app.models.Channel import Channel
 from app.models.Program import Program
 from app.routers import (
+    BlueskyRouter,
     CapturesRouter,
     ChannelsRouter,
     DataBroadcastingRouter,
@@ -32,6 +33,7 @@ from app.routers import (
     MaintenanceRouter,
     NiconicoRouter,
     ProgramsRouter,
+    RecordingPresetsRouter,
     ReservationConditionsRouter,
     ReservationsRouter,
     SeriesRouter,
@@ -79,11 +81,13 @@ app.include_router(LiveStreamsRouter.router)
 app.include_router(VideoStreamsRouter.router)
 app.include_router(ReservationsRouter.router)
 app.include_router(ReservationConditionsRouter.router)
+app.include_router(RecordingPresetsRouter.router)
 app.include_router(CapturesRouter.router)
 app.include_router(DataBroadcastingRouter.router)
 app.include_router(DiscordRouter.router)
 app.include_router(NiconicoRouter.router)
 app.include_router(TwitterRouter.router)
+app.include_router(BlueskyRouter.router)
 app.include_router(UsersRouter.router)
 app.include_router(SettingsRouter.router)
 app.include_router(MaintenanceRouter.router)
@@ -431,6 +435,9 @@ async def Shutdown():
     if CONFIG.discord.enabled and CONFIG.discord.token:
         logging.info('Discord Bot stopping...')
         await StopDiscordBot()
+    # 非同期タスクの終了処理が完全に終わるよう、もう少しだけ待つ
+    # この待機を省略すると LiveEncodingTask などの終了前に Tortoise ORM の DB 接続が閉じられ、エラートレースバックが出力される
+    await asyncio.sleep(0.5)
 
 # shutdown イベントが発火しない場合も想定し、アプリケーションの終了時に Shutdown() が確実に呼ばれるように
 # atexit は同期関数しか実行できないので、asyncio.run() でくるむ

@@ -103,6 +103,10 @@ class PlayerController {
     // 破棄済みかどうか
     private destroyed = false;
 
+    // ライブ再生開始時の一時ミュートを、保存済みミュートと区別するフラグ
+    // 一時ミュートで発火した volumechange を、ユーザー操作として保存しないために使う
+    private is_live_startup_temporary_muted = false;
+
 
     /**
      * コンストラクタ
@@ -116,14 +120,20 @@ class PlayerController {
         this.playback_mode = playback_mode;
         this.offline_playback = options.offline_playback ?? null;
 
-        // デフォルトでは、現在のネットワーク回線が Cellular (モバイル回線) のとき、モバイル回線向けの画質プロファイルを適用する
-        // Wi-Fi 回線またはネットワーク回線種別を取得できなかった場合は、Wi-Fi 回線向けの画質プロファイルを適用する
-        // この画質プロファイルはユーザーによって手動で変更されうる
-        const network_circuit_type = PlayerUtils.getNetworkCircuitType();
-        if (network_circuit_type === 'Cellular') {
-            this.quality_profile_type = 'Cellular';
+        const player_store = usePlayerStore();
+        if (player_store.selected_quality_profile_type !== null) {
+            // 視聴画面内で手動変更済みなら、プレイヤー再作成後もその選択を使う
+            // 視聴画面を離れると PlayerStore.reset() で null に戻り、次回は回線種別から選び直す
+            this.quality_profile_type = player_store.selected_quality_profile_type;
         } else {
-            this.quality_profile_type = 'Wi-Fi';
+            // 手動変更がない場合は、現在の回線種別から画質プロファイルを選ぶ
+            // Wi-Fi 回線の場合や回線種別を取得できなかった場合は、Wi-Fi 向けの画質プロファイルを使う
+            const network_circuit_type = PlayerUtils.getNetworkCircuitType();
+            if (network_circuit_type === 'Cellular') {
+                this.quality_profile_type = 'Cellular';
+            } else {
+                this.quality_profile_type = 'Wi-Fi';
+            }
         }
 
         // 01 ~ 14 まですべての RomSound を読み込む
@@ -151,8 +161,10 @@ class PlayerController {
         tv_streaming_quality: LiveStreamingQuality;
         tv_data_saver_mode: boolean;
         tv_low_latency_mode: boolean;
+        tv_24fps_mode: boolean;
         video_streaming_quality: VideoStreamingQuality;
         video_data_saver_mode: boolean;
+        video_24fps_mode: boolean;
     } {
         const settings_store = useSettingsStore();
         // モバイル回線向けの画質プロファイルを返す
@@ -161,8 +173,10 @@ class PlayerController {
                 tv_streaming_quality: settings_store.settings.tv_streaming_quality_cellular,
                 tv_data_saver_mode: settings_store.settings.tv_data_saver_mode_cellular,
                 tv_low_latency_mode: settings_store.settings.tv_low_latency_mode_cellular,
+                tv_24fps_mode: settings_store.settings.tv_24fps_mode_cellular,
                 video_streaming_quality: settings_store.settings.video_streaming_quality_cellular,
                 video_data_saver_mode: settings_store.settings.video_data_saver_mode_cellular,
+                video_24fps_mode: settings_store.settings.video_24fps_mode_cellular,
             };
         // Wi-Fi 回線向けの画質プロファイルを返す
         } else {
@@ -170,8 +184,10 @@ class PlayerController {
                 tv_streaming_quality: settings_store.settings.tv_streaming_quality,
                 tv_data_saver_mode: settings_store.settings.tv_data_saver_mode,
                 tv_low_latency_mode: settings_store.settings.tv_low_latency_mode,
+                tv_24fps_mode: settings_store.settings.tv_24fps_mode,
                 video_streaming_quality: settings_store.settings.video_streaming_quality,
                 video_data_saver_mode: settings_store.settings.video_data_saver_mode,
+                video_24fps_mode: settings_store.settings.video_24fps_mode,
             };
         }
     }
@@ -212,6 +228,7 @@ class PlayerController {
 
         // 破棄済みかどうかのフラグを下ろす
         this.destroyed = false;
+        this.is_live_startup_temporary_muted = false;
 
         // PlayerStore にプレイヤーを初期化したことを通知する
         // 実際にはこの時点ではプレイヤーの初期化は完了していないが、PlayerController.init() を実行したことが通知されることが重要
@@ -228,6 +245,10 @@ class PlayerController {
              (this.playback_mode === 'Video' && this.quality_profile.video_data_saver_mode === true))) {
             is_hevc_playback = true;
         }
+
+        // HEVC 10bit は通信節約モード中の対応環境にだけ透過的に要求する
+        // MediaCapabilities で滑らかに再生できると判断できない場合は、通常の HEVC 8bit に留めて互換性を優先する
+        const is_hevc_10bit_playback = is_hevc_playback === true && await PlayerUtils.isHEVC10bitVideoSupported();
 
         // ブラウザが MSE in Worker での H.265 / HEVC 再生に対応しているかどうか
         const is_hevc_video_supported_in_worker = await mpegts.supportWorkerForMSEH265Playback();
@@ -336,8 +357,27 @@ class PlayerController {
             video: (() => {
                 // 画質リスト
                 const qualities: DPlayerType.VideoQuality[] = [];
-                // H.265 / HEVC 再生時のみ、API に渡す画質に -hevc のプレフィックスをつける
-                const hevc_prefix = is_hevc_playback === true ? '-hevc' : '';
+                // H.265 / HEVC 再生時のみ、API に渡す画質の末尾に -hevc を付ける
+                const hevc_suffix = is_hevc_playback === true ? '-hevc' : '';
+                // -10bit や -24fps は品質名の末尾に付けて API パスに含める
+                // 録画再生では session_id が同じでも画質が違うリクエストはサーバー側でエラーになる
+                const build_api_quality = (quality_name: LiveStreamingQuality | VideoStreamingQuality): string => {
+                    let api_quality = `${quality_name}${hevc_suffix}`;
+                    if (is_hevc_10bit_playback === true) {
+                        api_quality += '-10bit';
+                    }
+                    if (
+                        quality_name !== '1080p-60fps' &&
+                        (
+                            this.playback_mode === 'Live' ?
+                                this.quality_profile.tv_24fps_mode :
+                                this.quality_profile.video_24fps_mode
+                        ) === true
+                    ) {
+                        api_quality += '-24fps';
+                    }
+                    return api_quality;
+                };
 
                 // ライブ視聴: チャンネル情報がセットされているはず
                 if (this.playback_mode === 'Live') {
@@ -360,7 +400,7 @@ class PlayerController {
                                 // 1080p-60fps のみ、見栄えの観点から表示上 "1080p (60fps)" と表示する
                                 name: quality_name === '1080p-60fps' ? '1080p (60fps)' : quality_name,
                                 type: 'mpegts',
-                                url: `${streaming_api_base_url}/${quality_name}${hevc_prefix}/mpegts`,
+                                url: `${streaming_api_base_url}/${build_api_quality(quality_name)}/mpegts`,
                             });
                         }
                     }
@@ -408,7 +448,7 @@ class PlayerController {
                             // 1080p-60fps のみ、見栄えの観点から表示上 "1080p (60fps)" と表示する
                             name: quality_name === '1080p-60fps' ? '1080p (60fps)' : quality_name,
                             type: 'hls',
-                            url: `${streaming_api_base_url}/${quality_name}${hevc_prefix}/playlist?session_id=${session_id}`,
+                            url: `${streaming_api_base_url}/${build_api_quality(quality_name)}/playlist?session_id=${session_id}`,
                         });
                     }
                     // デフォルトの画質
@@ -517,6 +557,7 @@ class PlayerController {
                                     time: Utils.apply28HourClock(dayjs(recording_start_time).add(comment.time, 'seconds').format('MM/DD HH:mm:ss')),
                                     playback_position: comment.time,
                                     user_id: comment.author,
+                                    premium: null,
                                     my_post: false,
                                 })),
                             });
@@ -740,11 +781,28 @@ class PlayerController {
         // DPlayer は音量コントロールがないスマホ向けの UI になっている
         // 通常の UI で DPlayer の音量を 1.0 以外に設定した後スマホ向け UI になった場合、DPlayer の音量を変更できず OS の音量を上げるしかなくなる
         // そこで、スマホ向けの UI が表示されている場合のみ常に音量を 1.0 に設定する
-        if (this.player.container.classList.contains('dplayer-mobile') === true) {
+        const is_dplayer_mobile = this.player.container.classList.contains('dplayer-mobile');
+        if (is_dplayer_mobile === true) {
             // player.volume() を用いることで、単に音量を変更するだけでなく LocalStorage に音量を保存する処理も実行される
             // 第3引数を true に設定すると、通知を表示せずに音量を変更できる
             this.player.volume(1.0, undefined, true);
         }
+
+        // PC 向け UI では、前回のミュート状態を戻す
+        // DPlayer は音量だけを保存するため、ミュート状態だけ KonomiTV 側で補う
+        // スマホ向け UI には音量ボタンがなく、ミュートで開始すると画面内で解除できない
+        const is_saved_muted = is_dplayer_mobile === false && localStorage.getItem('dplayer-is-muted') === 'true';
+        if (is_saved_muted === true) {
+            this.player.muted(true);
+        }
+
+        // DPlayer 側で音量やミュート状態が変わったとき、次回起動時に使うミュート状態を保存する
+        // スマホ向け UI ではミュートを解除する音量ボタンが表示されないため、PC 向け UI の状態だけを保存する
+        this.player.on('volumechange', () => {
+            if (this.player === null || this.player.container.classList.contains('dplayer-mobile') === true) return;
+            if (this.is_live_startup_temporary_muted === true) return;
+            localStorage.setItem('dplayer-is-muted', this.player.video.muted ? 'true' : 'false');
+        });
 
         // DPlayer 側のコントロール UI 非表示タイマーを無効化（上書き）
         // 無効化しておかないと、PlayerController.setControlDisplayTimer() の処理と競合してしまう
@@ -892,6 +950,17 @@ class PlayerController {
         player_store.event_emitter.on('SetControlDisplayTimer', (event) => {
             this.setControlDisplayTimer(event.event, event.is_player_region_event, event.timeout_seconds);
         });
+
+        // 録画再生時のみ: UI コンポーネントから指定秒数へのシークを要求されたときのイベントハンドラーを登録する
+        // コメントリストからコメントをクリックした際などに利用される
+        if (this.playback_mode === 'Video') {
+            player_store.event_emitter.off('SeekRequest');  // SeekRequest イベントの全てのイベントハンドラーを削除
+            player_store.event_emitter.on('SeekRequest', (event) => {
+                if (this.destroyed === true || this.player === null) return;
+                this.player.seek(event.playback_position);
+                this.player.play();
+            });
+        }
 
         // プレイヤー再起動ボタンを DPlayer の UI に追加する (再生が止まった際などに利用する想定)
         // insertAdjacentHTML で .dplayer-icons-right の一番左側に配置する
@@ -1192,7 +1261,14 @@ class PlayerController {
                 // 必ず最初はローディング状態とする
                 player_store.is_loading = true;
 
-                // 一旦音量をミュートする
+                // DPlayer のスマホ向け UI ではミュート解除用の音量ボタンがないため、PC 向け UI の保存値だけ参照する
+                const should_keep_muted_after_live_startup =
+                    this.player.container.classList.contains('dplayer-mobile') === false &&
+                    localStorage.getItem('dplayer-is-muted') === 'true';
+
+                // 再生準備中の音声を出さないため、一時的にミュートする
+                // 保存済みミュートと区別し、volumechange 側で保存値を上書きしないようにする
+                this.is_live_startup_temporary_muted = this.player.video.muted === false;
                 this.player.video.muted = true;
 
                 // この時点で HTMLVideoElement.paused が true のとき、再生できるようになるまで 0.05 秒間を開けて 5 回試す
@@ -1266,22 +1342,28 @@ class PlayerController {
                         player_store.is_background_display = false;
                     }
 
-                    // 再生開始時に音量を徐々に上げる (いきなり再生されるよりも体験が良い)
-                    // ミュートを解除した上で即座に音量を 0 に設定し、そこから徐々に上げていく
-                    this.player.video.muted = false;
-                    this.player.video.volume = 0;
-                    // 0.5 秒間かけて 0 から current_volume まで音量を上げる
-                    const current_volume = this.player.user.get('volume');  // 0.0 ~ 1.0 の範囲
-                    const volume_step = current_volume / 10;
-                    for (let i = 0; i < 10; i++) {  // 10 回に分けて音量を上げる
-                        await Utils.sleep(0.5 / 10);
-                        // 音量が current_volume を超えないようにする
-                        // 浮動小数点絡みの問題 (丸め誤差) が出るため小数第3位で切り捨てる
-                        this.player.video.volume = Math.min(Utils.mathFloor(this.player.video.volume + volume_step, 3), current_volume);
+                    // ユーザーがミュートを保存している場合は、再生開始時のフェードインでミュートを解除しない
+                    if (should_keep_muted_after_live_startup === true) {
+                        this.is_live_startup_temporary_muted = false;
+                    } else {
+                        this.is_live_startup_temporary_muted = false;
+                        this.player.video.muted = false;
+                        // ミュート中でない場合だけフェードインする (いきなり再生されるよりも体験が良い)
+                        // 開始音量を 0 に下げてから、保存されている音量まで徐々に上げる
+                        this.player.video.volume = 0;
+                        // 0.5 秒間かけて 0 から current_volume まで音量を上げる
+                        const current_volume = this.player.user.get('volume');  // 0.0 ~ 1.0 の範囲
+                        const volume_step = current_volume / 10;
+                        for (let i = 0; i < 10; i++) {  // 10 回に分けて音量を上げる
+                            await Utils.sleep(0.5 / 10);
+                            // 音量が current_volume を超えないようにする
+                            // 浮動小数点絡みの問題 (丸め誤差) が出るため小数第3位で切り捨てる
+                            this.player.video.volume = Math.min(Utils.mathFloor(this.player.video.volume + volume_step, 3), current_volume);
+                        }
+                        // 最後に current_volume に設定し直す
+                        // 上記ロジックでは丸め誤差の関係で完全に current_volume とは一致しないことがあるため
+                        this.player.video.volume = current_volume;
                     }
-                    // 最後に current_volume に設定し直す
-                    // 上記ロジックでは丸め誤差の関係で完全に current_volume とは一致しないことがあるため
-                    this.player.video.volume = current_volume;
                 };
                 this.player.video.oncanplay = on_canplay;
                 this.player.video.oncanplaythrough = on_canplay;
@@ -1635,6 +1717,7 @@ class PlayerController {
             // 画質プロファイルをモバイル回線向けに切り替えてから、プレイヤーを再起動
             if (toggle_mobile_profile_input.checked) {
                 this.quality_profile_type = 'Cellular';
+                player_store.selected_quality_profile_type = this.quality_profile_type;
                 player_store.event_emitter.emit('PlayerRestartRequired', {
                     message: 'モバイル回線向けの画質プロファイルに切り替えました。',
                     // 他の通知と被らないように、メッセージを遅らせて表示する
@@ -1646,6 +1729,7 @@ class PlayerController {
             // 画質プロファイルを Wi-Fi 回線向けに切り替えてから、プレイヤーを再起動
             } else {
                 this.quality_profile_type = 'Wi-Fi';
+                player_store.selected_quality_profile_type = this.quality_profile_type;
                 player_store.event_emitter.emit('PlayerRestartRequired', {
                     message: 'Wi-Fi 回線向けの画質プロファイルに切り替えました。',
                     // 他の通知と被らないように、メッセージを遅らせて表示する
@@ -1929,6 +2013,14 @@ class PlayerController {
             if (this.player.template.controller.classList.contains('dplayer-controller-comment')) {
                 this.player_control_ui_hide_timer_id =
                     window.setTimeout(player_control_ui_hide_timer, timeout_seconds * 1000);  // 3秒後に再実行
+                return;
+            }
+
+            // 設定パネルが開いている間は、操作中にコントロール UI を閉じない
+            // 画質や音声などの設定パネルはマウス移動やタッチ操作が止まっても、ユーザーが閉じるまで表示を続ける
+            if (player_store.is_player_setting_panel_open === true) {
+                this.player_control_ui_hide_timer_id =
+                    window.setTimeout(player_control_ui_hide_timer, timeout_seconds * 1000);
                 return;
             }
 
