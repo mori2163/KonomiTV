@@ -20,6 +20,7 @@
                         :programs="programs"
                         :total="totalPrograms"
                         :countText="headerCountText"
+                        :countAtRight="true"
                         :hideSort="true"
                         :hidePagination="true"
                         :showBackButton="true"
